@@ -960,3 +960,81 @@ Deno.test("owner 2026-10-28: a group's Max is never below its own Min", () => {
   const pol = result.level_policies.find((l) => l.level_id === "G");
   assert(pol && pol.desired_days !== null && pol.desired_days >= 30, `group Max (${pol?.desired_days}) must not be below its Min 30`);
 });
+
+// Owner 2026-10-29: the PDF "How PO22 plans RM purchases" (CMP003 MHEC family). Best date = the LATEST plant date at which every level still fills to Max.
+Deno.test("PDF alignment: daily use comes from the level's own reserve, the pool moves only on receipts and top-ups; levels may sit below Min but not below Critical", () => {
+  const AS_OF = "2026-10-28";
+  const add = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+  const days: string[] = []; for (let d = AS_OF; d <= "2027-01-31"; d = add(d, 1)) days.push(d);
+  const G = "GAB", C = "COMB", T = "TS";
+  const pol = (id: string) => ({ material_id: id, target_days: 30, critical_days: 20, vendor_moq_qty_base: null, order_multiple_qty_base: null, configured_lead_time_days: null, cycle_days: 30, vendor_options: [] }) as unknown as OptimizerMaterialPlanningPolicy;
+  const own = days.map((d) => ({ material_id: G, required_by: d, qty_base: 6670 / 60 }));
+  const groups = days.flatMap((d) => [
+    { group_id: "A", candidates: [G, C], required_by: d, qty_base: 2720 / 60 },
+    { group_id: "B", candidates: [G, C, T], required_by: d, qty_base: 84390 / 60 },
+  ]);
+  const arr = ([["TS1", T, "2026-11-12", 25000], ["G2", G, "2026-12-08", 24000], ["TS2", T, "2026-12-24", 25000], ["TS3", T, "2027-01-11", 25000], ["C2", C, "2027-01-29", 24000]] as const)
+    .map(([k, m, d, q]) => ({ source_key: k, material_id: m, eta_to_plant: d, qty_base: q }));
+  const input = { as_of: AS_OF, horizon_end: "2027-04-30", opening_qty_by_material: { [G]: 17259, [C]: 78000, [T]: 26028 }, own_demand: own, group_demand: groups, confirmed_arrivals: arr, policies: [G, C, T].map(pol), plan_buys: false } as unknown as FamilyPlannerInput;
+  // Top-ups fall on the days the PDF names (27-28 Nov) and the pool is not eaten by daily use before them (PDF: 46,624 before; opening pool + the 12 Nov lot here).
+  const r = planFamily(input);
+  const topUps = r.level_events.filter((e) => e.kind === "TOP_UP" && e.qty > 1).map((e) => e.day);
+  assert(topUps.includes("2026-11-27") && topUps.includes("2026-11-28"), `top-up days ${topUps.slice(0, 6).join(",")}`);
+  const firstB = r.level_events.find((e) => e.kind === "TOP_UP" && e.level_id === "B")!;
+  assert(firstB.day === "2026-11-28" && firstB.pool_before > 40_000, `Group B top-up on ${firstB.day}, pool before ${firstB.pool_before}`);
+  // PDF rule: a level may sit below its Min but must stay above its Critical. In the PDF's own example (plan to 31 Jan) no level goes below
+  // Critical without any one of the lots, so each is "not needed inside the plan" and says why; the Combizell lot is right where it is.
+  for (const k of ["TS1", "G2", "TS2", "TS3"]) {
+    const o = optimizeFamilyArrival(input, k)!;
+    assert(o.not_needed_in_plan && o.plan_cover !== null && o.plan_cover.stock_at_plan_end_with > 0, `${k} should not be needed inside the plan`);
+  }
+  const c2 = optimizeFamilyArrival(input, "C2")!;
+  assert(c2.shift_days >= 0, "a lot with no risk is never preponed");
+});
+
+// Owner 2026-10-29: the PROD case (MHEC family, plan to March). Group B must not take the last Gabrosa a narrower level will ask for, and the
+// Exclusive (own) level's buy trigger counts only what the Exclusive can reach (its own reserve + Gabrosa still in the pool), not Gabrosa held in
+// group reserves. Without both, Exclusive Gabrosa sat below Critical for weeks while the engine saw plenty of Gabrosa.
+Deno.test("Exclusive stays above Critical: broad group leaves the narrow level's refill, and the Exclusive buy counts only reachable stock", () => {
+  const AS_OF = "2026-10-28";
+  const add = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+  const days: string[] = []; for (let d = AS_OF; d <= "2027-03-31"; d = add(d, 1)) days.push(d);
+  const G = "GAB", C = "COMB", T = "TS";
+  const pol = (id: string) => ({ material_id: id, target_days: 30, critical_days: 20, vendor_moq_qty_base: 10000, order_multiple_qty_base: null, configured_lead_time_days: 17, cycle_days: 30, vendor_options: [] }) as unknown as OptimizerMaterialPlanningPolicy;
+  const own = days.map((d) => ({ material_id: G, required_by: d, qty_base: 122 }));
+  const groups = days.flatMap((d) => [
+    { group_id: "A", candidates: [G, C], required_by: d, qty_base: 48 },
+    { group_id: "B", candidates: [G, C, T], required_by: d, qty_base: 1415 },
+  ]);
+  const arr = ([["TS1", T, "2026-11-12", 25000], ["G2", G, "2026-12-08", 24000], ["TS2", T, "2026-12-24", 25000], ["TS3", T, "2027-01-11", 25000], ["C2", C, "2027-01-29", 24000]] as const)
+    .map(([k, m, d, q]) => ({ source_key: k, material_id: m, eta_to_plant: d, qty_base: q }));
+  const input = { as_of: AS_OF, horizon_end: "2027-03-31", opening_qty_by_material: { [G]: 17000, [C]: 78000, [T]: 26000 }, own_demand: own, group_demand: groups, confirmed_arrivals: arr, policies: [G, C, T].map(pol), plan_buys: true } as unknown as FamilyPlannerInput;
+  const r = planFamily(input);
+  const exclusiveCritical = r.level_risk.filter((x) => x.level_kind === "OWN" && x.level_id === G && x.critical_days !== null && x.cover_days < x.critical_days);
+  assert(exclusiveCritical.length === 0, `Exclusive below Critical on ${exclusiveCritical.length} day(s), first ${exclusiveCritical[0]?.day}`);
+});
+
+Deno.test("hold-back: when a broad level tops up from a short pool, the narrow level's refill of the shared material stays in the pool", () => {
+  const AS_OF = "2026-10-28";
+  const add = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+  const days: string[] = []; for (let d = AS_OF; d <= "2027-02-28"; d = add(d, 1)) days.push(d);
+  const G = "GAB", T = "TS";
+  const pol = (id: string) => ({ material_id: id, target_days: 30, critical_days: 15, vendor_moq_qty_base: null, order_multiple_qty_base: null, configured_lead_time_days: null, cycle_days: 30, vendor_options: [] }) as unknown as OptimizerMaterialPlanningPolicy;
+  // Exclusive Gabrosa 100/day; Group B (Gabrosa or TS) 1,000/day. Gabrosa 70,000, no TS: at day 0 Exclusive reserves 6,000, B 60,000, the pool keeps 4,000 Gabrosa.
+  const own = days.map((d) => ({ material_id: G, required_by: d, qty_base: 100 }));
+  const groups = days.map((d) => ({ group_id: "B", candidates: [G, T], required_by: d, qty_base: 1000 }));
+  const input = { as_of: AS_OF, horizon_end: "2027-02-28", opening_qty_by_material: { [G]: 70000, [T]: 0 }, own_demand: own, group_demand: groups, confirmed_arrivals: [], policies: [G, T].map(pol), plan_buys: false,
+    // Group B asks the pool at 50 days of cover, the Exclusive level only at 30: B asks first, while the Exclusive level has used 10 days of its Max.
+    group_coverage_policies: [{ material_group_id: "B", effective_from: AS_OF, target_days: 50, critical_days: 15, desired_max_days_override: 60 }],
+  } as unknown as FamilyPlannerInput;
+  const poolGabAfterBTopUp = (r: ReturnType<typeof planFamily>) => {
+    const e = r.level_events.find((x) => x.kind === "TOP_UP" && x.level_id === "B");
+    return e ? (r.level_matrix.find((m) => m.day === e.day)?.pool[G] ?? 0) : -1;
+  };
+  const withHold = poolGabAfterBTopUp(planFamily(input));
+  Deno.env.set("NO_HOLD_BACK", "1");
+  const without = poolGabAfterBTopUp(planFamily(input));
+  Deno.env.delete("NO_HOLD_BACK");
+  assert(without >= 0 && withHold >= 0, "Group B tops up in this shape");
+  assert(withHold > without + 500, `with hold-back the pool keeps ${withHold} KG Gabrosa after B's top-up, without ${without}`);
+});

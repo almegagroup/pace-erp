@@ -23,7 +23,8 @@ import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilit
 import { usePo22ColumnLayouts } from "./usePo22ColumnLayouts.js";
 import { aggregateStoreItems, dayShort, issueNote, normaliseStoreRows, periodSpan, planItemRows, simpleStoreNote, storeWaitQty, transferRows } from "./mtsStoreInstruction.js";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
-import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
+import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
+import { companyLabel } from "./mtsCompanyLabel.js";
 import ErpScreenScaffold from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
 import { pushToast } from "../../../../store/uiToast.js";
@@ -200,6 +201,11 @@ export default function MtsRequirementPage() {
   const today = todayLocal();
   const [companyIdInput, setCompanyId] = useState("");
   const companyId = companyIdInput || resolveDefaultTransactionCompanyId(runtimeContext);
+  // Excel exports name the company, never its UUID ("CMP003 · ALMEGA SURFACE COATS LLP").
+  const companyText = useMemo(() => {
+    const company = buildTransactionCompanyList(runtimeContext).find((c) => String(c.id ?? c.company_id ?? "") === String(companyId));
+    return company ? companyLabel(company) : "—";
+  }, [runtimeContext, companyId]);
   const [activeTab, setActiveTab] = useState("action");
   const [planMonth, setPlanMonthState] = useState(today.slice(0, 7));
   const [asOf, setAsOf] = useState(today);
@@ -281,10 +287,11 @@ export default function MtsRequirementPage() {
         {!companyId ? (
           <p className="text-sm text-slate-500">Select a company.</p>
         ) : activeTab === "action" ? (
-          <ActionTab companyId={companyId} planMonth={planMonth} asOf={asOf} demandAt={demandMode === "AS_AT" && demandAt ? new Date(demandAt).toISOString() : ""} onOpen={setActiveTab} />
+          <ActionTab companyId={companyId} companyText={companyText} planMonth={planMonth} asOf={asOf} demandAt={demandMode === "AS_AT" && demandAt ? new Date(demandAt).toISOString() : ""} onOpen={setActiveTab} />
         ) : activeTab === "report" ? (
           <ReportTab
             companyId={companyId}
+            companyText={companyText}
             planMonth={planMonth}
             asOf={asOf}
             demandAt={demandMode === "AS_AT" && demandAt ? new Date(demandAt).toISOString() : ""}
@@ -296,9 +303,9 @@ export default function MtsRequirementPage() {
         ) : activeTab === "planning" ? (
           <PlanningTab companyId={companyId} planMonth={planMonth} asOf={asOf} demandAt={demandMode === "AS_AT" && demandAt ? new Date(demandAt).toISOString() : ""} access={access} />
         ) : activeTab === "item" ? (
-          <MtsItemPlanTab companyId={companyId} planMonth={planMonth} asOf={asOf} demandAt={demandMode === "AS_AT" && demandAt ? new Date(demandAt).toISOString() : ""} />
+          <MtsItemPlanTab companyId={companyId} companyText={companyText} planMonth={planMonth} asOf={asOf} demandAt={demandMode === "AS_AT" && demandAt ? new Date(demandAt).toISOString() : ""} />
         ) : (
-          <StoreReportTab companyId={companyId} planMonth={planMonth} asOf={asOf} demandAt={demandMode === "AS_AT" && demandAt ? new Date(demandAt).toISOString() : ""} />
+          <StoreReportTab companyId={companyId} companyText={companyText} planMonth={planMonth} asOf={asOf} demandAt={demandMode === "AS_AT" && demandAt ? new Date(demandAt).toISOString() : ""} />
         )}
       </div>
     </ErpScreenScaffold>
@@ -554,7 +561,7 @@ function SourceDetail({ row, du }) {
   );
 }
 
-function ReportTab({ companyId, planMonth, asOf, demandAt }) {
+function ReportTab({ companyId, companyText, planMonth, asOf, demandAt }) {
   const queryClient = useQueryClient();
   const [typeFilter, setTypeFilter] = useState("ALL");
   const [riskFilter, setRiskFilter] = useState("ALL");
@@ -609,7 +616,7 @@ function ReportTab({ companyId, planMonth, asOf, demandAt }) {
         rows: exportRows,
         getCellValue: (row, column) => exportColumns.find((c) => c.key === column.key)?.exportValue?.(row) ?? "",
         preambleRows: [
-          ["Company", companyId],
+          ["Company", companyText],
           ["Plan month (CM)", planMonth],
           ["As-of date", asOf],
           ["Column layout", layout.activeLayoutName || "Custom / default"],
@@ -1570,7 +1577,7 @@ function usePlanningQuery(companyId, planMonth, asOf, demandAt) {
 }
 
 /** Owner: Critical + Replenishment in one simple list — what to do, by when, why. */
-function ActionTab({ companyId, planMonth, asOf, demandAt, onOpen }) {
+function ActionTab({ companyId, companyText, planMonth, asOf, demandAt, onOpen }) {
   const planningQ = usePlanningQuery(companyId, planMonth, asOf, demandAt);
   const du = useMemo(() => makeDisplayUnits(planningQ.data?.display_units), [planningQ.data]);
   const rows = useMemo(() => buildActionRows(planningQ.data ?? null), [planningQ.data]);
@@ -1602,7 +1609,7 @@ function ActionTab({ companyId, planMonth, asOf, demandAt, onOpen }) {
         rows: exportRows,
         getCellValue: (row, column) => exportColumns.find((c) => c.key === column.key)?.value(row) ?? "",
         preambleRows: [
-          ["Company", companyId],
+          ["Company", companyText],
           ["Plan month (CM)", planMonth],
           ["As-of date", asOf],
           ["Rows", String(exportRows.length)],
@@ -1958,7 +1965,7 @@ function MemberSelection({ companyId, planMonth, plan, canEdit }) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Tab 5 — Store Material Usage Instruction (Phase 2D §6), live or a saved run
 // ─────────────────────────────────────────────────────────────────────────────
-function StoreReportTab({ companyId, planMonth, asOf, demandAt }) {
+function StoreReportTab({ companyId, companyText, planMonth, asOf, demandAt }) {
   const [runId, setRunId] = useState("");
   const [view, setView] = useState("ITEMS");
   const liveQ = usePlanningQuery(companyId, planMonth, asOf, demandAt);
@@ -2104,6 +2111,7 @@ function StoreReportTab({ companyId, planMonth, asOf, demandAt }) {
         },
         preambleRows: [
           ["Store Material Usage Instruction — advisory, from current physical stock only"],
+          ["Company", companyText],
           ["As-of", source?.calendar?.as_of ?? ""],
           ["CM + NM", `${source?.calendar?.as_of ?? ""} → ${source?.calendar?.nm_end ?? ""}`],
           ["Shelf-life advice", "Opening Stock: opening-stock date + 120 days. GRN: recorded expiry / recorded life, otherwise GRN date + 120 days. Advisory only — no physical GRN issue is posted or verified."],

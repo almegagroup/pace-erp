@@ -8,6 +8,7 @@
  * every block is derived from that run, so the file shows exactly what the screens show.
  * Read-only: never creates a PO, CSN, transfer or stock posting.
  */
+import { bestDateText, bestDateWhy, ifAbsentText, togetherText } from "./mts_best_date_text.logic.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
@@ -143,6 +144,30 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     const bulkRm = await loadBulkMaterialIds(companyId);
     const optimumByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.optimum]));
     const windowByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.window]));
+    const portByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.best_port_eta]));
+    const bestText = (key: string | null | undefined, currentEta: string | null, unit: { base_per_unit: number; uom_code?: string } | null = null, uom = "KG"): string => {
+      const o = key ? optimumByKey.get(key) : null;
+      if (!o || (o.shift_days === 0 && !o.not_needed_in_plan)) return o ? bestDateText({ current_eta: currentEta, best_eta: o.best.eta, shift_days: 0, not_needed_in_plan: false, plan_end: o.plan_end, best_port_eta: portByKey.get(key as string) ?? null, talk_to_vendor: false }) : "";
+      const w = key ? windowByKey.get(key) : null;
+      return bestDateText({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, not_needed_in_plan: o.not_needed_in_plan, plan_end: o.plan_end, best_port_eta: portByKey.get(key as string) ?? null, talk_to_vendor: w?.state === "TALK_TO_VENDOR",
+        cover: o.plan_cover ? { plan_days: o.plan_cover.plan_days, left_with: inUnit(unit, o.plan_cover.stock_at_plan_end_with) ?? 0, left_without: o.plan_cover.stock_at_plan_end_without === null ? null : inUnit(unit, o.plan_cover.stock_at_plan_end_without), avg_daily_use: inUnit(unit, o.plan_cover.avg_daily_use) ?? 0, uom } : null });
+    };
+    const arrivalByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a]));
+    /** Owner 2026-10-29: the engine's dates for a not-yet-shipped piece as separate cells, with the reason beside them. */
+    const bestCells = (key: string | null | undefined, currentEta: string | null, unit: { base_per_unit: number } | null, uom: string) => {
+      const o = key ? optimumByKey.get(key) : null;
+      const a = key ? arrivalByKey.get(key) : null;
+      if (!o || !a) return { etd: "", port: "", plant: "", why: "", absent: "" };
+      const absent = ifAbsentText(a.if_absent ?? [], currentEta);
+      if (o.not_needed_in_plan) return { etd: "", port: "", plant: "", why: bestText(key, currentEta, unit, uom), absent };
+      const w = key ? windowByKey.get(key) : null;
+      const q = (n: number) => inUnit(unit, n) ?? 0;
+      const binding = a.binding ? { ...a.binding, topup: a.binding.topup ? { ...a.binding.topup, wanted: q(a.binding.topup.wanted), shortfall: q(a.binding.topup.shortfall), pool_before: q(a.binding.topup.pool_before) } : null } : null;
+      return {
+        absent, etd: a.best_etd ?? "", port: a.best_port_eta ?? "", plant: o.best.eta,
+        why: bestDateWhy({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, binding, uom, vendor_message: w?.state === "TALK_TO_VENDOR" ? w.message : null }),
+      };
+    };
     const advisory = plan.buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE");
 
     // ── Family / item planning blocks: every item with use, arrival or lot in the horizon ──
@@ -163,13 +188,28 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const fu = familyUnit(memberIds);
       const gridByDay = new Map(grid.map((g) => [g.day, g]));
       // Owner 2026-10-28: what is left in the pool (held for no level) after each day's receipts — the latest Material x Level snapshot on or before the day.
-      const poolSnaps = (projection.level_matrix ?? []).filter((snap) => Object.keys(snap.pool).some((id) => memberSet.has(id)))
-        .map((snap) => ({ day: snap.day, qty: Object.entries(snap.pool).reduce((sum, [id, q]) => sum + (memberSet.has(id) ? Number(q) : 0), 0) }))
-        .sort((x, y) => x.day.localeCompare(y.day));
+      // A snapshot belongs to one planned part (a family, or a lone item), so several snapshots can share a day: take each member's own
+      // latest pool quantity and add them up (the last snapshot of the day alone would show only one part, e.g. 195 KG instead of the pool).
+      const poolByMember = new Map<string, Array<{ day: string; qty: number }>>();
+      for (const snap of projection.level_matrix ?? []) {
+        for (const [id, q] of Object.entries(snap.pool)) {
+          if (!memberSet.has(id)) continue;
+          const list = poolByMember.get(id) ?? [];
+          list.push({ day: snap.day, qty: Number(q) });
+          poolByMember.set(id, list);
+        }
+      }
+      for (const list of poolByMember.values()) list.sort((x, y) => x.day.localeCompare(y.day));
       const excessAt = (dayIso: string) => {
-        let found: number | null = null;
-        for (const snap of poolSnaps) { if (snap.day > dayIso) break; found = snap.qty; }
-        return found === null ? null : inUnit(fu, found);
+        if (poolByMember.size === 0) return null;
+        let total = 0;
+        let any = false;
+        for (const list of poolByMember.values()) {
+          let found: number | null = null;
+          for (const snap of list) { if (snap.day > dayIso) break; found = snap.qty; }
+          if (found !== null) { total += found; any = true; }
+        }
+        return any ? inUnit(fu, total) : null;
       };
 
       // Left side: today + every day something arrives or you fixed a quantity.
@@ -187,12 +227,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           qtys: today.map((e) => `${dq(e.member, e.qty)} ${uomOf(e.member) ?? ""}`.trim()),
           suppliers: today.map((e) => supplierOf(e.reference, e.csn_id) ?? "—"),
           statuses: today.map((e) => arrivalStatus(e.kind, e.date_source)),
-          best_dates: today.map((e) => {
-            const o = e.reschedule_key ? optimumByKey.get(e.reschedule_key) : null;
-            const w = e.reschedule_key ? windowByKey.get(e.reschedule_key) : null;
-            if (o && o.shift_days !== 0 && w?.state === "TALK_TO_VENDOR") return `Talk to the vendor (${o.best.eta}, ${o.shift_days < 0 ? "prepone" : "postpone"} ${Math.abs(o.shift_days)} d)`;
-            return o && o.shift_days !== 0 ? `${o.best.eta} (${o.shift_days < 0 ? "prepone" : "postpone"} ${Math.abs(o.shift_days)} d)` : "";
-          }),
+          best_dates: today.map((e) => bestText(e.reschedule_key, e.original_date !== undefined ? e.original_date : e.date, fu, fu?.uom_code ?? uomOf(e.member) ?? "KG")),
+          best_cells: today.map((e) => bestCells(e.reschedule_key, e.original_date !== undefined ? e.original_date : e.date, fu, fu?.uom_code ?? uomOf(e.member) ?? "KG")),
         };
       });
 
@@ -237,8 +273,16 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
 
       const kind = rowById.get(id)?.kind ?? "RM";
       const selected = rowById.get(id);
+      // Owner 2026-10-29: one line for the family — what moving every not-yet-shipped order to its advised date at once costs.
+      const togetherRaw = events.map((e) => (e.reschedule_key ? arrivalByKey.get(e.reschedule_key)?.together : null)).find((t) => Boolean(t)) ?? null;
+      const togetherNote = togetherRaw
+        ? togetherText({
+          extra_buy_qty: inUnit(fu, togetherRaw.extra_buy_qty_base) ?? 0, below_min_days_now: togetherRaw.below_min_days_now, below_min_days_moved: togetherRaw.below_min_days_moved,
+          critical_days_now: togetherRaw.critical_days_now, critical_days_moved: togetherRaw.critical_days_moved, uom: fu?.uom_code ?? uomOf(id) ?? "KG",
+        })
+        : null;
       blocks.push({
-        kind,
+        kind, together_note: togetherNote,
         waterfall: buildWaterfallView({
           projection, asOf: calendar.asOf, memberSet, groupSet,
           groupLabel: (g) => groupLabel.get(g) ?? "—",
@@ -357,9 +401,9 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         planning_eta: e.original_date !== undefined ? e.date : null,
         overdue: Boolean(e.date && e.date < calendar.asOf), no_eta: !e.date,
         movable: Boolean(e.reschedule_key),
-        engine_best_date: fed ? null : o && o.shift_days !== 0 && w?.state !== "TALK_TO_VENDOR" ? o.best.eta : null,
+        engine_best_date: fed ? null : o && !o.not_needed_in_plan && o.shift_days !== 0 && w?.state !== "TALK_TO_VENDOR" ? o.best.eta : null,
         engine_reason: fed ? "Lands in the transfer-source store, so it is not MTS supply. The waterfall asks the Store for a transfer when it needs stock."
-          : o && o.shift_days !== 0 && w?.message ? `${w.message} ${o.reason}` : o?.reason ?? null,
+          : o?.not_needed_in_plan ? bestText(e.reschedule_key, e.original_date !== undefined ? e.original_date : e.date, unitOf(r.material_id), uomOf(r.material_id) ?? "KG") : o && o.shift_days !== 0 && w?.message ? `${w.message} ${o.reason}` : o?.reason ?? null,
         vendor_window: fed ? null : w?.state === "TALK_TO_VENDOR" ? "Talk to the vendor" : w?.state === "RESCHEDULE" ? "Can be rescheduled" : null,
       };
     })).sort((a, b) => String(a.planning_eta ?? a.source_eta ?? "9999").localeCompare(String(b.planning_eta ?? b.source_eta ?? "9999")));

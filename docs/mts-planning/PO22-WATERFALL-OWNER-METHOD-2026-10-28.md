@@ -580,3 +580,105 @@ The Store tab's default view and the STORE_INSTRUCTIONS Excel sheet: Use from ·
 - PM-00060 (20KG TILE ADHESIVE TOT WHITE WOVEN SACK, CMP003): stock 15,596, a confirmed PO of 10,000 landing 13 Nov. The planner saw the cover dip to Target 25 on 11 Nov (two days BEFORE the PO lands), found that no new lot could land before 24 Nov (lead 27 d) and still placed a "late" lot — quantity 0.000001, "PO-by 2026-10-15 has passed" — which the Action tab showed as "Order today". Reproduced exactly in a test. Rule (same as the group rule in section 27): a late own-use need gets a lot only if the item is still short when the earliest lot could land, counting what already arrives by then. The Action tab also ignores a "buy" of a rounding speck.
 - A group's Max is never below its own Min (RDP_TOT WHITE showed Min 30 / Max 27): Max = at least the group's Target.
 - Hand-table in section 7: not rewritten. Its receipts for 17 Nov (Gabrosa) and 16 Jan (Combizell) are Sub-CSNs for CMP005 / CMP011, not CMP003 stock, and flat daily rates were used; the engine's own figures (section 4 of the management doc) replace it.
+
+## 30. "Engine best date" now follows the waterfall (2026-10-29)
+
+**Problem (owner):** the Excel column said "postpone 4 d / 5 d / 20 d / prepone 73 d". The stock side of the plan follows the PDF
+(levels, Min / Max, pool), but the date advice used an older, separate score (member cover days against Target / Critical).
+In the PDF's own example that score read ~94 risk days on every date, so tie-breaks (latest date wins) made the numbers arbitrary.
+
+**Now:** `optimizeFamilyArrival` judges a date with the same waterfall run. Risk of a date = (1) stock-out or group demand no member
+can serve, (2) a level asks the pool for its top-up and the pool cannot fill it to Max (the PDF's "a receipt or new order is needed"
+signal). The advised date is the **latest plant date with the least risk** ("must land by"); a prepone only when strictly safer.
+Dates after the PO21 plan's last demand day carry no risk. If every date up to the plan end is equally safe, the lot is
+**"not needed inside the PO21 plan"** and no date is advised.
+
+**Check on the PDF example (CMP003 MHEC, real stock and the five ordered lots):** 12 Nov TS lot can slide to 27 Nov, 8 Dec Gabrosa lot
+must land by 15 Dec, the 24 Dec / 11 Jan TS lots and the 29 Jan Combizell lot are not needed inside the plan (the old advice
+"prepone 73 d" disappears). CMP005 (built from the PROD numbers in the Excel): 2 Nov lot by 25 Nov, 12 Dec / 28 Dec lots not needed
+inside the plan. Regression test: "best date follows the waterfall…" in `mts_family_planner.logic.test.ts`.
+
+**Excel text** (`mts_best_date_text.logic.ts`): "Must land at plant by D · at port by P (can wait N d)" / "(needed N d earlier than now)" /
+"Not needed before the PO21 plan ends (D)". Port date = plant date − the route's port-to-plant days (import only).
+"Talk to the vendor:" prefix stays when the ETD window (§10) says the vendor cannot move it.
+
+**"beyond plan":** shown only when no day count can be estimated; otherwise "≈ N d (plan to D)". It means the stock outlasts the PO21
+plan; the plan has no demand after its last day (no demand in its last 7 days), so later use is never invented. Excel notes now say so.
+
+**Not verified:** the full handler on PROD (only the planner on PROD numbers); each lot is tested alone (moving several lots later at
+once is not tested together); the Row 13 question (Gabrosa CSN 3000000329, ETD 1 Nov, shown as plain "postpone" not "talk to the vendor").
+
+## 31. Owner rule (2026-10-29): no ETA without a plan, but always say why
+
+If PO21 has no demand after its last day, no ETA is calculated for a lot that is not needed inside the plan, and the Excel says **why**:
+the days the stock already covers (the whole plan), the quantity of the family still left over when the plan ends (excess) with and
+without this lot, and ≈ how many more days that excess lasts at the plan's average use. The ETA is scheduled later, when PO21 is extended.
+Implemented in `optimizeFamilyArrival` (`plan_cover`) and `bestDateText`.
+
+**Known gap (found the same day):** the engine lets groups eat the pool's "excess" every day (the old "second rotation", ~line 912 of
+`mts_family_planner.logic.ts`), so a level asks for its top-up later than the PDF says (Group B: 15 Dec vs the PDF's 28 Nov). Switching it
+off reproduces the PDF (pool 46,838 vs 46,624 before the 28 Nov top-ups) but breaks the buy logic (CMP005 RDP gets a daily lot). The
+engine must be moved to "use comes from the level's own reserve" together with the lot-buy logic. Until then the "Needed at plant by"
+dates are not PDF-exact. If PO21 is extended at the January rate, the PDF arithmetic says: TS 12 Nov by 28 Nov; Gabrosa 8 Dec and TS
+24 Dec each by 29 Dec (both needed); TS 11 Jan and Combizell 29 Jan each by 29 Jan; a new lot by 28 Feb.
+
+## 32. Engine aligned to the PDF; Excel shows ETD / port / plant dates and the reason (2026-10-29)
+
+**Engine (`mts_family_planner.logic.ts`, group draw):** a level's daily use now comes from its OWN reserve; the movable second-rotation
+excess is used only as a fallback when the level's own reserve cannot cover the day (the level is waiting). Before, groups ate the
+pool's excess first, so Group B's top-up came on 15 Dec instead of the PDF's 28 Nov and the pool fell 46.8k → 25.9k with no top-up.
+Check on the PDF example: Exclusive tops up 27 Nov, Group A and B 28 Nov, pool before the top-ups 46,838 (PDF 46,624). The CMP005 RDP
+one-Dairen-lot test still passes (the buy logic needed no change). Regression test: "PDF alignment…".
+
+**Excel (RM_PLANNING block):** the single "Engine best date" text became four columns on each not-yet-shipped piece:
+`ETD (engine)` · `ETA to Port (engine)` (import only) · `ETA to Plant (engine)` · `Why this date — Min / Max by group`.
+Domestic pieces show ETD and plant only. ETD = plant date − the route's days (Booking Time excluded); port = plant − the route's inland days.
+Why = which level (Exclusive or group) falls to its Min (days) one day later and asks the pool to refill to Max (days), what it needs, what
+the pool holds, the shortfall; for a lot not needed inside the plan: the cover days, the excess left at the plan end, and "schedule it when PO21 is extended".
+The "Talk to the vendor" ETD-window message (§10) is appended when it applies.
+
+**Not verified:** a full run of the handler on PROD data (the planner was run on the PDF example and a CMP005 shape built from PROD numbers).
+
+## 33. Real PROD run and what it changed (2026-10-29)
+
+The real `getMtsRollingPlanHandler` was run locally against a read-only PROD snapshot (CMP003, MHEC family scope; 44 tables, ~3,200 rows,
+md5-verified; the PROD plan had been extended to March 2027 that same morning). Day-one reserves matched the PDF (Exclusive 7,159 /
+Group A 2,714 / Group B 84,326 vs the PDF's 7,211 / 2,718 / 84,356; top-ups 28-29 Nov vs the PDF's 27-28 Nov). It also found three real defects:
+
+1. **Excess column wrong on day one (195 KG instead of ~19,859 KG).** One planned part's snapshot hid the family's pool on the same day; the pool is now
+   the sum of each member's own latest pool quantity. (The "195.3" in the 28 Oct Excel was this.)
+2. **Lot advice was driven by "can the pool fill every level to Max"**. With a deficit later in the plan this produced "prepone 25-61 days" to
+   a date whose ETD was already in the past. The PDF's own rule is that a level may sit below Min but must stay above Critical, so a lot is now judged
+   one at a time: run without it and with it landing today; the first day a level would go below Critical (or stock-out / unserved group demand) that the lot
+   prevents is D, and the lot must land by D - 1. No such day inside the plan: no date, only the reason (§31).
+3. **ETD blank for a local vendor on a high-sea-sale PO** (no route time in the master): the piece's own ETD-to-plant span is used. This was also why
+   CSN 3000000329 (ETD 1 Nov, 3 days away) showed a plain "postpone" instead of "Talk to the vendor".
+
+Limits: only the MHEC family of CMP003 was run on PROD data; CMP005 / CMP011 and the RDP family were not; lots are judged one at a time
+(two interchangeable lots can each look "not needed" while at least one is).
+
+## 34. Narrow levels are protected for every material, not only Gabrosa (2026-10-29)
+
+PROD run (CMP003 MHEC, plan to March): Group B took the whole new Gabrosa lot (24,000 KG) at its 26 Dec top-up, so Exclusive Gabrosa found no Gabrosa
+in the pool on 29 Jan and sat below Critical for 36 days (8 Feb - 15 Mar). The engine's own buys did not help because the Exclusive buy guard counted ALL
+Gabrosa (including what Group B held in its reserve) as the Exclusive level's cover (256 days), so no Gabrosa order was triggered.
+
+Two general rules (no material is named in the code):
+1. **Hold-back.** When a broad level tops up, each narrower level (an Exclusive material, or a group listed before it) keeps its headroom up to its own Max in the
+   pool: an Exclusive level on its material, a group on the member that serves the most levels (the shared material is used last). Cost: only the narrow
+   levels' next refill (here ≈ 3,500 + 1,400 KG against Group B's ≈ 49,000).
+2. **Reachable stock for the Exclusive buy guard** (`ownAvail`): a shared member's own-use cover counts its own reserve plus its stock still in the pool, never stock held
+   in group reserves. The Gabrosa order is then triggered for the Exclusive: 10,000 KG landing 28 Jan (PO by 11 Jan, ETD 21 Jan), just before Exclusive's Min on 29 Jan.
+
+Result on the PROD snapshot (MHEC): Exclusive below Critical 36 days -> 0; engine buys 88,000 -> 74,000 KG; family closing stock on 31 Mar 74,542 -> 60,542 KG (less excess).
+Other families in the snapshot run (partial data, so absolute numbers mean nothing): level-days below Critical 516 -> 480, nothing got worse.
+Not verified: CMP005 / CMP011 and the RDP family on complete PROD data. Rule 1 has its own regression test (a short pool, Group B asking before the Exclusive level) that fails without it; the PROD-shaped hand model is fixed by rule 2 alone.
+
+## 35. Conditional dates and the "all together" line (2026-10-29)
+
+Each not-yet-shipped order's advised date is judged alone with the other orders as planned. Two additions so two interchangeable orders are never both read as "not needed":
+- **Column "If another order does not come"** (RM_PLANNING): for the neighbouring orders (the previous and the next not-yet-shipped one of the family in landing order) the
+  latest date of THIS order when that neighbour is absent. PROD, CMP003 MHEC: Gabrosa 8 Dec — "if TS (24 Dec) does not come: can wait until 8 Jan"; TS 24 Dec — "if Gabrosa (8 Dec) does not come: can wait until 8 Jan".
+- **One line per family above the table:** every not-yet-shipped order moved to its own advised date at once, run with the engine's own new buys. PROD MHEC: 10,000 KG more to buy,
+  no level below Critical, level-days below Min 1 → 7. (Each date alone costs nothing; together they cost one extra lot.)
+Not verified: the neighbour rule is "previous and next in landing order", not a material-eligibility test; CMP005 / CMP011 / RDP on complete PROD data.

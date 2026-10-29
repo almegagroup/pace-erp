@@ -11,6 +11,9 @@
 import ExcelJS from "exceljs";
 import { flowRows, matrixGrid, waterfallVerdict } from "./mtsWaterfall.js";
 import { aggregateStoreItems, dayShort, simpleStoreNote, storeWaitQty } from "./mtsStoreInstruction.js";
+import { companyLabel } from "./mtsCompanyLabel.js";
+
+export { companyLabel };
 
 const TITLE_FILL = "FFFBBC04";   // yellow block title, as in the old file
 const HEAD_FILL = "FFFFE699";    // light yellow column header
@@ -35,18 +38,6 @@ function num(value) {
 }
 function day(value) {
   return value ? String(value).slice(0, 10) : "";
-}
-const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-
-/** Business exports must never turn an internal company id into a visible name. */
-export function companyLabel(c) {
-  const labels = [c.company_name, c.company_code]
-    .map((value) => String(value ?? "").trim())
-    .filter((value) => value && !UUID_RE.test(value));
-  // Owner 2026-10-27: several companies share one name (CMP003 / CMP010 "ALMEGA SURFACE COATS LLP"), so the
-  // code leads wherever a company is named.
-  const [name, code] = labels;
-  return code ? `${code} · ${name}` : name || "—";
 }
 /** Excel sheet name: ≤ 31 chars, no []:*?/\ . */
 export function sheetName(base, used) {
@@ -153,7 +144,7 @@ function writePlan(sheet, companies) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Planning blocks: one per family / item per company — today + arrival rows, then Prediction.
 // ─────────────────────────────────────────────────────────────────────────────
-const BLOCK_HEAD = ["Date", "Opening", "ETA to Plant", "Quantity to Dispatch", "Pro-rata", "Closing", "Excess (not needed yet)", "Max Days", "Min Stk", "Min Days", "PO / CSN", "Qty", "Supplier", "ST", "Engine best date"];
+const BLOCK_HEAD = ["Date", "Opening", "ETA to Plant", "Quantity to Dispatch", "Pro-rata", "Closing", "Excess (not needed yet)", "Max Days", "Min Stk", "Min Days", "PO / CSN", "Qty", "Supplier", "ST", "ETD (engine)", "ETA to Port (engine)", "ETA to Plant (engine)", "Why this date — Min / Max by group", "If another order does not come"];
 const PRED_HEAD = ["", "Import ETD / Dispatch date", "LCL-ETD / Port ETA", "Date", "Quantity to Dispatch", "Family Max Days", "Family Min Days", "Material", "Supplier", "PO by", "UoM", "Cover that triggered the order (d)", "Item's own Min it was compared with (d)", "Triggered by"];
 
 /**
@@ -165,7 +156,14 @@ function coverCell(value, estimate, stock, planEnd) {
   if (d !== null) return d;
   const e = days(estimate);
   if (e !== null) return `≈ ${e} d${planEnd ? ` (plan to ${String(planEnd).slice(0, 10)})` : ""}`;
-  return num(stock) > 0 ? "beyond plan" : d;
+  return num(stock) > 0 ? "outlasts plan" : d;
+}
+
+/** The engine's ETD / port / plant dates and the reason, one line per not-yet-shipped piece on the row (owner 2026-10-29). */
+function bestColumns(r) {
+  const cells = r.best_cells ?? [];
+  const join = (key) => cells.map((c) => c?.[key] ?? "").filter(Boolean).join("\n");
+  return [join("etd"), join("port"), join("plant"), join("why") || (r.best_dates ?? []).filter(Boolean).join("\n"), join("absent")];
 }
 
 function writeBlocks(sheet, companies, kind) {
@@ -189,19 +187,24 @@ function writeBlocks(sheet, companies, kind) {
     // Owner 2026-10-28: the family is reported as a whole (every group and the exclusive use of its members together); each level
     // is listed beneath, narrow first, with its own Min / Max / Critical days, reserve and next Min date.
     if (b.is_family && (b.waterfall?.levels ?? []).length) {
-      const note = sheet.addRow(["Opening / Pro-rata / Closing / Excess / Max Days / Min Days below are the WHOLE family: all groups and the exclusive use of its members together. A receipt is not all used at once: Excess = what is in the pool after that day, held for no level yet (normal, not a problem). ≈ N d (plan to date) = the stock outlasts the PO21 plan; N is the days at the plan's average daily use. Levels, narrow first:"]);
+      const note = sheet.addRow(["Opening / Pro-rata / Closing / Excess / Max Days / Min Days below are the WHOLE family: all groups and the exclusive use of its members together. A receipt is not all used at once: Excess = what is in the pool after that day, held for no level yet (normal, not a problem). ≈ N d (plan to date) = the stock outlasts the PO21 plan (the plan has no demand after its last day, so no later use is invented); N is the days at the plan's average daily use. ETD / ETA to Port / ETA to Plant (engine) = the latest dates at which a not-yet-shipped order still keeps every level above its Critical days (a level may sit below its Min, never below Critical); a lot that no level depends on inside the plan gets no date, only the reason. Levels, narrow first:"]);
       note.getCell(1).font = { italic: true };
       for (const l of b.waterfall.levels) {
         const line = sheet.addRow([`  ${l.label}: Min ${days(l.target_days) ?? "—"} / Max ${days(l.max_days) ?? "—"} / Critical ${days(l.critical_days) ?? "—"} d · reserve ${num(l.reserve_now) ?? 0} ${b.uom ?? ""} (covers ${days(l.cover_days_now) ?? "—"} d) · next Min ${l.next_min_day ?? "not in horizon"}`]);
         line.getCell(1).font = { italic: true };
       }
     }
+    if (b.together_note) {
+      const tn = sheet.addRow([b.together_note]);
+      tn.getCell(1).font = { italic: true, bold: true };
+    }
     styleHeader(sheet.addRow(BLOCK_HEAD));
     for (const r of b.rows) {
       const row = sheet.addRow([
         day(r.day), num(r.opening), num(r.arrivals) || null, num(r.dispatch), num(r.use), num(r.closing), num(r.excess), coverCell(r.max_days, r.max_days_est, r.closing, b.plan_end), num(r.min_stock), coverCell(r.min_days, r.min_days_est, r.min_stock, b.plan_end),
         r.references.join("\n"), r.qtys.join("\n"), r.suppliers.join("\n"),
-        r.statuses.map((s) => STATUS_LABEL[s] ?? s).join("\n"), r.best_dates.filter(Boolean).join("\n"),
+        r.statuses.map((s) => STATUS_LABEL[s] ?? s).join("\n"),
+        ...bestColumns(r),
       ]);
       row.eachCell((cell, i) => { cell.border = BORDER; if (i >= 2 && i <= 10) cell.numFmt = NUM; cell.alignment = { vertical: "top", wrapText: i >= 11 }; });
       if (r.closing < 0) row.getCell(6).font = { bold: true, color: { argb: RED } };
@@ -222,7 +225,7 @@ function writeBlocks(sheet, companies, kind) {
     }
     sheet.addRow([]);
   }
-  widths(sheet, [12, 12, 12, 14, 11, 12, 14, 9, 12, 9, 34, 11, 30, 16, 22]);
+  widths(sheet, [12, 12, 12, 14, 11, 12, 14, 9, 12, 9, 34, 11, 30, 16, 12, 12, 12, 70, 50]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -313,30 +316,29 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
   // Owner 2026-10-28: for the WHOLE horizon, month by month; only ACTUAL stock may be issued (CSN / PO not yet received, an ETA that passed or is
   // missing, and an unordered lot are listed apart as "do not issue against"). Companies without the month plan fall back to the CM + NM rows.
   const storeItems = wb.addWorksheet(sheetName("STORE_INSTRUCTIONS", used));
-  const planRows = companies.flatMap((c) => (c.store_plan?.rows ?? []).map((r) => ({ ...r, company: companyLabel(c) })));
-  if (planRows.length > 0) {
-    // Owner 2026-10-28: the Store sheet is SIMPLE — Period · Item · For · Issue now · Wait for receipt · Keep aside after this period · Note.
-    addTable(storeItems, [
-      { label: "Company", key: "company" }, { label: "Use from", value: (r) => dayShort(r.period_from) }, { label: "Use to", value: (r) => dayShort(r.period_to) },
-      { label: "Item", key: "item" }, { label: "Material group", key: "group" },
-      { label: "PO21 parent group", key: "mother_group" }, { label: "Child group(s)", key: "child_group" },
-      { label: "Issue now", value: (r) => num(r.use_stock), num: true },
-      { label: "Wait for receipt", value: (r) => num(storeWaitQty(r)) || null, num: true },
-      { label: "Keep aside after this period", value: (r) => num(r.keep_qty), num: true }, { label: "UoM", key: "uom" },
-      { label: "Note", value: (r) => simpleStoreNote({ use_arrival: r.use_arrival, use_assumed: r.use_assumed, use_lot: r.use_lot, not_backed: r.not_backed }) },
-    ], planRows, { color: (r) => (r.use_assumed > 0 || r.not_backed > 0 ? RED : null) });
-    widths(storeItems, [26, 11, 11, 40, 28, 24, 40, 14, 16, 18, 7, 80]);
-  } else addTable(storeItems, [
-    { label: "Company", key: "company" }, { label: "Period", key: "period" }, { label: "Use from", value: (r) => day(r.period_from) }, { label: "Use to", value: (r) => day(r.period_to) },
+  // Owner 2026-10-28: EVERY company gets its rows. A company without the month-by-month plan falls back to its CM + NM rows, shaped like the
+  // plan rows (it used to be dropped whenever another company had the month plan).
+  const planRows = companies.flatMap((c) => {
+    if ((c.store_plan?.rows ?? []).length > 0) return c.store_plan.rows.map((r) => ({ ...r, company: companyLabel(c) }));
+    return aggregateStoreItems((c.store ?? []).filter((x) => x.group_related !== false).map((x) => ({
+      period: x.period, period_order: String(x.period).startsWith("CM") ? 0 : 1, period_from: x.period_from, period_to: x.period_to, item: x.material, key_id: x.material_key ?? x.material,
+      group: x.group ?? "", mother: x.mother_group ?? "", child: x.child_group ?? "", qty: x.from_stock, not_backed: x.not_backed, uom: x.uom, keep: x.keep_qty ?? null, keep_days: x.keep_max_days ?? null,
+    }))).map((r) => ({
+      company: companyLabel(c), period: r.period, period_from: r.period_from, period_to: r.period_to, item: r.item, group: r.group, mother_group: r.mother, child_group: r.child,
+      uom: r.uom, use_stock: r.qty, use_arrival: 0, use_assumed: 0, use_lot: 0, keep_qty: r.keep, keep_max_days: r.keep_days, not_backed: r.not_backed,
+    }));
+  });
+  // The Store sheet is SIMPLE — Use from · Use to · Item · groups · Issue now · Wait for receipt · Keep aside after this period · Note.
+  addTable(storeItems, [
+    { label: "Company", key: "company" }, { label: "Use from", value: (r) => dayShort(r.period_from) }, { label: "Use to", value: (r) => dayShort(r.period_to) },
     { label: "Item", key: "item" }, { label: "Material group", key: "group" },
-    { label: "Use in this period", value: (r) => num(r.qty), num: true }, { label: "Keep at end of period (up to Max days)", value: (r) => num(r.keep), num: true },
-    { label: "Max days", value: (r) => days(r.keep_days), num: true }, { label: "Not yet backed", value: (r) => num(r.not_backed), num: true }, { label: "UoM", key: "uom" },
-    { label: "PO21 parent group", key: "mother" }, { label: "Child group(s)", key: "child" },
-  ], companies.flatMap((c) => aggregateStoreItems((c.store ?? []).filter((s) => s.group_related !== false).map((s) => ({
-    period: s.period, period_order: String(s.period).startsWith("CM") ? 0 : 1, period_from: s.period_from, period_to: s.period_to, item: s.material, key_id: s.material_key ?? s.material,
-    group: s.group ?? "", mother: s.mother_group ?? "", child: s.child_group ?? "", qty: s.from_stock, not_backed: s.not_backed, uom: s.uom, keep: s.keep_qty ?? null, keep_days: s.keep_max_days ?? null,
-  }))).map((r) => ({ ...r, company: companyLabel(c) }))), { color: (r) => (r.not_backed > 0 ? RED : null) });
-  if (planRows.length === 0) widths(storeItems, [26, 16, 12, 12, 40, 28, 16, 22, 10, 14, 7, 24, 40]);
+    { label: "PO21 parent group", key: "mother_group" }, { label: "Child group(s)", key: "child_group" },
+    { label: "Issue now", value: (r) => num(r.use_stock), num: true },
+    { label: "Wait for receipt", value: (r) => num(storeWaitQty(r)) || null, num: true },
+    { label: "Keep aside after this period", value: (r) => num(r.keep_qty), num: true }, { label: "UoM", key: "uom" },
+    { label: "Note", value: (r) => simpleStoreNote({ use_arrival: r.use_arrival, use_assumed: r.use_assumed, use_lot: r.use_lot, not_backed: r.not_backed }) },
+  ], planRows, { color: (r) => (r.use_assumed > 0 || r.not_backed > 0 ? RED : null) });
+  widths(storeItems, [26, 11, 11, 40, 28, 24, 40, 14, 16, 18, 7, 80]);
   const excessRows = companies.flatMap((c) => (c.store_plan?.excess ?? []).map((e) => ({ ...e, company: companyLabel(c) })));
   const storeExcess = wb.addWorksheet(sheetName("STORE_EXCESS", used));
   addTable(storeExcess, [
