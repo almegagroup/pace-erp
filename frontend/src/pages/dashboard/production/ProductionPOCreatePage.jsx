@@ -3250,7 +3250,16 @@ function MtsPackingCombineStep({ session, onBack, onDone }) {
   // `short` is calculated for the initial Pack-BOM location. Once the user
   // chooses a different location, the old result must not block Save; the
   // backend re-checks the selected location using fresh balances.
-  const shortGroups = groups.filter((g) => g.short && storageLocationForGroup(g) === g.storage_location_id);
+  // Group-level `short` only fires when every member is short. Also flag a group
+  // whose CURRENTLY SELECTED member(s) cannot cover their qty, using the server's
+  // per-member availability (candidate_availability, valid for the initial
+  // location only -- a changed location is re-checked by the backend, see above).
+  function selectionIsShort(g) {
+    if (storageLocationForGroup(g) !== g.storage_location_id || !g.candidate_availability) return false;
+    return rowsForGroup(g).some((r) => Number(r.actual_qty) > EPSILON_FRONTEND
+      && Number(r.actual_qty) > Number(g.candidate_availability[r.actual_material_id] ?? 0) + EPSILON_FRONTEND);
+  }
+  const shortGroups = groups.filter((g) => (g.short && storageLocationForGroup(g) === g.storage_location_id) || selectionIsShort(g));
 
   // §138 deviation-confirm (2026-09-21): same symmetric over/under rule as
   // Page 4 -- a PM group's total departing from the combined Standard Qty is
@@ -3423,7 +3432,7 @@ function MtsPackingCombineStep({ session, onBack, onDone }) {
                   }));
                   const isFirstRow = rowIndex === 0;
                   return (
-                    <tr key={rowKey} className={group.short && groupStorageLocationId === group.storage_location_id ? "bg-rose-50" : "border-b border-slate-100"}>
+                    <tr key={rowKey} className={shortGroups.includes(group) ? "bg-rose-50" : "border-b border-slate-100"}>
                       <td className="border-b border-slate-100 px-3 py-2">{isFirstRow ? groupIndex + 1 : ""}</td>
                       <td className="border-b border-slate-100 px-3 py-2">{isFirstRow ? materialLabel(group.material_id) : ""}</td>
                       <td className="border-b border-slate-100 px-3 py-2">
@@ -3453,12 +3462,12 @@ function MtsPackingCombineStep({ session, onBack, onDone }) {
                           onChange={(event) => handleQtyChange(group, rowIndex, event.target.value)}
                         />
                       </td>
-                      <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(row.available_qty, "0.###")}</td>
+                      <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(groupStorageLocationId === group.storage_location_id ? (group.candidate_availability?.[row.actual_material_id] ?? row.available_qty) : row.available_qty, "0.###")}</td>
                       <td className="border-b border-slate-100 px-3 py-2 text-xs text-slate-500">
                         {isFirstRow ? group.contributing.map((c) => c.pack_size_label).join(", ") : ""}
                       </td>
                       <td className="border-b border-slate-100 px-3 py-2">
-                        {group.short ? <span className="text-rose-600">Short</span> : ""}
+                        {shortGroups.includes(group) ? <span className="text-rose-600">Short</span> : ""}
                         {rows.length > 1 && (
                           <button
                             type="button"
