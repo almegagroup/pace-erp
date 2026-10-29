@@ -883,16 +883,17 @@ async function loadLeadTimes(companyId: string, asOf: string, universe: string[]
     for (const vendorId of vendorsByMaterial.get(materialId) ?? []) {
       const label = vendorLabel.get(vendorId) ?? "—";
       const booking = bookingDays.get(`${vendorId}|${materialId}`) ?? 0;
-      const bookingText = booking > 0 ? `booking ${booking} + ` : "";
+      // Owner 2026-10-29: lead time = route days only; booking is the advance notice before dispatch (PO-by = ETD - booking).
+      const bookingNote = booking > 0 ? ` (booking ${booking} d before dispatch, not part of the lead time)` : "";
       for (const row of domesticRows.filter((r) => text(r.vendor_id) === vendorId && effectiveOn(r))) {
-        configured.push({ vendor_id: vendorId, vendor_label: label, route: "DOMESTIC", days: booking + Number(row.transit_days ?? 0), route_days: Number(row.transit_days ?? 0), detail: `${bookingText}transit ${Number(row.transit_days ?? 0)}` });
+        configured.push({ vendor_id: vendorId, vendor_label: label, route: "DOMESTIC", days: Number(row.transit_days ?? 0), route_days: Number(row.transit_days ?? 0), detail: `transit ${Number(row.transit_days ?? 0)}${bookingNote}` });
       }
       for (const row of importRows.filter((r) => text(r.vendor_id) === vendorId && effectiveOn(r))) {
         const sail = Number(row.sail_time_days ?? 0);
         const clearance = Number(row.clearance_days ?? 0);
         const inlandDays = inland.get(text(row.port_of_discharge_id));
-        const days = booking + sail + clearance + (inlandDays ?? 0);
-        configured.push({ vendor_id: vendorId, vendor_label: label, route: "IMPORT", days, route_days: sail + clearance + (inlandDays ?? 0), ...(inlandDays !== undefined ? { inland_days: inlandDays } : {}), detail: `${bookingText}sail ${sail} + clearance ${clearance} + inland ${inlandDays ?? "not configured"}` });
+        const days = sail + clearance + (inlandDays ?? 0);
+        configured.push({ vendor_id: vendorId, vendor_label: label, route: "IMPORT", days, route_days: sail + clearance + (inlandDays ?? 0), ...(inlandDays !== undefined ? { inland_days: inlandDays } : {}), detail: `sail ${sail} + clearance ${clearance} + inland ${inlandDays ?? "not configured"}${bookingNote}` });
       }
     }
     // Suggested safety days: how late received shipments arrived against their route time.

@@ -175,7 +175,7 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
     // Only a GRN writes the price in the PO unit; a price typed in MM03 (no GRN yet) is per base unit.
     const priceUnit = priceUnitCode({ supply_uom_code: supplyUom, last_grn_date: text(row.last_grn_date), latest_po_uom: poUomByVmi.get(text(row.id))?.uom, base_uom_code: material?.base_uom_code });
     const booking = num(row.booking_time_days);
-    const routeDays = (routesByMaterial.get(materialId) ?? []).filter((r) => r.vendor_id === vendorId).map((r) => r.days - (booking ?? 0));
+    const routeDays = (routesByMaterial.get(materialId) ?? []).filter((r) => r.vendor_id === vendorId).map((r) => r.days); // route days only (owner 2026-10-29)
     result.set(materialId, [...(result.get(materialId) ?? []), {
       vendor_id: vendorId, vendor_label: label.get(vendorId) ?? "—", material_id: materialId,
       moq_base: toBase(row.moq_qty), multiple_base: toBase(row.order_multiple_qty), lot_base: toBase(row.delivery_lot_qty),
@@ -439,7 +439,7 @@ export async function computePlanning(p: PlanningParams) {
   const bulkMaterials = await loadBulkMaterialIds(p.companyId);
   const planningStarted = Date.now();
   const universe = unique(req.output.rows.map((r) => r.material_id));
-  const routesByMaterial = new Map(req.output.rows.map((r) => [r.material_id, (r.lead_time?.configured_routes ?? []).map((route) => ({ vendor_id: route.vendor_id, days: route.days }))]));
+  const routesByMaterial = new Map(req.output.rows.map((r) => [r.material_id, (r.lead_time?.configured_routes ?? []).map((route) => ({ vendor_id: route.vendor_id, days: route.route_days ?? route.days }))]));
   const reuse = p.reuseLoads === true;
   const [vendorTerms, selections] = await Promise.all([
     cachedLoad(`${p.companyId}|vendorTerms|${calendar.asOf}|${hashIds(universe)}`, () => loadVendorTerms(p.companyId, universe, routesByMaterial, req.materials, p.today), reuse),
