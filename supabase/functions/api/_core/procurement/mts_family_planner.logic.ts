@@ -368,6 +368,8 @@ type Sim = {
   draw: number[][];
   arrival: number[][];
   planned: number[][];
+  /** Owner 2026-10-29: what the member's OWN (exclusive) level can reach: its own reserve plus the member's stock still in the pool (stock held in group reserves is not reachable). */
+  ownAvail: number[][];
   ownBalance: number[][]; // closing + group draws taken from protected stock (stock if groups had not borrowed)
   freeAfter: number[][]; // free stock above own protection after the day
   poolUnmet: number[][]; // pool index → day
@@ -674,7 +676,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
   const simulate = (lots: readonly Planned[]): Sim => {
     const s: Sim = {
       closing: ids.map(() => zeros()), use: ids.map(() => zeros()), draw: ids.map(() => zeros()), arrival: ids.map(() => zeros()),
-      planned: ids.map(() => zeros()), ownBalance: ids.map(() => zeros()), freeAfter: ids.map(() => zeros()),
+      planned: ids.map(() => zeros()), ownBalance: ids.map(() => zeros()), ownAvail: ids.map(() => zeros()), freeAfter: ids.map(() => zeros()),
       poolUnmet: pools.map(() => zeros()), poolFreeShort: pools.map(() => zeros()), poolFree: pools.map(() => zeros()),
       poolDraw: pools.map(() => ids.map(() => zeros())),
       poolBucket: pools.map(() => ids.map(() => zeros())),
@@ -777,8 +779,26 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       const unreserved = ids.map((_id, m) => Math.max(0, bal[m] - ownReserve[m]
         - purposeReserve.reduce((sum, reserve) => sum + reserve[m], 0)
         - excessReserve.reduce((sum, reserve) => sum + reserve[m], 0)));
+      // Owner 2026-10-29: a broad level never takes the last stock a NARROWER level will ask for at its next refill. For every narrower
+      // level (an Exclusive material, or a group listed before this one) its headroom up to its own Max is kept in the pool: for an
+      // Exclusive level on its material, for a group on the member that serves the most levels (the shared material is used last).
+      const holdBackFor = (p: number, m: number) => {
+        if (i === 0 || Deno.env.get("NO_HOLD_BACK")) return 0;
+        let held = 0;
+        const own0 = memberDesiredMax[m][i];
+        if (own0 !== null && own[m].some((qty) => qty > EPSILON)) held += Math.max(0, useAhead(own[m], i, own0) - ownReserve[m]);
+        for (let q = 0; q < p; q += 1) {
+          const cands = candIdx[q];
+          if (!cands.includes(m)) continue;
+          const designated = [...cands].sort((a, b) => levelsServed[b] - levelsServed[a] || ids[a].localeCompare(ids[b]))[0];
+          if (designated !== m) continue;
+          const wantedQ = pools[q].demand[i] + useAhead(pools[q].demand, i, groupCoverageAt(pools[q], i).desired);
+          held += Math.max(0, wantedQ - purposeReserve[q].reduce((sum, qty) => sum + Math.max(0, qty), 0));
+        }
+        return held;
+      };
       const takeBucket = (p: number, m: number, qty: number) => {
-        const take = Math.min(Math.max(0, qty), unreserved[m]);
+        const take = Math.min(Math.max(0, qty), Math.max(0, unreserved[m] - holdBackFor(p, m)));
         if (take <= EPSILON) return 0;
         purposeReserve[p][m] = roundQty(purposeReserve[p][m] + take);
         unreserved[m] = roundQty(unreserved[m] - take);
@@ -1096,6 +1116,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       for (let m = 0; m < M; m += 1) {
         s.closing[m][i] = bal[m];
         s.ownBalance[m][i] = bal[m];
+        s.ownAvail[m][i] = ownReserve[m] + Math.max(0, bal[m] - ownReserve[m] - purposeReserve.reduce((sum, reserve) => sum + Math.max(0, reserve[m]), 0));
         s.freeAfter[m][i] = Math.max(0, bal[m] - protection[m][i]);
       }
       // Owner 2026-10-28: a Material × Level snapshot on every event day (and the first / last day) for the 4A table / Excel.
@@ -1147,7 +1168,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       const t = targets[m][i].target;
       if (t === null || targets[m][i].critical === null) continue;
       const cover = isSharedGroupMember[m]
-        ? coverDays(sim.ownBalance[m][i], memberUse, i)
+        ? coverDays(sim.ownAvail[m][i], memberUse, i)
         : standaloneCoverageDays(sim.ownBalance[m][i], own[m], i, finalOwnDailyUse[m][i]);
       const safetyFloor = isSharedGroupMember[m] ? 0 : finalOwnDailyUse[m][i] * t;
       const atCoverageTarget = cover !== null && cover <= t;
@@ -1165,7 +1186,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
         if (late && earliest !== null) {
           const ai = Math.min(N - 1, earliest);
           const coverAtArrival = isSharedGroupMember[m]
-            ? coverDays(sim.ownBalance[m][ai], memberUse, ai)
+            ? coverDays(sim.ownAvail[m][ai], memberUse, ai)
             : standaloneCoverageDays(sim.ownBalance[m][ai], own[m], ai, finalOwnDailyUse[m][ai]);
           const floorAtArrival = isSharedGroupMember[m] ? 0 : finalOwnDailyUse[m][ai] * t;
           const coverOk = coverAtArrival === null || coverAtArrival > t;
@@ -1345,7 +1366,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       const triggerMin = groupTrigger ? (targets[m][need.index].target ?? t) : t;
       const triggerCover = groupTrigger
         ? coverDays(sim.poolFree[pools.indexOf(need.pool!)][need.index], need.pool!.demand, need.index)
-        : (isSharedGroupMember[m] ? coverDays(sim.ownBalance[m][need.index], own[m], need.index) : standaloneCoverageDays(sim.ownBalance[m][need.index], own[m], need.index, finalOwnDailyUse[m][need.index]));
+        : (isSharedGroupMember[m] ? coverDays(sim.ownAvail[m][need.index], own[m], need.index) : standaloneCoverageDays(sim.ownBalance[m][need.index], own[m], need.index, finalOwnDailyUse[m][need.index]));
       const why = needsForLot.length === 1
         ? (need.kind === "OWN"
           ? (usesGroupAsIndividualDemand

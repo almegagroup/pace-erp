@@ -982,14 +982,34 @@ Deno.test("PDF alignment: daily use comes from the level's own reserve, the pool
   assert(topUps.includes("2026-11-27") && topUps.includes("2026-11-28"), `top-up days ${topUps.slice(0, 6).join(",")}`);
   const firstB = r.level_events.find((e) => e.kind === "TOP_UP" && e.level_id === "B")!;
   assert(firstB.day === "2026-11-28" && firstB.pool_before > 40_000, `Group B top-up on ${firstB.day}, pool before ${firstB.pool_before}`);
-  // PDF rule: a level may sit below its Min but must stay above its Critical. The 12 Nov TS lot may wait (levels run down to Critical first);
-  // the later lots are not needed inside the plan (no level goes below Critical without them); the Combizell lot is right where it is.
-  const ts1 = optimizeFamilyArrival(input, "TS1")!;
-  assert(!ts1.not_needed_in_plan && ts1.shift_days > 0 && ts1.binding !== null && ts1.binding.min_day >= "2026-11-27", `TS1 best ${ts1.best.eta} ${JSON.stringify(ts1.binding)}`);
-  for (const k of ["G2", "TS2", "TS3"]) {
+  // PDF rule: a level may sit below its Min but must stay above its Critical. In the PDF's own example (plan to 31 Jan) no level goes below
+  // Critical without any one of the lots, so each is "not needed inside the plan" and says why; the Combizell lot is right where it is.
+  for (const k of ["TS1", "G2", "TS2", "TS3"]) {
     const o = optimizeFamilyArrival(input, k)!;
     assert(o.not_needed_in_plan && o.plan_cover !== null && o.plan_cover.stock_at_plan_end_with > 0, `${k} should not be needed inside the plan`);
   }
   const c2 = optimizeFamilyArrival(input, "C2")!;
   assert(c2.shift_days >= 0, "a lot with no risk is never preponed");
+});
+
+// Owner 2026-10-29: the PROD case (MHEC family, plan to March). Group B must not take the last Gabrosa a narrower level will ask for, and the
+// Exclusive (own) level's buy trigger counts only what the Exclusive can reach (its own reserve + Gabrosa still in the pool), not Gabrosa held in
+// group reserves. Without both, Exclusive Gabrosa sat below Critical for weeks while the engine saw plenty of Gabrosa.
+Deno.test("Exclusive stays above Critical: broad group leaves the narrow level's refill, and the Exclusive buy counts only reachable stock", () => {
+  const AS_OF = "2026-10-28";
+  const add = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+  const days: string[] = []; for (let d = AS_OF; d <= "2027-03-31"; d = add(d, 1)) days.push(d);
+  const G = "GAB", C = "COMB", T = "TS";
+  const pol = (id: string) => ({ material_id: id, target_days: 30, critical_days: 20, vendor_moq_qty_base: 10000, order_multiple_qty_base: null, configured_lead_time_days: 17, cycle_days: 30, vendor_options: [] }) as unknown as OptimizerMaterialPlanningPolicy;
+  const own = days.map((d) => ({ material_id: G, required_by: d, qty_base: 122 }));
+  const groups = days.flatMap((d) => [
+    { group_id: "A", candidates: [G, C], required_by: d, qty_base: 48 },
+    { group_id: "B", candidates: [G, C, T], required_by: d, qty_base: 1415 },
+  ]);
+  const arr = ([["TS1", T, "2026-11-12", 25000], ["G2", G, "2026-12-08", 24000], ["TS2", T, "2026-12-24", 25000], ["TS3", T, "2027-01-11", 25000], ["C2", C, "2027-01-29", 24000]] as const)
+    .map(([k, m, d, q]) => ({ source_key: k, material_id: m, eta_to_plant: d, qty_base: q }));
+  const input = { as_of: AS_OF, horizon_end: "2027-03-31", opening_qty_by_material: { [G]: 17000, [C]: 78000, [T]: 26000 }, own_demand: own, group_demand: groups, confirmed_arrivals: arr, policies: [G, C, T].map(pol), plan_buys: true } as unknown as FamilyPlannerInput;
+  const r = planFamily(input);
+  const exclusiveCritical = r.level_risk.filter((x) => x.level_kind === "OWN" && x.level_id === G && x.critical_days !== null && x.cover_days < x.critical_days);
+  assert(exclusiveCritical.length === 0, `Exclusive below Critical on ${exclusiveCritical.length} day(s), first ${exclusiveCritical[0]?.day}`);
 });

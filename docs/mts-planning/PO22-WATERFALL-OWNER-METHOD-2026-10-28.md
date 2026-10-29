@@ -656,3 +656,20 @@ Group A 2,714 / Group B 84,326 vs the PDF's 7,211 / 2,718 / 84,356; top-ups 28-2
 
 Limits: only the MHEC family of CMP003 was run on PROD data; CMP005 / CMP011 and the RDP family were not; lots are judged one at a time
 (two interchangeable lots can each look "not needed" while at least one is).
+
+## 34. Narrow levels are protected for every material, not only Gabrosa (2026-10-29)
+
+PROD run (CMP003 MHEC, plan to March): Group B took the whole new Gabrosa lot (24,000 KG) at its 26 Dec top-up, so Exclusive Gabrosa found no Gabrosa
+in the pool on 29 Jan and sat below Critical for 36 days (8 Feb - 15 Mar). The engine's own buys did not help because the Exclusive buy guard counted ALL
+Gabrosa (including what Group B held in its reserve) as the Exclusive level's cover (256 days), so no Gabrosa order was triggered.
+
+Two general rules (no material is named in the code):
+1. **Hold-back.** When a broad level tops up, each narrower level (an Exclusive material, or a group listed before it) keeps its headroom up to its own Max in the
+   pool: an Exclusive level on its material, a group on the member that serves the most levels (the shared material is used last). Cost: only the narrow
+   levels' next refill (here ≈ 3,500 + 1,400 KG against Group B's ≈ 49,000).
+2. **Reachable stock for the Exclusive buy guard** (`ownAvail`): a shared member's own-use cover counts its own reserve plus its stock still in the pool, never stock held
+   in group reserves. The Gabrosa order is then triggered for the Exclusive: 10,000 KG landing 28 Jan (PO by 11 Jan, ETD 21 Jan), just before Exclusive's Min on 29 Jan.
+
+Result on the PROD snapshot (MHEC): Exclusive below Critical 36 days -> 0; engine buys 88,000 -> 74,000 KG; family closing stock on 31 Mar 74,542 -> 60,542 KG (less excess).
+Other families in the snapshot run (partial data, so absolute numbers mean nothing): level-days below Critical 516 -> 480, nothing got worse.
+Not verified: CMP005 / CMP011 and the RDP family on complete PROD data. The hand-model regression test passes with or without rule 1 (rule 2 alone fixes that shape).
