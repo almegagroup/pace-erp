@@ -83,6 +83,7 @@ function isProductionDateWithinWindow(value) {
 }
 const KG_UOM_CODES = new Set(["KG", "KGS", "KILOGRAM", "KILOGRAMS"]);
 const LITRE_UOM_CODES = new Set(["L", "LT", "LTR", "LITRE", "LITRES"]);
+const KILOLITRE_UOM_CODES = new Set(["KL", "KLTR", "KILOLITRE", "KILOLITRES", "KILOLITER", "KILOLITERS"]);
 const MACHINE_CAPACITY_TOLERANCE = 1.1;
 
 const EMPTY_PROCESS = {
@@ -449,7 +450,12 @@ export default function ProductionPOCreatePage() {
     }
     let capacityKg = null;
     if (KG_UOM_CODES.has(uom)) capacityKg = capacity;
-    if (LITRE_UOM_CODES.has(uom) && literToKgFactor) capacityKg = capacity * literToKgFactor;
+    // Machine capacity litre->KG uses the Stroke's own factor for EVERY po_type
+    // (same as the backend's resolveMachineCapacityKg), not only MTS-IWC.
+    const strokeKgPerLitre = Number(strokeDetailQ.data?.conversion_factor);
+    const kgPerLitre = Number.isFinite(strokeKgPerLitre) && strokeKgPerLitre > 0 ? strokeKgPerLitre : null;
+    if (LITRE_UOM_CODES.has(uom) && kgPerLitre) capacityKg = capacity * kgPerLitre;
+    if (KILOLITRE_UOM_CODES.has(uom) && kgPerLitre) capacityKg = capacity * 1000 * kgPerLitre;
     if (!capacityKg) {
       return { blocked: true, message: "Machine capacity UOM must be KG, or Litre with a valid Stroke conversion factor." };
     }
@@ -459,7 +465,7 @@ export default function ProductionPOCreatePage() {
       return { blocked: true, message: `Batch Size ${formatPreciseNumber(plannedKg, "0.###")} KG exceeds the allowed maximum ${formatPreciseNumber(maximumKg, "0.###")} KG (Machine Capacity ${capacity} ${uom} + 10%).` };
     }
     return { blocked: false, message: `Maximum allowed: ${formatPreciseNumber(maximumKg, "0.###")} KG (Machine Capacity ${capacity} ${uom} + 10%).` };
-  }, [literToKgFactor, machineRequired, processForm.machine_id, processForm.planned_qty_kg, selectedMachine]);
+  }, [strokeDetailQ.data?.conversion_factor, machineRequired, processForm.machine_id, processForm.planned_qty_kg, selectedMachine]);
 
   // MTS Page 3 "Shift" — company-wise, inline-create-as-you-go (2026-09-17 lock).
   const [shiftCreateName, setShiftCreateName] = useState("");
