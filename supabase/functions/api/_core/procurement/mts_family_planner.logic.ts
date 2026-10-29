@@ -1762,6 +1762,8 @@ export type FamilyArrivalOptimum = {
   current: FamilyArrivalScore; best: FamilyArrivalScore; shift_days: number; reason: string;
   /** True when every date up to the PO21 plan's last demand day is equally safe: the piece is not needed inside the plan. */
   not_needed_in_plan: boolean; plan_end: string | null;
+  /** Only when not_needed_in_plan: why — what the family holds at the plan's last day (base units). */
+  plan_cover: { plan_days: number; stock_at_plan_end_with: number; stock_at_plan_end_without: number | null; avg_daily_use: number } | null;
 } | null;
 
 /**
@@ -1820,5 +1822,22 @@ export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: strin
       : cmp(best, current) < 0
         ? `Current date leaves ${current[0]} stock-out day(s) and ${current[1]} level top-up(s) the pool cannot fill to Max; this date leaves ${best[0]} and ${best[1]}.`
         : `Every level is still filled to Max if the lot lands on ${bestEta}; later than that a level cannot be topped up.`;
-  return { current: view(currentEta, current), best: view(bestEta, best), shift_days: shift, reason, not_needed_in_plan: notNeededInPlan, plan_end: planEndDay };
+  // Owner 2026-10-29: when no ETA can be fixed because the plan has no use after its last day, say why — the days the stock
+  // already covers, and how much of the family stock is left over (excess) when the plan ends, with and without this lot.
+  let planCover: NonNullable<FamilyArrivalOptimum>["plan_cover"] = null;
+  if (notNeededInPlan && planEndDay !== null) {
+    const stockAt = (r: FamilyResult) => r.rows.filter((x) => x.day === planEndDay).reduce((sum, x) => sum + x.closing_qty_base, 0);
+    const without = planFamily({ ...base, confirmed_arrivals: input.confirmed_arrivals.map((a) => (a.source_key === pieceKey ? { ...a, qty_base: 0 } : a)) });
+    const withoutOk = familyScore(without)[0] === 0;
+    const current0 = at(currentEta);
+    const tail = dayList(addDays(planEndDay, -29), planEndDay);
+    const use = current0.rows.filter((x) => tail.includes(x.day)).reduce((sum, x) => sum + x.demand_qty_base, 0);
+    planCover = {
+      plan_days: dayList(input.as_of, planEndDay).length,
+      stock_at_plan_end_with: roundQty(stockAt(current0)),
+      stock_at_plan_end_without: withoutOk ? roundQty(stockAt(without)) : null,
+      avg_daily_use: roundQty(use / tail.length),
+    };
+  }
+  return { current: view(currentEta, current), best: view(bestEta, best), shift_days: shift, reason, not_needed_in_plan: notNeededInPlan, plan_end: planEndDay, plan_cover: planCover };
 }

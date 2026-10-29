@@ -145,11 +145,12 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     const optimumByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.optimum]));
     const windowByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.window]));
     const portByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.best_port_eta]));
-    const bestText = (key: string | null | undefined, currentEta: string | null): string => {
+    const bestText = (key: string | null | undefined, currentEta: string | null, unit: { base_per_unit: number; uom_code?: string } | null = null, uom = "KG"): string => {
       const o = key ? optimumByKey.get(key) : null;
       if (!o || (o.shift_days === 0 && !o.not_needed_in_plan)) return o ? bestDateText({ current_eta: currentEta, best_eta: o.best.eta, shift_days: 0, not_needed_in_plan: false, plan_end: o.plan_end, best_port_eta: portByKey.get(key as string) ?? null, talk_to_vendor: false }) : "";
       const w = key ? windowByKey.get(key) : null;
-      return bestDateText({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, not_needed_in_plan: o.not_needed_in_plan, plan_end: o.plan_end, best_port_eta: portByKey.get(key as string) ?? null, talk_to_vendor: w?.state === "TALK_TO_VENDOR" });
+      return bestDateText({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, not_needed_in_plan: o.not_needed_in_plan, plan_end: o.plan_end, best_port_eta: portByKey.get(key as string) ?? null, talk_to_vendor: w?.state === "TALK_TO_VENDOR",
+        cover: o.plan_cover ? { plan_days: o.plan_cover.plan_days, left_with: inUnit(unit, o.plan_cover.stock_at_plan_end_with) ?? 0, left_without: o.plan_cover.stock_at_plan_end_without === null ? null : inUnit(unit, o.plan_cover.stock_at_plan_end_without), avg_daily_use: inUnit(unit, o.plan_cover.avg_daily_use) ?? 0, uom } : null });
     };
     const advisory = plan.buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE");
 
@@ -195,7 +196,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           qtys: today.map((e) => `${dq(e.member, e.qty)} ${uomOf(e.member) ?? ""}`.trim()),
           suppliers: today.map((e) => supplierOf(e.reference, e.csn_id) ?? "—"),
           statuses: today.map((e) => arrivalStatus(e.kind, e.date_source)),
-          best_dates: today.map((e) => bestText(e.reschedule_key, e.original_date !== undefined ? e.original_date : e.date)),
+          best_dates: today.map((e) => bestText(e.reschedule_key, e.original_date !== undefined ? e.original_date : e.date, fu, fu?.uom_code ?? uomOf(e.member) ?? "KG")),
         };
       });
 

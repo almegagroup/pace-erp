@@ -607,3 +607,17 @@ plan; the plan has no demand after its last day (no demand in its last 7 days), 
 
 **Not verified:** the full handler on PROD (only the planner on PROD numbers); each lot is tested alone (moving several lots later at
 once is not tested together); the Row 13 question (Gabrosa CSN 3000000329, ETD 1 Nov, shown as plain "postpone" not "talk to the vendor").
+
+## 31. Owner rule (2026-10-29): no ETA without a plan, but always say why
+
+If PO21 has no demand after its last day, no ETA is calculated for a lot that is not needed inside the plan, and the Excel says **why**:
+the days the stock already covers (the whole plan), the quantity of the family still left over when the plan ends (excess) with and
+without this lot, and ≈ how many more days that excess lasts at the plan's average use. The ETA is scheduled later, when PO21 is extended.
+Implemented in `optimizeFamilyArrival` (`plan_cover`) and `bestDateText`.
+
+**Known gap (found the same day):** the engine lets groups eat the pool's "excess" every day (the old "second rotation", ~line 912 of
+`mts_family_planner.logic.ts`), so a level asks for its top-up later than the PDF says (Group B: 15 Dec vs the PDF's 28 Nov). Switching it
+off reproduces the PDF (pool 46,838 vs 46,624 before the 28 Nov top-ups) but breaks the buy logic (CMP005 RDP gets a daily lot). The
+engine must be moved to "use comes from the level's own reserve" together with the lot-buy logic. Until then the "Needed at plant by"
+dates are not PDF-exact. If PO21 is extended at the January rate, the PDF arithmetic says: TS 12 Nov by 28 Nov; Gabrosa 8 Dec and TS
+24 Dec each by 29 Dec (both needed); TS 11 Jan and Combizell 29 Jan each by 29 Jan; a new lot by 28 Feb.
