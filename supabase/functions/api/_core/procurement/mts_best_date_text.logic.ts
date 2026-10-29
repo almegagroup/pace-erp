@@ -46,6 +46,8 @@ export type BestDateWhyInput = {
   uom: string;
   /** The ETD window verdict (docs §10), when the vendor can no longer move the shipment. */
   vendor_message: string | null;
+  /** Set when the date was pulled back because several orders moving together would leave a level below Critical. */
+  joint_note?: string | null;
 };
 
 /**
@@ -54,6 +56,7 @@ export type BestDateWhyInput = {
  */
 export function bestDateWhy(i: BestDateWhyInput): string {
   const b = i.binding;
+  if (!b && i.joint_note) return i.vendor_message ? `${i.joint_note} ${i.vendor_message}` : i.joint_note;
   const level = b
     ? `without it ${b.level_label} (Min ${b.min_days} d${b.desired_days !== null ? ` / Max ${b.desired_days} d` : ""}) is below its Min from ${b.min_day}${b.topup ? ` (at its ${b.topup.day} top-up it asked the pool for ${fmt(b.topup.wanted)} ${i.uom}, the pool held ${fmt(b.topup.pool_before)} ${i.uom}, short by ${fmt(b.topup.shortfall)} ${i.uom})` : ""} and falls below its Critical${b.critical_days !== null ? ` (${b.critical_days} d)` : ""} on ${b.day}, down to ${Math.floor(b.cover_days)} d of cover`
     : "without it stock runs out or a group's demand is not served";
@@ -62,7 +65,8 @@ export function bestDateWhy(i: BestDateWhyInput): string {
     : i.shift_days > 0
       ? `Can wait until ${i.best_eta} (${i.shift_days} d later than now): ${level}.`
       : `${i.current_eta ?? i.best_eta} is the latest safe date: ${level}.`;
-  return i.vendor_message ? `${lead} ${i.vendor_message}` : lead;
+  const withJoint = i.joint_note ? `${lead} ${i.joint_note}` : lead;
+  return i.vendor_message ? `${withJoint} ${i.vendor_message}` : withJoint;
 }
 
 export type IfAbsentInput = { reference: string; other_eta: string; best_eta: string | null; shift_days: number; not_needed_in_plan: boolean; binding_day: string | null };

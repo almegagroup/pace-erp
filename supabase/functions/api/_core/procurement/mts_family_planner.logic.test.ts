@@ -1032,9 +1032,7 @@ Deno.test("hold-back: when a broad level tops up from a short pool, the narrow l
     return e ? (r.level_matrix.find((m) => m.day === e.day)?.pool[G] ?? 0) : -1;
   };
   const withHold = poolGabAfterBTopUp(planFamily(input));
-  Deno.env.set("NO_HOLD_BACK", "1");
-  const without = poolGabAfterBTopUp(planFamily(input));
-  Deno.env.delete("NO_HOLD_BACK");
+  const without = poolGabAfterBTopUp(planFamily({ ...input, hold_back: false }));
   assert(without >= 0 && withHold >= 0, "Group B tops up in this shape");
   assert(withHold > without + 500, `with hold-back the pool keeps ${withHold} KG Gabrosa after B's top-up, without ${without}`);
 });

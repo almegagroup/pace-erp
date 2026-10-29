@@ -710,7 +710,34 @@ export async function computePlanning(p: PlanningParams) {
     return out;
   })();
   const movableSourceKeys = new Set(req.output.rows.flatMap((r) => r.inbound_events.map((event, index) => (event.reschedule_key ? `A|${r.material_id}|${index}|${event.reference}` : null)).filter((k): k is string => k !== null)));
-  const togetherCache = new Map<string, ReturnType<typeof optimizeFamilyTogether>>();
+  // Owner 2026-10-29: each not-yet-shipped order is first judged alone (every other order as planned). Moving them all at once can leave a level below Critical,
+  // so the family's orders are then moved together to their advised dates and the latest-moving order is pulled back to its current date until no extra
+  // level-day falls below Critical: the advised dates shown are jointly safe.
+  type JointFamily = { moves: Map<string, string>; together: ReturnType<typeof optimizeFamilyTogether>; alone: Map<string, ReturnType<typeof optimizeFamilyArrival>> };
+  const jointCache = new Map<string, JointFamily>();
+  const jointFor = (input: FamilyPlannerInput, movable: ReadonlyArray<{ source_key: string; eta_to_plant: string | null }>): JointFamily => {
+    const cacheKey = movable.map((a) => a.source_key).join("§");
+    const hit = jointCache.get(cacheKey);
+    if (hit) return hit;
+    const alone = new Map(movable.map((a) => [a.source_key, optimizeFamilyArrival(input, a.source_key)] as const));
+    const currentOf = new Map(movable.map((a) => [a.source_key, String(a.eta_to_plant)] as const));
+    const moves = new Map<string, string>();
+    for (const a of movable) {
+      const alt = alone.get(a.source_key);
+      if (alt) moves.set(a.source_key, alt.not_needed_in_plan ? (alt.plan_end ?? alt.best.eta) : alt.best.eta);
+    }
+    let together = optimizeFamilyTogether(input, moves);
+    const dayDiff = (x: string, y: string) => Math.round((Date.parse(`${x}T00:00:00Z`) - Date.parse(`${y}T00:00:00Z`)) / 86_400_000);
+    for (let guard = 0; guard < movable.length && movable.length > 1 && together.critical_days_moved > together.critical_days_now; guard += 1) {
+      const latest = [...moves.entries()].map(([k, d]) => ({ k, shift: dayDiff(d, currentOf.get(k)!) })).filter((x) => x.shift > 0).sort((x, y) => y.shift - x.shift)[0];
+      if (!latest) break;
+      moves.set(latest.k, currentOf.get(latest.k)!);
+      together = optimizeFamilyTogether(input, moves);
+    }
+    const result = { moves, together, alone };
+    jointCache.set(cacheKey, result);
+    return result;
+  };
   const arrivalScope = p.arrivalFamilyOf ? new Set(Object.keys(familyInputFor(p.arrivalFamilyOf).opening_qty_by_material)) : null;
   // Owner 2026-10-28 (D9): a proposed move is only advice if the vendor can still move the shipment (ETD window).
   const rescheduleContext = await loadRescheduleContext(p.companyId, req.output.rows
@@ -993,7 +1020,23 @@ export async function computePlanning(p: PlanningParams) {
       const optimum = new Map(pieces.map((event) => [event.reschedule_key as string, optimizeFamilyArrival(input, keyOf.get(event)!)]));
       return pieces.map((event) => {
         const facts = rescheduleContext.factsOf(event);
-        const best = optimum.get(event.reschedule_key as string) ?? null;
+        const bestAlone = optimum.get(event.reschedule_key as string) ?? null;
+        const ownKeyJ = keyOf.get(event)!;
+        const jointFam = movableInFamily.length > 1 ? jointFor(input, movableInFamily) : null;
+        const currentEtaJ = event.original_date !== undefined ? event.original_date : event.date;
+        let jointNote: string | null = null;
+        let best = bestAlone;
+        if (bestAlone && jointFam && currentEtaJ) {
+          const jointEta = jointFam.moves.get(ownKeyJ);
+          const aloneEta = bestAlone.not_needed_in_plan ? null : bestAlone.best.eta;
+          if (jointEta && ((bestAlone.not_needed_in_plan && jointEta === currentEtaJ) || (!bestAlone.not_needed_in_plan && jointEta !== aloneEta))) {
+            const shiftJ = Math.round((Date.parse(`${jointEta}T00:00:00Z`) - Date.parse(`${currentEtaJ}T00:00:00Z`)) / 86_400_000);
+            jointNote = bestAlone.not_needed_in_plan
+              ? "Alone this order is not needed inside the plan, but together with the other not-yet-shipped orders at their advised dates a level would fall below Critical, so keep the current date."
+              : `Alone it could wait until ${aloneEta}; together with the other not-yet-shipped orders a level would fall below Critical, so the safe date is ${jointEta}.`;
+            best = { ...bestAlone, not_needed_in_plan: false, plan_cover: null, shift_days: shiftJ, best: { ...bestAlone.best, eta: jointEta }, reason: jointNote };
+          }
+        }
         // Route time only (Booking Time excluded) of the piece's own vendor and route; the largest if several ports.
         const routeDays = (row.lead_time?.configured_routes ?? [])
           .filter((r) => r.route === facts.route && (!facts.vendor_id || r.vendor_id === facts.vendor_id) && r.route_days !== undefined)
@@ -1020,23 +1063,9 @@ export async function computePlanning(p: PlanningParams) {
             binding_day: alt?.binding?.day ?? null,
           };
         }) : [];
-        // All the family's movable pieces at their advised dates, together (once per family).
-        let together: ReturnType<typeof optimizeFamilyTogether> | null = null;
-        if (movableInFamily.length > 1) {
-          const cacheKey = movableInFamily.map((a) => a.source_key).join("§");
-          together = togetherCache.get(cacheKey) ?? null;
-          if (!together) {
-            const moves = new Map<string, string>();
-            for (const a of movableInFamily) {
-              const alt = optimizeFamilyArrival(input, a.source_key);
-              if (alt) moves.set(a.source_key, alt.not_needed_in_plan ? (alt.plan_end ?? alt.best.eta) : alt.best.eta);
-            }
-            together = optimizeFamilyTogether(input, moves);
-            togetherCache.set(cacheKey, together);
-          }
-        }
+        const together = jointFam ? jointFam.together : null;
         return {
-          if_absent: ifAbsent, together,
+          if_absent: ifAbsent, together, joint_note: jointNote,
           best_port_eta: bestPortEta,
           best_etd: bestEtd,
           route: facts.route,

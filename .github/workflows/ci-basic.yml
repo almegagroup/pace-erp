@@ -28,6 +28,10 @@ jobs:
       - name: Stock posting guard
         run: node scripts/stock-posting-guard.mjs
 
+      # The API runs on Node on Render: a bare `Deno.` in procurement code crashes there ("Deno is not defined").
+      - name: No Deno globals in procurement code
+        run: node scripts/no-deno-in-procurement-guard.mjs
+
       - name: STO migration CLI compatibility
         run: node scripts/sto-migration-cli-compat-test.mjs
 
