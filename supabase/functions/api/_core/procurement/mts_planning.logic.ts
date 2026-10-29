@@ -82,7 +82,7 @@ export function familyArrivalRisk(arrival: OptimizerConfirmedArrival, asOf: stri
 
 /** Vendor with a known route and the shortest total lead time; ties → smaller MOQ → label. */
 export function chooseVendor(terms: readonly VendorTerm[]): VendorTerm | null {
-  const total = (t: VendorTerm) => (t.route_days === null ? Number.POSITIVE_INFINITY : (t.booking_days ?? 0) + t.route_days);
+  const total = (t: VendorTerm) => (t.route_days === null ? Number.POSITIVE_INFINITY : t.route_days); // lead = route only (owner 2026-10-29)
   return [...terms].sort((a, b) => total(a) - total(b) || (a.moq_base ?? 0) - (b.moq_base ?? 0) || a.vendor_label.localeCompare(b.vendor_label))[0] ?? null;
 }
 

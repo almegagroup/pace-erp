@@ -145,6 +145,13 @@ function writePlan(sheet, companies) {
 // Planning blocks: one per family / item per company — today + arrival rows, then Prediction.
 // ─────────────────────────────────────────────────────────────────────────────
 const BLOCK_HEAD = ["Date", "Opening", "ETA to Plant", "Quantity to Dispatch", "Pro-rata", "Closing", "Excess (not needed yet)", "Max Days", "Min Stk", "Min Days", "PO / CSN", "Qty", "Supplier", "ST", "ETD (engine)", "ETA to Port (engine)", "ETA to Plant (engine)", "Why this date — Min / Max by group", "If another order does not come"];
+/** Owner 2026-10-29: name the group(s) whose free stock triggered the order, not just "Group free stock". */
+const triggeredBy = (x) => {
+  const also = Array.isArray(x.trigger_also_groups) && x.trigger_also_groups.length ? ` (same lot also feeds: ${x.trigger_also_groups.join(", ")})` : "";
+  if (x.trigger_kind === "GROUP") return `Group free stock${x.trigger_group ? ` — ${x.trigger_group}` : ""}${also}`;
+  if (x.trigger_kind === "OWN") return `Its own use${also}`;
+  return also.trim();
+};
 const PRED_HEAD = ["", "Import ETD / Dispatch date", "LCL-ETD / Port ETA", "Date", "Quantity to Dispatch", "Family Max Days", "Family Min Days", "Material", "Supplier", "PO by", "UoM", "Cover that triggered the order (d)", "Item's own Min it was compared with (d)", "Triggered by"];
 
 /**
@@ -187,7 +194,7 @@ function writeBlocks(sheet, companies, kind) {
     // Owner 2026-10-28: the family is reported as a whole (every group and the exclusive use of its members together); each level
     // is listed beneath, narrow first, with its own Min / Max / Critical days, reserve and next Min date.
     if (b.is_family && (b.waterfall?.levels ?? []).length) {
-      const note = sheet.addRow(["Opening / Pro-rata / Closing / Excess / Max Days / Min Days below are the WHOLE family: all groups and the exclusive use of its members together. A receipt is not all used at once: Excess = what is in the pool after that day, held for no level yet (normal, not a problem). ≈ N d (plan to date) = the stock outlasts the PO21 plan (the plan has no demand after its last day, so no later use is invented); N is the days at the plan's average daily use. ETD / ETA to Port / ETA to Plant (engine) = the latest dates at which a not-yet-shipped order still keeps every level above its Critical days (a level may sit below its Min, never below Critical); a lot that no level depends on inside the plan gets no date, only the reason. Levels, narrow first:"]);
+      const note = sheet.addRow(["Opening / Pro-rata / Closing / Excess / Max Days / Min Days below are the WHOLE family: all groups and the exclusive use of its members together. A receipt is not all used at once: Excess = what is in the pool after that day, held for no level yet (normal, not a problem). ≈ N d (plan to date) = the stock outlasts the PO21 plan (the plan has no demand after its last day, so no later use is invented); N is the days at the plan's average daily use. ETD / ETA to Port / ETA to Plant (engine) = the latest dates at which a not-yet-shipped order still keeps every level above its Critical days (a level may sit below its Min, never below Critical); a lot that no level depends on inside the plan gets no date, only the reason. \"If another order does not come\" = the DEADLINE for this order if that other order never arrives (this order judged alone, other orders on their recorded dates); the engine date beside it is stricter because it also guards against several orders being late together. \"Recorded date\" = the plant date stored in the CSN / PO; if it has already passed with no shipment recorded the order is overdue, not postponed: ask the vendor where the goods are and update the CSN Tracker. Levels, narrow first:"]);
       note.getCell(1).font = { italic: true };
       for (const l of b.waterfall.levels) {
         const line = sheet.addRow([`  ${l.label}: Min ${days(l.target_days) ?? "—"} / Max ${days(l.max_days) ?? "—"} / Critical ${days(l.critical_days) ?? "—"} d · reserve ${num(l.reserve_now) ?? 0} ${b.uom ?? ""} (covers ${days(l.cover_days_now) ?? "—"} d) · next Min ${l.next_min_day ?? "not in horizon"}`]);
@@ -218,9 +225,10 @@ function writeBlocks(sheet, companies, kind) {
       for (const x of b.prediction) {
         const row = sheet.addRow([
           x.source === "YOU" ? "Planner" : "Engine", day(x.import_etd), day(x.port_eta), day(x.date), num(x.qty), coverCell(x.max_days, x.max_days_est, 0, b.plan_end), coverCell(x.min_days, x.min_days_est, 0, b.plan_end), x.material, x.supplier ?? "", day(x.po_by),
-          x.uom ?? "", days(x.trigger_cover_days), days(x.trigger_min_days), x.trigger_kind === "GROUP" ? "Group free stock" : x.trigger_kind === "OWN" ? "Its own use" : "",
+          x.uom ?? "", days(x.trigger_cover_days), days(x.trigger_min_days), triggeredBy(x),
         ]);
         row.eachCell((cell, i) => { cell.border = BORDER; if (i >= 5 && i <= 7) cell.numFmt = NUM; });
+        row.getCell(14).alignment = { wrapText: true, vertical: "top" };
       }
     }
     sheet.addRow([]);

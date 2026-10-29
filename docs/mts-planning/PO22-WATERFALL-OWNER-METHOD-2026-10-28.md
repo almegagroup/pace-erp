@@ -696,3 +696,13 @@ The hold-back switch used `Deno.env.get("NO_HOLD_BACK")` inside the planner. It 
 rolling plan and the planning page both returned 500 (`MTS_ROLLING_PLAN_FAILED` / `MTS_PLANNING_FAILED`, "Deno is not defined"; Excel said "not included — A system error occurred").
 Fix: the switch is now the input field `hold_back` (default on; only a test sets it to false). New CI guard `scripts/no-deno-in-procurement-guard.mjs` fails any bare `Deno.` in
 production procurement files. Lesson: local runs under Deno cannot show Node-only crashes; anything that touches a runtime global must be guarded by a script.
+
+## 38. Lead time = route days only; booking = PO-by notice (owner 2026-10-29, replaces D6)
+
+- **Lead time** (earliest a new lot can land) = vendor dispatch → plant, the route/transit days only.
+- **Booking time** is only how many days before the dispatch the PO should be placed: PO-by = ETD − booking.
+  A PO placed later is still possible (the vendor can dispatch at once); the plan then says "PO is late".
+- Before: lead = booking + route (DOLTEX 20 + 5 = 25 d), so a stock-out on 19 Nov was called unavoidable.
+  Now DOLTEX lead = 5 d, first new lots land 3 / 4 Nov, stock-out days 0 (PROD snapshot run).
+- CMP003 PROD snapshot: runs-out 3 → 2, late orders 20 → 12, new orders 176 → 178.
+- Not changed: the PO22 Requirement tab's own "Lead (booking + route)" display (separate engine).

@@ -24,7 +24,7 @@
 import { orderByGroupUsage, type GroupUsageOrder } from "../../_shared/groupUsageOrder.logic.ts";
 import { DEFAULT_GROUP_TARGET_DAYS, defaultCriticalDays, effectiveGroupCoveragePolicies, groupDesiredMaxDays, type GroupCoveragePolicyVersion } from "./mts_group_policy.logic.ts";
 import { runFamilyPurposeLedger } from "./mts_family_purpose_ledger.logic.ts";
-import { applySinglePurchaseConstraints, pickVendorOption, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
+import { applySinglePurchaseConstraints, bookingDaysOf, pickVendorOption, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import { roundQty } from "./mts_requirement.logic.ts";
 import type {
   OptimizerAdvisoryBuy,
@@ -166,6 +166,8 @@ export type FamilyBuy = OptimizerAdvisoryBuy & {
   need_kind: "OWN" | "GROUP";
   /** Owner 2026-10-28: the cover (days) that triggered this lot — the group's free stock for a group need, the item's own use for an own need — and the Min it was compared with (the item's own Target for a group need, D10). */
   trigger_cover_days?: number | null;
+  /** Owner 2026-10-29: the group whose free stock triggered this lot (null for an own-use trigger). */
+  trigger_group_id?: string | null;
   trigger_min_days?: number | null;
 };
 
@@ -1360,7 +1362,9 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       lotQty = orderQty;
       const seq = (sequence.get(id) ?? 0) + 1;
       sequence.set(id, seq);
-      const poBy = addDays(allDays[need.index], -lead);
+      const bookingDays = bookingDaysOf(policy, need.option?.option.booking_time_days);
+      const poBy = addDays(allDays[need.index], -lead - bookingDays);
+      const poLate = !need.late && poBy < input.as_of;
       const covers = [...new Set(needsForLot.flatMap((candidate) => candidate.kind === "OWN"
         ? [usesGroupAsIndividualDemand ? "MEMBER_GUARD" : "OWN"]
         : [candidate.pool!.group_id]))];
@@ -1381,12 +1385,12 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
         recommended_po_by: need.late ? input.as_of : poBy, estimated_plant_eta: allDays[arrivalIndex], need_date: allDays[need.index],
         lots: [{ lot_no: 1, plant_eta: allDays[arrivalIndex], qty_base: roundQty(lotQty) }], total_lead_time_days: lead,
         status: need.late ? "ADVISORY_LATE" : "ADVISORY",
-        reason: need.late ? `${why} PO-by ${poBy} has passed; ordering today arrives ${allDays[arrivalIndex]}.` : `${why} Sized to Desired Max ${window} days; MOQ / multiple respected.`,
+        reason: need.late ? `${why} PO-by ${poBy} has passed; ordering today arrives ${allDays[arrivalIndex]}.` : `${why} Sized to Desired Max ${window} days; MOQ / multiple respected.${poLate ? ` PO-by ${poBy} (${bookingDays} d booking before dispatch) has passed - PO is late; ask the vendor to dispatch at once.` : ""}`,
         advisory_only: true,
         vendor_id: need.option?.option.vendor_id ?? null, max_cover_days: roundQty(window),
         bridge: need.option?.bridge ?? false, cheapest_vendor_id: need.option?.cheapest ?? null,
         covers, need_kind: needsForLot.some((candidate) => candidate.kind === "GROUP") ? "GROUP" : "OWN",
-        trigger_cover_days: triggerCover, trigger_min_days: triggerMin,
+        trigger_cover_days: triggerCover, trigger_min_days: triggerMin, trigger_group_id: groupTrigger ? need.pool!.group_id : null,
       });
       engineLots.push({
         material_id: id,

@@ -406,7 +406,7 @@ function costOptionsFor(
   carryingRate: number | null,
 ): CostOption[] {
   const options = terms.map((term) => {
-    const lead = totalLeadTimeDays({ material_id: term.material_id, target_days: null, critical_days: null, vendor_moq_qty_base: null, order_multiple_qty_base: null, configured_lead_time_days: null, booking_time_days: term.booking_days, route_lead_time_days: term.route_days });
+    const lead = totalLeadTimeDays({ material_id: term.material_id, target_days: null, critical_days: null, vendor_moq_qty_base: null, order_multiple_qty_base: null, configured_lead_time_days: null, booking_time_days: term.booking_days, route_lead_time_days: term.route_days }); // route only
     const need = buy.need_date ?? buy.estimated_plant_eta;
     const feasible = lead !== null && need !== null && new Date(Date.parse(`${need}T00:00:00Z`) - lead * 86_400_000).toISOString().slice(0, 10) >= asOf;
     let orderQty: number | null = null;
@@ -478,7 +478,7 @@ export async function computePlanning(p: PlanningParams) {
     const fx = currency ? costInputs.fxByCurrency.get(currency)?.inr ?? null : null;
       const priceInr = term.last_price !== null && fx !== null ? term.last_price * fx : null;
       const landed = costInputs.landedByVendorMaterial.get(`${term.vendor_id}|${id}`) ?? { adder: null, basis: "NONE" as const };
-      const lead = term.route_days === null ? null : (term.booking_days ?? 0) + term.route_days;
+      const lead = term.route_days === null ? null : term.route_days; // route only (owner 2026-10-29); booking = PO-by notice
       const cycle = economicCycleDays({ order_cost: costInputs.orderCostByVendorMaterial.get(`${term.vendor_id}|${id}`) ?? null, unit_price_inr: priceInr, interest_pct: costInputs.interestPct, daily_use: use });
       // Owner 2026-10-21: compare vendors on the FULL cost of a typical lot — price × FX + landed
       // + interest on money tied up under the payment term + Item Rate + MOQ excess — not price only.

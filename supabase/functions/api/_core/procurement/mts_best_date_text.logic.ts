@@ -12,6 +12,8 @@ export type BestDateInput = {
   /** IMPORT only: best plant date minus the route's port-to-plant days. */
   best_port_eta: string | null;
   talk_to_vendor: boolean;
+  /** Days the recorded plant date is already in the past while nothing is shipped (owner 2026-10-29). */
+  overdue_days?: number | null;
   /** Only when not_needed_in_plan; quantities already in the display unit. */
   cover?: { plan_days: number; left_with: number; left_without: number | null; avg_daily_use: number; uom: string } | null;
 };
@@ -29,10 +31,12 @@ export function bestDateText(i: BestDateInput): string {
   }
   const port = i.best_port_eta ? ` · at port by ${i.best_port_eta}` : "";
   const vendor = i.talk_to_vendor ? "Talk to the vendor: " : "";
+  // An overdue piece is not "postponed": its recorded date has already passed with no shipment recorded.
+  if (i.overdue_days && i.overdue_days > 0) return `${vendor}Must land at plant by ${i.best_eta}${port} (recorded date ${i.current_eta ?? "?"} is ${i.overdue_days} d overdue, no shipment recorded)`;
   if (i.shift_days === 0) return `${vendor}Date is right: must land at plant by ${i.best_eta}${port}`.trim();
   return i.shift_days > 0
-    ? `${vendor}Must land at plant by ${i.best_eta}${port} (can wait ${i.shift_days} d)`
-    : `${vendor}Must land at plant by ${i.best_eta}${port} (needed ${-i.shift_days} d earlier than now)`;
+    ? `${vendor}Must land at plant by ${i.best_eta}${port} (can wait ${i.shift_days} d after the recorded date ${i.current_eta ?? "?"})`
+    : `${vendor}Must land at plant by ${i.best_eta}${port} (needed ${-i.shift_days} d before the recorded date ${i.current_eta ?? "?"})`;
 }
 
 export type BestDateWhyInput = {
@@ -48,6 +52,8 @@ export type BestDateWhyInput = {
   vendor_message: string | null;
   /** Set when the date was pulled back because several orders moving together would leave a level below Critical. */
   joint_note?: string | null;
+  /** Days the recorded plant date is already in the past while nothing is shipped. */
+  overdue_days?: number | null;
 };
 
 /**
@@ -60,27 +66,36 @@ export function bestDateWhy(i: BestDateWhyInput): string {
   const level = b
     ? `without it ${b.level_label} (Min ${b.min_days} d${b.desired_days !== null ? ` / Max ${b.desired_days} d` : ""}) is below its Min from ${b.min_day}${b.topup ? ` (at its ${b.topup.day} top-up it asked the pool for ${fmt(b.topup.wanted)} ${i.uom}, the pool held ${fmt(b.topup.pool_before)} ${i.uom}, short by ${fmt(b.topup.shortfall)} ${i.uom})` : ""} and falls below its Critical${b.critical_days !== null ? ` (${b.critical_days} d)` : ""} on ${b.day}, down to ${Math.floor(b.cover_days)} d of cover`
     : "without it stock runs out or a group's demand is not served";
-  const lead = i.shift_days < 0
-    ? `Now ${i.current_eta ?? "?"} is too late: ${level}. It must land by ${i.best_eta} (${-i.shift_days} d earlier).`
-    : i.shift_days > 0
-      ? `Can wait until ${i.best_eta} (${i.shift_days} d later than now): ${level}.`
-      : `${i.current_eta ?? i.best_eta} is the latest safe date: ${level}.`;
+  const lead = i.overdue_days && i.overdue_days > 0
+    ? `The recorded plant date ${i.current_eta ?? "?"} has passed (${i.overdue_days} d overdue) and no shipment is recorded. It is needed at plant by ${i.best_eta}: ${level}.`
+    : i.shift_days < 0
+      ? `The recorded date ${i.current_eta ?? "?"} is too late: ${level}. It must land by ${i.best_eta} (${-i.shift_days} d earlier).`
+      : i.shift_days > 0
+        ? `Can wait until ${i.best_eta} (${i.shift_days} d after the recorded date ${i.current_eta ?? "?"}): ${level}.`
+        : `${i.current_eta ?? i.best_eta} is the latest safe date: ${level}.`;
   const withJoint = i.joint_note ? `${lead} ${i.joint_note}` : lead;
   return i.vendor_message ? `${withJoint} ${i.vendor_message}` : withJoint;
 }
 
 export type IfAbsentInput = { reference: string; other_eta: string; best_eta: string | null; shift_days: number; not_needed_in_plan: boolean; binding_day: string | null };
 
-/** "If the other order does not come": the latest date for THIS order then (owner 2026-10-29: never "both are not needed"). */
-export function ifAbsentText(list: readonly IfAbsentInput[], currentEta: string | null): string {
+/**
+ * "If the other order does not come": the DEADLINE for THIS order then (owner 2026-10-29: never "both are not needed").
+ * Judged alone with every other order on its recorded date - so it differs from the main date, which also protects against
+ * several orders being late together.
+ */
+export function ifAbsentText(list: readonly IfAbsentInput[], currentEta: string | null, overdueDays: number | null = null): string {
+  const rec = currentEta ?? "?";
+  const overdue = overdueDays && overdueDays > 0 ? ` Its recorded date has already passed (${overdueDays} d overdue).` : "";
+  const alone = " (judged alone, other orders on their recorded dates)";
   return list.map((x) => {
     const other = `${x.reference} (${x.other_eta})`;
-    if (x.not_needed_in_plan) return `If ${other} does not come: still not needed inside the plan.`;
+    if (x.not_needed_in_plan) return `If ${other} does not come: this order is still not needed inside the plan${alone}.`;
     if (!x.best_eta) return `If ${other} does not come: no date can be advised.`;
-    if (x.shift_days === 0) return `If ${other} does not come: the current date ${currentEta ?? x.best_eta} is the latest.`;
+    if (x.shift_days === 0) return `If ${other} does not come: this order must land at plant by its recorded date ${rec}${alone}.${overdue}`;
     return x.shift_days > 0
-      ? `If ${other} does not come: can wait until ${x.best_eta} (${x.shift_days} d later than now).`
-      : `If ${other} does not come: must land by ${x.best_eta} (${-x.shift_days} d earlier than now).`;
+      ? `If ${other} does not come: this order must land at plant by ${x.best_eta} at the latest, else a level falls below Critical (${x.shift_days} d after its recorded date ${rec})${alone}.${overdue}`
+      : `If ${other} does not come: this order must land at plant by ${x.best_eta} (${-x.shift_days} d before its recorded date ${rec})${alone}.${overdue}`;
   }).join("\n");
 }
 

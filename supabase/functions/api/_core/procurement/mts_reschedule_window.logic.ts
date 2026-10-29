@@ -72,8 +72,14 @@ export function rescheduleVerdict(args: {
   if (toCurrent > windowDays && toProposed > windowDays) {
     return { state: "RESCHEDULE", ...base, message: `Reschedule: ${direction} day(s). ETD ${currentEtd} is ${toCurrent} day(s) away and the new ETD ${proposedEtd} is ${toProposed} day(s) away (${kind}: more than ${windowDays} needed).` };
   }
+  if (toCurrent < 0) {
+    // The shipment date has already passed and nothing is recorded as dispatched: this is not a reschedule, the goods are late.
+    return { state: "TALK_TO_VENDOR", ...base, message: `ETD ${currentEtd} passed ${-toCurrent} day(s) ago and no shipment is recorded. Ask the vendor where the goods are and the real dispatch date, then update the CSN Tracker. The plan needs them at plant by ${args.proposedEta}.` };
+  }
   const why = toCurrent <= windowDays
     ? `the current ETD ${currentEtd} is only ${toCurrent} day(s) away`
-    : `the new ETD ${proposedEtd} would be only ${toProposed} day(s) away`;
+    : toProposed < 0
+      ? `the ETD needed for the new date (${proposedEtd}) is already in the past`
+      : `the new ETD ${proposedEtd} would be only ${toProposed} day(s) away`;
   return { state: "TALK_TO_VENDOR", ...base, message: `Cannot be scheduled: ${why} (${kind}: more than ${windowDays} needed). Talk to the vendor to see whether ${direction} day(s) is possible.` };
 }

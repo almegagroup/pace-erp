@@ -76,12 +76,19 @@ export function splitIntoLots(orderQty: number, lotQty: number | null | undefine
   return lots;
 }
 
-/** D6: total lead time = booking (blank = 0) + route; else the configured total; null = unknown. */
+/** Booking days (blank = 0): advance notice before dispatch; PO-by = ETD - booking (owner 2026-10-29). */
+export function bookingDaysOf(policy: OptimizerMaterialPlanningPolicy | undefined, optionBooking?: number | null): number {
+  const v = optionBooking ?? policy?.booking_time_days ?? null;
+  return validDays(v) ? Math.round(v) : 0;
+}
+
+/**
+ * Owner 2026-10-29 (replaces D6): lead time = the route days ONLY (vendor dispatch -> plant); null = unknown.
+ * Booking time is NOT part of it: it only says how many days before the dispatch the PO should be placed
+ * (PO-by = ETD - booking). A PO placed later is still possible - the vendor can dispatch at once, it is just "PO late".
+ */
 export function totalLeadTimeDays(policy: OptimizerMaterialPlanningPolicy): number | null {
-  if (validDays(policy.route_lead_time_days)) {
-    const booking = validDays(policy.booking_time_days) ? policy.booking_time_days : 0;
-    return Math.round(booking + policy.route_lead_time_days);
-  }
+  if (validDays(policy.route_lead_time_days)) return Math.round(policy.route_lead_time_days);
   if (validDays(policy.configured_lead_time_days) && Number.isInteger(policy.configured_lead_time_days)) return policy.configured_lead_time_days;
   return null;
 }
@@ -357,8 +364,8 @@ export function projectDailyCoverage(input: OptimizerProjectionInput): Optimizer
                 }));
                 st.pendingUntil = allDays.length; // one unknown-lead-time recommendation is enough
               } else if (orderQty !== null) {
-                const poBy = addDays(day, -lotLead);
-                const late = poBy < input.as_of;
+                const poBy = addDays(day, -lotLead - bookingDaysOf(policy, pick?.option.booking_time_days));
+                const late = addDays(day, -lotLead) < input.as_of;
                 const eta = late ? addDays(input.as_of, lotLead) : day;
                 const etaIndex = allDays.indexOf(eta);
                 const firstLot = orderQty;
