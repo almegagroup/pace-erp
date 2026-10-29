@@ -235,7 +235,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       // Right side: Prediction — every Quantity to Dispatch, engine and yours.
       const legs = (m: string, vendorId: string | null | undefined, date: string | null) => {
         const option = vendorId ? (vendorOptions.get(m) ?? []).find((o) => o.vendor_id === vendorId) : undefined;
-        const transit = option && option.lead_time_days !== null ? option.lead_time_days - (option.booking_time_days ?? 0) : null;
+        const transit = option && option.lead_time_days !== null ? option.lead_time_days : null;
         // Port-to-plant days: the median of this material's received CSNs, else the lead-time master's inland days for this vendor's IMPORT route.
         const masterInland = (rowById.get(m)?.lead_time?.configured_routes ?? [])
           .filter((r) => r.route === "IMPORT" && r.inland_days !== undefined && (!vendorId || r.vendor_id === vendorId))

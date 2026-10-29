@@ -383,7 +383,7 @@ export async function buildItemPlan(
     const gridByDay = new Map(grid.map((g) => [g.day, g]));
     const legsFor = (id: string, vendorId: string | null | undefined, plantDate: string | null) => {
       const option = vendorId ? (vendorOptions.get(id) ?? []).find((o) => o.vendor_id === vendorId) : undefined;
-      const transit = option && option.lead_time_days !== null ? option.lead_time_days - (option.booking_time_days ?? 0) : null;
+      const transit = option && option.lead_time_days !== null ? option.lead_time_days : null;
       const p2p = portToPlant.get(id) ?? null;
       return {
         port_eta: p2p !== null ? addDaysIso(plantDate, -p2p) : null,

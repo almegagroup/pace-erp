@@ -31,8 +31,8 @@ Deno.test("delivery lot caps one purchase recommendation instead of scheduling a
   equal(applySinglePurchaseConstraints(144000, policy({ vendor_moq_qty_base: 25000, order_multiple_qty_base: 25000, delivery_lot_qty_base: 24000 })), 25000, "MOQ/multiple win if master data makes the lot unorderable");
 });
 
-Deno.test("D6: total lead time = Booking Time (blank = 0) + route; else configured total", () => {
-  equal(totalLeadTimeDays(policy({ booking_time_days: 20, route_lead_time_days: 35 })), 55, "booking + route");
+Deno.test("Owner 2026-10-29: lead time = route days only (booking is PO-by notice, not lead); else configured total", () => {
+  equal(totalLeadTimeDays(policy({ booking_time_days: 20, route_lead_time_days: 35 })), 35, "booking is NOT added");
   equal(totalLeadTimeDays(policy({ booking_time_days: null, route_lead_time_days: 35 })), 35, "blank booking = 0");
   equal(totalLeadTimeDays(policy({ route_lead_time_days: null, configured_lead_time_days: 40 })), 40, "configured total");
   equal(totalLeadTimeDays(policy({ route_lead_time_days: null, configured_lead_time_days: null })), null, "unknown");
