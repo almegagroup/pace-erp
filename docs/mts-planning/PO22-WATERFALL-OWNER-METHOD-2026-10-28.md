@@ -682,3 +682,10 @@ Each not-yet-shipped order's advised date is judged alone with the other orders 
 - **One line per family above the table:** every not-yet-shipped order moved to its own advised date at once, run with the engine's own new buys. PROD MHEC: 10,000 KG more to buy,
   no level below Critical, level-days below Min 1 → 7. (Each date alone costs nothing; together they cost one extra lot.)
 Not verified: the neighbour rule is "previous and next in landing order", not a material-eligibility test; CMP005 / CMP011 / RDP on complete PROD data.
+
+## 36. Jointly safe dates (2026-10-29)
+
+Each order's date is first judged alone. The family's orders are then moved together to those dates (with the engine's own new buys); if that leaves extra level-days below
+Critical, the order that moves the most is pulled back to its current date and the run is repeated until no extra level-day falls below Critical. The advised dates are therefore
+jointly safe, and the Why column says "Alone it could wait until X; together with the other orders the safe date is Y". An order that is "not needed" alone but needed together keeps its current date.
+PROD, three companies (CMP003 / CMP005 / CMP011, MHEC and RDP families): before this, moving all orders at once added 60 level-days below Critical (CMP005 RDP) and 29 (CMP011 MHEC); after it no family adds any.
