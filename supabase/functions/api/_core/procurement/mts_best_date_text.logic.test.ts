@@ -27,3 +27,18 @@ Deno.test("why: the level, its Min / Max, the pool at its top-up, and the day it
   });
   assertEquals(t, "Can wait until 2026-12-20 (38 d later than now): without it MHEC (Min 30 d / Max 60 d) is below its Min from 2026-11-29 (at its 2026-11-29 top-up it asked the pool for 45,339 KG, the pool held 23,300 KG, short by 22,800 KG) and falls below its Critical (15 d) on 2026-12-21, down to 14 d of cover.");
 });
+
+import { ifAbsentText, togetherText } from "./mts_best_date_text.logic.ts";
+Deno.test("if-absent: one line per neighbouring order, never 'both are not needed'", () => {
+  const t = ifAbsentText([
+    { reference: "PO TS-0133", other_eta: "2026-12-24", best_eta: "2027-01-08", shift_days: 31, not_needed_in_plan: false, binding_day: "2027-01-09" },
+    { reference: "PO G-0124", other_eta: "2026-12-08", best_eta: null, shift_days: 0, not_needed_in_plan: true, binding_day: null },
+  ], "2026-12-08");
+  assertEquals(t, "If PO TS-0133 (2026-12-24) does not come: can wait until 2027-01-08 (31 d later than now).\nIf PO G-0124 (2026-12-08) does not come: still not needed inside the plan.");
+});
+Deno.test("together: extra buying and level-days when everything moves at once", () => {
+  assertEquals(
+    togetherText({ extra_buy_qty: 10000, below_min_days_now: 1, below_min_days_moved: 7, critical_days_now: 0, critical_days_moved: 0, uom: "KG" }),
+    "If ALL not-yet-shipped orders move together to their advised dates: 10,000 KG more has to be bought, no level goes below Critical, level-days below Min 1 → 7. Each date is judged alone; moving several at once costs this.",
+  );
+});

@@ -64,3 +64,28 @@ export function bestDateWhy(i: BestDateWhyInput): string {
       : `${i.current_eta ?? i.best_eta} is the latest safe date: ${level}.`;
   return i.vendor_message ? `${lead} ${i.vendor_message}` : lead;
 }
+
+export type IfAbsentInput = { reference: string; other_eta: string; best_eta: string | null; shift_days: number; not_needed_in_plan: boolean; binding_day: string | null };
+
+/** "If the other order does not come": the latest date for THIS order then (owner 2026-10-29: never "both are not needed"). */
+export function ifAbsentText(list: readonly IfAbsentInput[], currentEta: string | null): string {
+  return list.map((x) => {
+    const other = `${x.reference} (${x.other_eta})`;
+    if (x.not_needed_in_plan) return `If ${other} does not come: still not needed inside the plan.`;
+    if (!x.best_eta) return `If ${other} does not come: no date can be advised.`;
+    if (x.shift_days === 0) return `If ${other} does not come: the current date ${currentEta ?? x.best_eta} is the latest.`;
+    return x.shift_days > 0
+      ? `If ${other} does not come: can wait until ${x.best_eta} (${x.shift_days} d later than now).`
+      : `If ${other} does not come: must land by ${x.best_eta} (${-x.shift_days} d earlier than now).`;
+  }).join("\n");
+}
+
+export type TogetherInput = { extra_buy_qty: number; below_min_days_now: number; below_min_days_moved: number; critical_days_now: number; critical_days_moved: number; uom: string };
+
+/** One line for the family: every not-yet-shipped order moved to its own advised date at once. */
+export function togetherText(t: TogetherInput): string {
+  const buy = t.extra_buy_qty > 0.5 ? `${fmt(t.extra_buy_qty)} ${t.uom} more has to be bought` : t.extra_buy_qty < -0.5 ? `${fmt(-t.extra_buy_qty)} ${t.uom} less has to be bought` : "no extra buying";
+  const critical = t.critical_days_moved > t.critical_days_now ? `, ${t.critical_days_moved - t.critical_days_now} more level-days below Critical` : ", no level goes below Critical";
+  const min = t.below_min_days_moved !== t.below_min_days_now ? `, level-days below Min ${t.below_min_days_now} → ${t.below_min_days_moved}` : "";
+  return `If ALL not-yet-shipped orders move together to their advised dates: ${buy}${critical}${min}. Each date is judged alone; moving several at once costs this.`;
+}

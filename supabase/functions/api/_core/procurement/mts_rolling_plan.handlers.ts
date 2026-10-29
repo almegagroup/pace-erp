@@ -8,7 +8,7 @@
  * every block is derived from that run, so the file shows exactly what the screens show.
  * Read-only: never creates a PO, CSN, transfer or stock posting.
  */
-import { bestDateText, bestDateWhy } from "./mts_best_date_text.logic.ts";
+import { bestDateText, bestDateWhy, ifAbsentText, togetherText } from "./mts_best_date_text.logic.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
@@ -157,13 +157,14 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     const bestCells = (key: string | null | undefined, currentEta: string | null, unit: { base_per_unit: number } | null, uom: string) => {
       const o = key ? optimumByKey.get(key) : null;
       const a = key ? arrivalByKey.get(key) : null;
-      if (!o || !a) return { etd: "", port: "", plant: "", why: "" };
-      if (o.not_needed_in_plan) return { etd: "", port: "", plant: "", why: bestText(key, currentEta, unit, uom) };
+      if (!o || !a) return { etd: "", port: "", plant: "", why: "", absent: "" };
+      const absent = ifAbsentText(a.if_absent ?? [], currentEta);
+      if (o.not_needed_in_plan) return { etd: "", port: "", plant: "", why: bestText(key, currentEta, unit, uom), absent };
       const w = key ? windowByKey.get(key) : null;
       const q = (n: number) => inUnit(unit, n) ?? 0;
       const binding = a.binding ? { ...a.binding, topup: a.binding.topup ? { ...a.binding.topup, wanted: q(a.binding.topup.wanted), shortfall: q(a.binding.topup.shortfall), pool_before: q(a.binding.topup.pool_before) } : null } : null;
       return {
-        etd: a.best_etd ?? "", port: a.best_port_eta ?? "", plant: o.best.eta,
+        absent, etd: a.best_etd ?? "", port: a.best_port_eta ?? "", plant: o.best.eta,
         why: bestDateWhy({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, binding, uom, vendor_message: w?.state === "TALK_TO_VENDOR" ? w.message : null }),
       };
     };
@@ -272,8 +273,16 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
 
       const kind = rowById.get(id)?.kind ?? "RM";
       const selected = rowById.get(id);
+      // Owner 2026-10-29: one line for the family — what moving every not-yet-shipped order to its advised date at once costs.
+      const togetherRaw = events.map((e) => (e.reschedule_key ? arrivalByKey.get(e.reschedule_key)?.together : null)).find((t) => Boolean(t)) ?? null;
+      const togetherNote = togetherRaw
+        ? togetherText({
+          extra_buy_qty: inUnit(fu, togetherRaw.extra_buy_qty_base) ?? 0, below_min_days_now: togetherRaw.below_min_days_now, below_min_days_moved: togetherRaw.below_min_days_moved,
+          critical_days_now: togetherRaw.critical_days_now, critical_days_moved: togetherRaw.critical_days_moved, uom: fu?.uom_code ?? uomOf(id) ?? "KG",
+        })
+        : null;
       blocks.push({
-        kind,
+        kind, together_note: togetherNote,
         waterfall: buildWaterfallView({
           projection, asOf: calendar.asOf, memberSet, groupSet,
           groupLabel: (g) => groupLabel.get(g) ?? "—",

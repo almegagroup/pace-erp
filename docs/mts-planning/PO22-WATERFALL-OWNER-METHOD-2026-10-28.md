@@ -673,3 +673,12 @@ Two general rules (no material is named in the code):
 Result on the PROD snapshot (MHEC): Exclusive below Critical 36 days -> 0; engine buys 88,000 -> 74,000 KG; family closing stock on 31 Mar 74,542 -> 60,542 KG (less excess).
 Other families in the snapshot run (partial data, so absolute numbers mean nothing): level-days below Critical 516 -> 480, nothing got worse.
 Not verified: CMP005 / CMP011 and the RDP family on complete PROD data. Rule 1 has its own regression test (a short pool, Group B asking before the Exclusive level) that fails without it; the PROD-shaped hand model is fixed by rule 2 alone.
+
+## 35. Conditional dates and the "all together" line (2026-10-29)
+
+Each not-yet-shipped order's advised date is judged alone with the other orders as planned. Two additions so two interchangeable orders are never both read as "not needed":
+- **Column "If another order does not come"** (RM_PLANNING): for the neighbouring orders (the previous and the next not-yet-shipped one of the family in landing order) the
+  latest date of THIS order when that neighbour is absent. PROD, CMP003 MHEC: Gabrosa 8 Dec — "if TS (24 Dec) does not come: can wait until 8 Jan"; TS 24 Dec — "if Gabrosa (8 Dec) does not come: can wait until 8 Jan".
+- **One line per family above the table:** every not-yet-shipped order moved to its own advised date at once, run with the engine's own new buys. PROD MHEC: 10,000 KG more to buy,
+  no level below Critical, level-days below Min 1 → 7. (Each date alone costs nothing; together they cost one extra lot.)
+Not verified: the neighbour rule is "previous and next in landing order", not a material-eligibility test; CMP005 / CMP011 / RDP on complete PROD data.

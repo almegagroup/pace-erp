@@ -144,7 +144,7 @@ function writePlan(sheet, companies) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Planning blocks: one per family / item per company — today + arrival rows, then Prediction.
 // ─────────────────────────────────────────────────────────────────────────────
-const BLOCK_HEAD = ["Date", "Opening", "ETA to Plant", "Quantity to Dispatch", "Pro-rata", "Closing", "Excess (not needed yet)", "Max Days", "Min Stk", "Min Days", "PO / CSN", "Qty", "Supplier", "ST", "ETD (engine)", "ETA to Port (engine)", "ETA to Plant (engine)", "Why this date — Min / Max by group"];
+const BLOCK_HEAD = ["Date", "Opening", "ETA to Plant", "Quantity to Dispatch", "Pro-rata", "Closing", "Excess (not needed yet)", "Max Days", "Min Stk", "Min Days", "PO / CSN", "Qty", "Supplier", "ST", "ETD (engine)", "ETA to Port (engine)", "ETA to Plant (engine)", "Why this date — Min / Max by group", "If another order does not come"];
 const PRED_HEAD = ["", "Import ETD / Dispatch date", "LCL-ETD / Port ETA", "Date", "Quantity to Dispatch", "Family Max Days", "Family Min Days", "Material", "Supplier", "PO by", "UoM", "Cover that triggered the order (d)", "Item's own Min it was compared with (d)", "Triggered by"];
 
 /**
@@ -163,7 +163,7 @@ function coverCell(value, estimate, stock, planEnd) {
 function bestColumns(r) {
   const cells = r.best_cells ?? [];
   const join = (key) => cells.map((c) => c?.[key] ?? "").filter(Boolean).join("\n");
-  return [join("etd"), join("port"), join("plant"), join("why") || (r.best_dates ?? []).filter(Boolean).join("\n")];
+  return [join("etd"), join("port"), join("plant"), join("why") || (r.best_dates ?? []).filter(Boolean).join("\n"), join("absent")];
 }
 
 function writeBlocks(sheet, companies, kind) {
@@ -194,6 +194,10 @@ function writeBlocks(sheet, companies, kind) {
         line.getCell(1).font = { italic: true };
       }
     }
+    if (b.together_note) {
+      const tn = sheet.addRow([b.together_note]);
+      tn.getCell(1).font = { italic: true, bold: true };
+    }
     styleHeader(sheet.addRow(BLOCK_HEAD));
     for (const r of b.rows) {
       const row = sheet.addRow([
@@ -221,7 +225,7 @@ function writeBlocks(sheet, companies, kind) {
     }
     sheet.addRow([]);
   }
-  widths(sheet, [12, 12, 12, 14, 11, 12, 14, 9, 12, 9, 34, 11, 30, 16, 12, 12, 12, 70]);
+  widths(sheet, [12, 12, 12, 14, 11, 12, 14, 9, 12, 9, 34, 11, 30, 16, 12, 12, 12, 70, 50]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -30,7 +30,7 @@ import {
 import { familyClosure } from "./mts_item_plan.logic.ts";
 import { loadGroupCoveragePolicyVersions } from "./mts_group_policy.handlers.ts";
 import { bulkOnlyGroupIds, loadBulkMaterialIds } from "./mts_bulk_materials.ts";
-import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, optimizeFamilyArrival, planFamily } from "./mts_family_planner.logic.ts";
+import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, optimizeFamilyArrival, optimizeFamilyTogether, planFamily } from "./mts_family_planner.logic.ts";
 import { assemblePlanningInput, familyArrivalEta, priceUnitCode, familyArrivalRisk, isFamilyAllocatableArrival, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
@@ -709,6 +709,8 @@ export async function computePlanning(p: PlanningParams) {
     }
     return out;
   })();
+  const movableSourceKeys = new Set(req.output.rows.flatMap((r) => r.inbound_events.map((event, index) => (event.reschedule_key ? `A|${r.material_id}|${index}|${event.reference}` : null)).filter((k): k is string => k !== null)));
+  const togetherCache = new Map<string, ReturnType<typeof optimizeFamilyTogether>>();
   const arrivalScope = p.arrivalFamilyOf ? new Set(Object.keys(familyInputFor(p.arrivalFamilyOf).opening_qty_by_material)) : null;
   // Owner 2026-10-28 (D9): a proposed move is only advice if the vendor can still move the shipment (ETD window).
   const rescheduleContext = await loadRescheduleContext(p.companyId, req.output.rows
@@ -983,6 +985,10 @@ export async function computePlanning(p: PlanningParams) {
       if (pieces.length === 0) return [];
       // Owner 2026-10-22: best plant date per piece, judged on the whole family (not the item alone).
       const input = familyInputFor(row.material_id);
+      // Owner 2026-10-29: the family's not-yet-shipped pieces, in landing order, for the "if the other order does not come" dates.
+      const movableInFamily = input.confirmed_arrivals.filter((a) => movableSourceKeys.has(a.source_key))
+        .sort((a, b) => String(a.eta_to_plant).localeCompare(String(b.eta_to_plant)) || a.source_key.localeCompare(b.source_key));
+      const refOfKey = (key: string) => key.split("|").slice(3).join("|");
       const keyOf = new Map(row.inbound_events.map((event, index) => [event, `A|${row.material_id}|${index}|${event.reference}`]));
       const optimum = new Map(pieces.map((event) => [event.reschedule_key as string, optimizeFamilyArrival(input, keyOf.get(event)!)]));
       return pieces.map((event) => {
@@ -1005,7 +1011,32 @@ export async function computePlanning(p: PlanningParams) {
           : null;
         const bestPortEta = best && inlandDays !== null ? new Date(Date.parse(`${best.best.eta}T00:00:00Z`) - inlandDays * 86_400_000).toISOString().slice(0, 10) : null;
         const bestEtd = best && routeDaysEff !== null && routeDaysEff >= 0 ? new Date(Date.parse(`${best.best.eta}T00:00:00Z`) - routeDaysEff * 86_400_000).toISOString().slice(0, 10) : null;
+        const ownKey = keyOf.get(event)!;
+        const ifAbsent = best ? [...new Set([movableInFamily.filter((a) => a.source_key !== ownKey && String(a.eta_to_plant) < String(currentEta)).slice(-1)[0], movableInFamily.filter((a) => a.source_key !== ownKey && String(a.eta_to_plant) >= String(currentEta))[0]].filter(Boolean))].map((other) => {
+          const alt = optimizeFamilyArrival({ ...input, confirmed_arrivals: input.confirmed_arrivals.filter((a) => a.source_key !== other!.source_key) }, ownKey);
+          return {
+            reference: refOfKey(other!.source_key), other_eta: String(other!.eta_to_plant),
+            best_eta: alt && !alt.not_needed_in_plan ? alt.best.eta : null, shift_days: alt?.shift_days ?? 0, not_needed_in_plan: alt?.not_needed_in_plan ?? false,
+            binding_day: alt?.binding?.day ?? null,
+          };
+        }) : [];
+        // All the family's movable pieces at their advised dates, together (once per family).
+        let together: ReturnType<typeof optimizeFamilyTogether> | null = null;
+        if (movableInFamily.length > 1) {
+          const cacheKey = movableInFamily.map((a) => a.source_key).join("§");
+          together = togetherCache.get(cacheKey) ?? null;
+          if (!together) {
+            const moves = new Map<string, string>();
+            for (const a of movableInFamily) {
+              const alt = optimizeFamilyArrival(input, a.source_key);
+              if (alt) moves.set(a.source_key, alt.not_needed_in_plan ? (alt.plan_end ?? alt.best.eta) : alt.best.eta);
+            }
+            together = optimizeFamilyTogether(input, moves);
+            togetherCache.set(cacheKey, together);
+          }
+        }
         return {
+          if_absent: ifAbsent, together,
           best_port_eta: bestPortEta,
           best_etd: bestEtd,
           route: facts.route,

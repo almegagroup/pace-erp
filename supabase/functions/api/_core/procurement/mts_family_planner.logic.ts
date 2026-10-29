@@ -1918,3 +1918,21 @@ export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: strin
   }
   return { current: view(currentEta, cur), best: view(bestEta, best), shift_days: shift, reason, not_needed_in_plan: notNeededInPlan, plan_end: planEndDay, plan_cover: planCover, binding };
 }
+
+/**
+ * Owner 2026-10-29: what happens when SEVERAL not-yet-shipped pieces move at once. Each piece's advised date is judged alone; together they can need
+ * more new buying or leave more level-days below Min. Both runs include the engine's own new buys, so the extra buying is the real cost.
+ */
+export type FamilyTogether = { extra_buy_qty_base: number; below_min_days_now: number; below_min_days_moved: number; critical_days_now: number; critical_days_moved: number };
+export function optimizeFamilyTogether(input: FamilyPlannerInput, moves: ReadonlyMap<string, string>): FamilyTogether {
+  const run = (arrivals: FamilyPlannerInput["confirmed_arrivals"]) => planFamily({ ...input, plan_buys: true, trace: false, confirmed_arrivals: arrivals });
+  const now = run(input.confirmed_arrivals);
+  const moved = run(input.confirmed_arrivals.map((a) => (moves.has(a.source_key) ? { ...a, eta_to_plant: moves.get(a.source_key)! } : a)));
+  const bought = (r: FamilyResult) => r.rows.reduce((sum, x) => sum + x.planned_lot_qty_base, 0);
+  const critical = (r: FamilyResult) => r.level_risk.filter((x) => x.critical_days !== null && x.cover_days + 1e-9 < x.critical_days).length;
+  return {
+    extra_buy_qty_base: roundQty(bought(moved) - bought(now)),
+    below_min_days_now: now.level_risk.length, below_min_days_moved: moved.level_risk.length,
+    critical_days_now: critical(now), critical_days_moved: critical(moved),
+  };
+}
