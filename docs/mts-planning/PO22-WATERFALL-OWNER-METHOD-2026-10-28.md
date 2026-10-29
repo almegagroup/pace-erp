@@ -621,3 +621,20 @@ off reproduces the PDF (pool 46,838 vs 46,624 before the 28 Nov top-ups) but bre
 engine must be moved to "use comes from the level's own reserve" together with the lot-buy logic. Until then the "Needed at plant by"
 dates are not PDF-exact. If PO21 is extended at the January rate, the PDF arithmetic says: TS 12 Nov by 28 Nov; Gabrosa 8 Dec and TS
 24 Dec each by 29 Dec (both needed); TS 11 Jan and Combizell 29 Jan each by 29 Jan; a new lot by 28 Feb.
+
+## 32. Engine aligned to the PDF; Excel shows ETD / port / plant dates and the reason (2026-10-29)
+
+**Engine (`mts_family_planner.logic.ts`, group draw):** a level's daily use now comes from its OWN reserve; the movable second-rotation
+excess is used only as a fallback when the level's own reserve cannot cover the day (the level is waiting). Before, groups ate the
+pool's excess first, so Group B's top-up came on 15 Dec instead of the PDF's 28 Nov and the pool fell 46.8k → 25.9k with no top-up.
+Check on the PDF example: Exclusive tops up 27 Nov, Group A and B 28 Nov, pool before the top-ups 46,838 (PDF 46,624). The CMP005 RDP
+one-Dairen-lot test still passes (the buy logic needed no change). Regression test: "PDF alignment…".
+
+**Excel (RM_PLANNING block):** the single "Engine best date" text became four columns on each not-yet-shipped piece:
+`ETD (engine)` · `ETA to Port (engine)` (import only) · `ETA to Plant (engine)` · `Why this date — Min / Max by group`.
+Domestic pieces show ETD and plant only. ETD = plant date − the route's days (Booking Time excluded); port = plant − the route's inland days.
+Why = which level (Exclusive or group) falls to its Min (days) one day later and asks the pool to refill to Max (days), what it needs, what
+the pool holds, the shortfall; for a lot not needed inside the plan: the cover days, the excess left at the plan end, and "schedule it when PO21 is extended".
+The "Talk to the vendor" ETD-window message (§10) is appended when it applies.
+
+**Not verified:** a full run of the handler on PROD data (the planner was run on the PDF example and a CMP005 shape built from PROD numbers).

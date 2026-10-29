@@ -978,7 +978,11 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
         let need = pool.demand[i];
         if (need <= EPSILON) return;
         const cand = candIdx[p];
-        const free = (m: number) => Math.max(0, purposeReserve[p][m]) + Math.max(0, excessReserve[p][m]);
+        // Owner 2026-10-29 (PDF "How PO22 plans RM purchases"): a level uses its OWN reserve; the pool changes only on a receipt or a top-up.
+        // The movable second-rotation excess is a fallback only when the level's own reserve cannot cover today's use (the level is waiting).
+        const ownReserveToday = purposeReserve[p].reduce((sum, qty) => sum + Math.max(0, qty), 0);
+        const useExcess = ownReserveToday + EPSILON < need;
+        const free = (m: number) => Math.max(0, purposeReserve[p][m]) + (useExcess ? Math.max(0, excessReserve[p][m]) : 0);
         const order = input.group_orders?.get(pool.group_id);
         const ordered = (fn: (m: number) => number) => (order
           ? orderByGroupUsage(cand.map((m) => ids[m]), (id) => fn(mIndex.get(id)!), order).map((id) => mIndex.get(id)!)
@@ -1764,6 +1768,11 @@ export type FamilyArrivalOptimum = {
   not_needed_in_plan: boolean; plan_end: string | null;
   /** Only when not_needed_in_plan: why — what the family holds at the plan's last day (base units). */
   plan_cover: { plan_days: number; stock_at_plan_end_with: number; stock_at_plan_end_without: number | null; avg_daily_use: number } | null;
+  /**
+   * Owner 2026-10-29: the top-up that makes the advised date the limit. For a later / right date it is the first level the pool cannot
+   * fill one day after the advised date; for a prepone it is the one the current date leaves unfilled. Null when no date is advised.
+   */
+  binding: { day: string; level_kind: "OWN" | "GROUP"; level_id: string; wanted: number; shortfall: number; pool_before: number; target_days: number | null; desired_days: number | null } | null;
 } | null;
 
 /**
@@ -1839,5 +1848,15 @@ export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: strin
       avg_daily_use: roundQty(use / tail.length),
     };
   }
-  return { current: view(currentEta, current), best: view(bestEta, best), shift_days: shift, reason, not_needed_in_plan: notNeededInPlan, plan_end: planEndDay, plan_cover: planCover };
+  let binding: NonNullable<FamilyArrivalOptimum>["binding"] = null;
+  if (!notNeededInPlan) {
+    const unsafeEta = shift < 0 ? currentEta : addDays(bestEta, 1);
+    const unsafe = at(unsafeEta);
+    const hit = unsafe.level_events.find((e) => (e.kind === "TOP_UP" || e.kind === "WAITING") && e.shortfall > 1 && e.level_id !== null && (planEndDay === null || e.day <= planEndDay));
+    if (hit && hit.level_id !== null && hit.level_kind !== "POOL") {
+      const policy = unsafe.level_policies.find((l) => l.level_kind === hit.level_kind && l.level_id === hit.level_id);
+      binding = { day: hit.day, level_kind: hit.level_kind, level_id: hit.level_id, wanted: hit.wanted, shortfall: hit.shortfall, pool_before: hit.pool_before, target_days: policy?.target_days ?? null, desired_days: policy?.desired_days ?? null };
+    }
+  }
+  return { current: view(currentEta, current), best: view(bestEta, best), shift_days: shift, reason, not_needed_in_plan: notNeededInPlan, plan_end: planEndDay, plan_cover: planCover, binding };
 }

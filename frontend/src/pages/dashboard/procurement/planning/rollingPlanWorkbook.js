@@ -144,7 +144,7 @@ function writePlan(sheet, companies) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Planning blocks: one per family / item per company — today + arrival rows, then Prediction.
 // ─────────────────────────────────────────────────────────────────────────────
-const BLOCK_HEAD = ["Date", "Opening", "ETA to Plant", "Quantity to Dispatch", "Pro-rata", "Closing", "Excess (not needed yet)", "Max Days", "Min Stk", "Min Days", "PO / CSN", "Qty", "Supplier", "ST", "Needed at plant by (engine)"];
+const BLOCK_HEAD = ["Date", "Opening", "ETA to Plant", "Quantity to Dispatch", "Pro-rata", "Closing", "Excess (not needed yet)", "Max Days", "Min Stk", "Min Days", "PO / CSN", "Qty", "Supplier", "ST", "ETD (engine)", "ETA to Port (engine)", "ETA to Plant (engine)", "Why this date — Min / Max by group"];
 const PRED_HEAD = ["", "Import ETD / Dispatch date", "LCL-ETD / Port ETA", "Date", "Quantity to Dispatch", "Family Max Days", "Family Min Days", "Material", "Supplier", "PO by", "UoM", "Cover that triggered the order (d)", "Item's own Min it was compared with (d)", "Triggered by"];
 
 /**
@@ -157,6 +157,13 @@ function coverCell(value, estimate, stock, planEnd) {
   const e = days(estimate);
   if (e !== null) return `≈ ${e} d${planEnd ? ` (plan to ${String(planEnd).slice(0, 10)})` : ""}`;
   return num(stock) > 0 ? "outlasts plan" : d;
+}
+
+/** The engine's ETD / port / plant dates and the reason, one line per not-yet-shipped piece on the row (owner 2026-10-29). */
+function bestColumns(r) {
+  const cells = r.best_cells ?? [];
+  const join = (key) => cells.map((c) => c?.[key] ?? "").filter(Boolean).join("\n");
+  return [join("etd"), join("port"), join("plant"), join("why") || (r.best_dates ?? []).filter(Boolean).join("\n")];
 }
 
 function writeBlocks(sheet, companies, kind) {
@@ -192,7 +199,8 @@ function writeBlocks(sheet, companies, kind) {
       const row = sheet.addRow([
         day(r.day), num(r.opening), num(r.arrivals) || null, num(r.dispatch), num(r.use), num(r.closing), num(r.excess), coverCell(r.max_days, r.max_days_est, r.closing, b.plan_end), num(r.min_stock), coverCell(r.min_days, r.min_days_est, r.min_stock, b.plan_end),
         r.references.join("\n"), r.qtys.join("\n"), r.suppliers.join("\n"),
-        r.statuses.map((s) => STATUS_LABEL[s] ?? s).join("\n"), r.best_dates.filter(Boolean).join("\n"),
+        r.statuses.map((s) => STATUS_LABEL[s] ?? s).join("\n"),
+        ...bestColumns(r),
       ]);
       row.eachCell((cell, i) => { cell.border = BORDER; if (i >= 2 && i <= 10) cell.numFmt = NUM; cell.alignment = { vertical: "top", wrapText: i >= 11 }; });
       if (r.closing < 0) row.getCell(6).font = { bold: true, color: { argb: RED } };
@@ -213,7 +221,7 @@ function writeBlocks(sheet, companies, kind) {
     }
     sheet.addRow([]);
   }
-  widths(sheet, [12, 12, 12, 14, 11, 12, 14, 9, 12, 9, 34, 11, 30, 16, 22]);
+  widths(sheet, [12, 12, 12, 14, 11, 12, 14, 9, 12, 9, 34, 11, 30, 16, 12, 12, 12, 70]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

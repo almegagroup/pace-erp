@@ -1000,8 +1000,12 @@ export async function computePlanning(p: PlanningParams) {
             .reduce<number | null>((max, r) => (max === null ? (r.inland_days ?? null) : Math.max(max, r.inland_days ?? 0)), null)
           : null;
         const bestPortEta = best && inlandDays !== null ? new Date(Date.parse(`${best.best.eta}T00:00:00Z`) - inlandDays * 86_400_000).toISOString().slice(0, 10) : null;
+        const bestEtd = best && routeDays !== null ? new Date(Date.parse(`${best.best.eta}T00:00:00Z`) - routeDays * 86_400_000).toISOString().slice(0, 10) : null;
         return {
           best_port_eta: bestPortEta,
+          best_etd: bestEtd,
+          route: facts.route,
+          binding: best?.binding ? { ...best.binding, level_label: best.binding.level_kind === "OWN" ? `Exclusive — ${nameOf(best.binding.level_id)}` : groupLabel.get(best.binding.level_id) ?? "Group" } : null,
           material_id: row.material_id, material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id),
           reference: event.reference, qty: event.qty, kind: event.kind, reschedule_key: event.reschedule_key as string,
           eta_plant: currentEta,

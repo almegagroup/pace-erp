@@ -9,7 +9,7 @@ const company = (id, name, extra = {}) => ({
   blocks: [{
     kind: "RM", title: "RDP", is_family: true, members: ["VAE A", "VAE B"], uom: "KG", target_days: 35, critical_days: 20, first_shortage_day: null,
     rows: [{ day: "2026-10-21", opening: 1000, arrivals: 0, dispatch: null, use: 100, closing: 900, max_days: 9, min_stock: 900, min_days: 9, references: [], qtys: [], suppliers: [], statuses: [], best_dates: [] },
-      { day: "2026-11-06", opening: 500, arrivals: 24750, dispatch: null, use: 100, closing: 25150, max_days: 40, min_stock: 400, min_days: 4, references: ["PO ACP/PO80/2026-27/1"], qtys: [24750], suppliers: ["DAIREN"], statuses: ["IN_TRANSIT"], best_dates: ["2026-10-30 (prepone 7 d)"] }],
+      { day: "2026-11-06", opening: 500, arrivals: 24750, dispatch: null, use: 100, closing: 25150, max_days: 40, min_stock: 400, min_days: 4, references: ["PO ACP/PO80/2026-27/1"], qtys: [24750], suppliers: ["DAIREN"], statuses: ["IN_TRANSIT"], best_dates: ["2026-10-30 (prepone 7 d)"], best_cells: [{ etd: "2026-10-01", port: "2026-10-26", plant: "2026-10-30", why: "Now 2026-11-06 is too late." }] }],
     prediction: [{ source: "ENGINE", import_etd: "2026-10-26", port_eta: "2026-11-05", date: "2026-11-10", qty: 25000, max_days: 35, min_days: 22, material: "VAE A", supplier: "CELANESE", po_by: "2026-10-01" }],
   }],
   requirement: [{ material: "VAE A", type: "RM", uom: "KG", target_cov_days: 35, critical_cov_days: 20, current_stk_days: 9, next_month_cov: 30, current_req: 1, current_prorata: 1, req_nm: 1, prorata_nm: 1, current_stock: 900, intransit_cm: 0, intransit_nm: 0, below_target: true, below_critical: true, first_shortage_day: "2026-10-30", first_below_critical_day: "2026-10-21" }],
@@ -179,4 +179,17 @@ test("STORE_INSTRUCTIONS: every company gets its rows, also when only another co
   assert.equal(items.getRow(3).getCell(8).value, 120, "the fallback company's Issue now");
   assert.equal(items.getRow(3).getCell(10).value, 300, "and its Keep aside");
   await wb.xlsx.writeBuffer();
+});
+
+test("RM_PLANNING: the engine's ETD / port / plant dates and the reason are separate columns", () => {
+  const wb = buildRollingPlanWorkbook({ companies: [company("a", "Almeha Coatings")], asOf: "2026-10-21" });
+  const rm = wb.getWorksheet("RM_PLANNING");
+  let head = null; let arrival = null;
+  rm.eachRow((row) => { const v = row.values; if (v.includes("ETD (engine)")) head = v; if (v.includes("PO ACP/PO80/2026-27/1")) arrival = v; });
+  const at = (label) => head.indexOf(label);
+  assert.ok(at("ETD (engine)") > 0 && at("ETA to Port (engine)") > 0 && at("ETA to Plant (engine)") > 0 && at("Why this date — Min / Max by group") > 0);
+  assert.equal(arrival[at("ETD (engine)")], "2026-10-01");
+  assert.equal(arrival[at("ETA to Port (engine)")], "2026-10-26");
+  assert.equal(arrival[at("ETA to Plant (engine)")], "2026-10-30");
+  assert.equal(arrival[at("Why this date — Min / Max by group")], "Now 2026-11-06 is too late.");
 });

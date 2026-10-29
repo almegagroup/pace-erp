@@ -962,7 +962,7 @@ Deno.test("owner 2026-10-28: a group's Max is never below its own Min", () => {
 });
 
 // Owner 2026-10-29: the PDF "How PO22 plans RM purchases" (CMP003 MHEC family). Best date = the LATEST plant date at which every level still fills to Max.
-Deno.test("best date follows the waterfall: only the 8 Dec Gabrosa lot is time-critical, later lots are not needed inside the plan", () => {
+Deno.test("PDF alignment: daily use comes from the level's own reserve, the pool moves only on receipts and top-ups; only the 12 Nov TS lot is time-critical", () => {
   const AS_OF = "2026-10-28";
   const add = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
   const days: string[] = []; for (let d = AS_OF; d <= "2027-01-31"; d = add(d, 1)) days.push(d);
@@ -975,12 +975,18 @@ Deno.test("best date follows the waterfall: only the 8 Dec Gabrosa lot is time-c
   ]);
   const arr = ([["TS1", T, "2026-11-12", 25000], ["G2", G, "2026-12-08", 24000], ["TS2", T, "2026-12-24", 25000], ["TS3", T, "2027-01-11", 25000], ["C2", C, "2027-01-29", 24000]] as const)
     .map(([k, m, d, q]) => ({ source_key: k, material_id: m, eta_to_plant: d, qty_base: q }));
-  const input = { as_of: AS_OF, horizon_end: "2027-04-30", opening_qty_by_material: { [G]: 17259, [C]: 73894, [T]: 26028 }, own_demand: own, group_demand: groups, confirmed_arrivals: arr, policies: [G, C, T].map(pol), plan_buys: false } as unknown as FamilyPlannerInput;
-  const g2 = optimizeFamilyArrival(input, "G2")!;
-  assert(!g2.not_needed_in_plan && g2.best.eta > "2026-12-08" && g2.best.eta < "2026-12-20", `G2 best ${g2.best.eta}`);
-  for (const k of ["TS2", "TS3", "C2"]) {
+  const input = { as_of: AS_OF, horizon_end: "2027-04-30", opening_qty_by_material: { [G]: 17259, [C]: 78000, [T]: 26028 }, own_demand: own, group_demand: groups, confirmed_arrivals: arr, policies: [G, C, T].map(pol), plan_buys: false } as unknown as FamilyPlannerInput;
+  // Top-ups fall on the days the PDF names (27-28 Nov) and the pool is not eaten by daily use before them (PDF: 46,624 before; opening pool + the 12 Nov lot here).
+  const r = planFamily(input);
+  const topUps = r.level_events.filter((e) => e.kind === "TOP_UP" && e.qty > 1).map((e) => e.day);
+  assert(topUps.includes("2026-11-27") && topUps.includes("2026-11-28"), `top-up days ${topUps.slice(0, 6).join(",")}`);
+  const firstB = r.level_events.find((e) => e.kind === "TOP_UP" && e.level_id === "B")!;
+  assert(firstB.day === "2026-11-28" && firstB.pool_before > 40_000, `Group B top-up on ${firstB.day}, pool before ${firstB.pool_before}`);
+  const ts1 = optimizeFamilyArrival(input, "TS1")!;
+  assert(!ts1.not_needed_in_plan && ts1.best.eta >= "2026-11-27" && ts1.best.eta <= "2026-11-30", `TS1 best ${ts1.best.eta}`);
+  for (const k of ["G2", "TS2", "TS3"]) {
     const o = optimizeFamilyArrival(input, k)!;
-    assert(o.not_needed_in_plan, `${k} should not be needed inside the plan`);
+    assert(o.not_needed_in_plan && o.plan_cover !== null && o.plan_cover.stock_at_plan_end_with > 0, `${k} should not be needed inside the plan`);
   }
   const c2 = optimizeFamilyArrival(input, "C2")!;
   assert(c2.shift_days >= 0, "a lot with no risk is never preponed");

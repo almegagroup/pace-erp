@@ -8,7 +8,7 @@
  * every block is derived from that run, so the file shows exactly what the screens show.
  * Read-only: never creates a PO, CSN, transfer or stock posting.
  */
-import { bestDateText } from "./mts_best_date_text.logic.ts";
+import { bestDateText, bestDateWhy } from "./mts_best_date_text.logic.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
@@ -152,6 +152,21 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       return bestDateText({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, not_needed_in_plan: o.not_needed_in_plan, plan_end: o.plan_end, best_port_eta: portByKey.get(key as string) ?? null, talk_to_vendor: w?.state === "TALK_TO_VENDOR",
         cover: o.plan_cover ? { plan_days: o.plan_cover.plan_days, left_with: inUnit(unit, o.plan_cover.stock_at_plan_end_with) ?? 0, left_without: o.plan_cover.stock_at_plan_end_without === null ? null : inUnit(unit, o.plan_cover.stock_at_plan_end_without), avg_daily_use: inUnit(unit, o.plan_cover.avg_daily_use) ?? 0, uom } : null });
     };
+    const arrivalByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a]));
+    /** Owner 2026-10-29: the engine's dates for a not-yet-shipped piece as separate cells, with the reason beside them. */
+    const bestCells = (key: string | null | undefined, currentEta: string | null, unit: { base_per_unit: number } | null, uom: string) => {
+      const o = key ? optimumByKey.get(key) : null;
+      const a = key ? arrivalByKey.get(key) : null;
+      if (!o || !a) return { etd: "", port: "", plant: "", why: "" };
+      if (o.not_needed_in_plan) return { etd: "", port: "", plant: "", why: bestText(key, currentEta, unit, uom) };
+      const w = key ? windowByKey.get(key) : null;
+      const q = (n: number) => inUnit(unit, n) ?? 0;
+      const binding = a.binding ? { ...a.binding, wanted: q(a.binding.wanted), shortfall: q(a.binding.shortfall), pool_before: q(a.binding.pool_before) } : null;
+      return {
+        etd: a.best_etd ?? "", port: a.best_port_eta ?? "", plant: o.best.eta,
+        why: bestDateWhy({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, binding, uom, vendor_message: w?.state === "TALK_TO_VENDOR" ? w.message : null }),
+      };
+    };
     const advisory = plan.buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE");
 
     // ── Family / item planning blocks: every item with use, arrival or lot in the horizon ──
@@ -197,6 +212,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           suppliers: today.map((e) => supplierOf(e.reference, e.csn_id) ?? "—"),
           statuses: today.map((e) => arrivalStatus(e.kind, e.date_source)),
           best_dates: today.map((e) => bestText(e.reschedule_key, e.original_date !== undefined ? e.original_date : e.date, fu, fu?.uom_code ?? uomOf(e.member) ?? "KG")),
+          best_cells: today.map((e) => bestCells(e.reschedule_key, e.original_date !== undefined ? e.original_date : e.date, fu, fu?.uom_code ?? uomOf(e.member) ?? "KG")),
         };
       });
 
@@ -361,9 +377,9 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         planning_eta: e.original_date !== undefined ? e.date : null,
         overdue: Boolean(e.date && e.date < calendar.asOf), no_eta: !e.date,
         movable: Boolean(e.reschedule_key),
-        engine_best_date: fed ? null : o && o.shift_days !== 0 && w?.state !== "TALK_TO_VENDOR" ? o.best.eta : null,
+        engine_best_date: fed ? null : o && !o.not_needed_in_plan && o.shift_days !== 0 && w?.state !== "TALK_TO_VENDOR" ? o.best.eta : null,
         engine_reason: fed ? "Lands in the transfer-source store, so it is not MTS supply. The waterfall asks the Store for a transfer when it needs stock."
-          : o && o.shift_days !== 0 && w?.message ? `${w.message} ${o.reason}` : o?.reason ?? null,
+          : o?.not_needed_in_plan ? bestText(e.reschedule_key, e.original_date !== undefined ? e.original_date : e.date, unitOf(r.material_id), uomOf(r.material_id) ?? "KG") : o && o.shift_days !== 0 && w?.message ? `${w.message} ${o.reason}` : o?.reason ?? null,
         vendor_window: fed ? null : w?.state === "TALK_TO_VENDOR" ? "Talk to the vendor" : w?.state === "RESCHEDULE" ? "Can be rescheduled" : null,
       };
     })).sort((a, b) => String(a.planning_eta ?? a.source_eta ?? "9999").localeCompare(String(b.planning_eta ?? b.source_eta ?? "9999")));
