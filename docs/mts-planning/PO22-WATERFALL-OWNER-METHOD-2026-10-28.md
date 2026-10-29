@@ -580,3 +580,30 @@ The Store tab's default view and the STORE_INSTRUCTIONS Excel sheet: Use from ·
 - PM-00060 (20KG TILE ADHESIVE TOT WHITE WOVEN SACK, CMP003): stock 15,596, a confirmed PO of 10,000 landing 13 Nov. The planner saw the cover dip to Target 25 on 11 Nov (two days BEFORE the PO lands), found that no new lot could land before 24 Nov (lead 27 d) and still placed a "late" lot — quantity 0.000001, "PO-by 2026-10-15 has passed" — which the Action tab showed as "Order today". Reproduced exactly in a test. Rule (same as the group rule in section 27): a late own-use need gets a lot only if the item is still short when the earliest lot could land, counting what already arrives by then. The Action tab also ignores a "buy" of a rounding speck.
 - A group's Max is never below its own Min (RDP_TOT WHITE showed Min 30 / Max 27): Max = at least the group's Target.
 - Hand-table in section 7: not rewritten. Its receipts for 17 Nov (Gabrosa) and 16 Jan (Combizell) are Sub-CSNs for CMP005 / CMP011, not CMP003 stock, and flat daily rates were used; the engine's own figures (section 4 of the management doc) replace it.
+
+## 30. "Engine best date" now follows the waterfall (2026-10-29)
+
+**Problem (owner):** the Excel column said "postpone 4 d / 5 d / 20 d / prepone 73 d". The stock side of the plan follows the PDF
+(levels, Min / Max, pool), but the date advice used an older, separate score (member cover days against Target / Critical).
+In the PDF's own example that score read ~94 risk days on every date, so tie-breaks (latest date wins) made the numbers arbitrary.
+
+**Now:** `optimizeFamilyArrival` judges a date with the same waterfall run. Risk of a date = (1) stock-out or group demand no member
+can serve, (2) a level asks the pool for its top-up and the pool cannot fill it to Max (the PDF's "a receipt or new order is needed"
+signal). The advised date is the **latest plant date with the least risk** ("must land by"); a prepone only when strictly safer.
+Dates after the PO21 plan's last demand day carry no risk. If every date up to the plan end is equally safe, the lot is
+**"not needed inside the PO21 plan"** and no date is advised.
+
+**Check on the PDF example (CMP003 MHEC, real stock and the five ordered lots):** 12 Nov TS lot can slide to 27 Nov, 8 Dec Gabrosa lot
+must land by 15 Dec, the 24 Dec / 11 Jan TS lots and the 29 Jan Combizell lot are not needed inside the plan (the old advice
+"prepone 73 d" disappears). CMP005 (built from the PROD numbers in the Excel): 2 Nov lot by 25 Nov, 12 Dec / 28 Dec lots not needed
+inside the plan. Regression test: "best date follows the waterfall…" in `mts_family_planner.logic.test.ts`.
+
+**Excel text** (`mts_best_date_text.logic.ts`): "Must land at plant by D · at port by P (can wait N d)" / "(needed N d earlier than now)" /
+"Not needed before the PO21 plan ends (D)". Port date = plant date − the route's port-to-plant days (import only).
+"Talk to the vendor:" prefix stays when the ETD window (§10) says the vendor cannot move it.
+
+**"beyond plan":** shown only when no day count can be estimated; otherwise "≈ N d (plan to D)". It means the stock outlasts the PO21
+plan; the plan has no demand after its last day (no demand in its last 7 days), so later use is never invented. Excel notes now say so.
+
+**Not verified:** the full handler on PROD (only the planner on PROD numbers); each lot is tested alone (moving several lots later at
+once is not tested together); the Row 13 question (Gabrosa CSN 3000000329, ETD 1 Nov, shown as plain "postpone" not "talk to the vendor").

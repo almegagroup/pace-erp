@@ -8,6 +8,7 @@
  * every block is derived from that run, so the file shows exactly what the screens show.
  * Read-only: never creates a PO, CSN, transfer or stock posting.
  */
+import { bestDateText } from "./mts_best_date_text.logic.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
@@ -143,6 +144,13 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     const bulkRm = await loadBulkMaterialIds(companyId);
     const optimumByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.optimum]));
     const windowByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.window]));
+    const portByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a.best_port_eta]));
+    const bestText = (key: string | null | undefined, currentEta: string | null): string => {
+      const o = key ? optimumByKey.get(key) : null;
+      if (!o || (o.shift_days === 0 && !o.not_needed_in_plan)) return o ? bestDateText({ current_eta: currentEta, best_eta: o.best.eta, shift_days: 0, not_needed_in_plan: false, plan_end: o.plan_end, best_port_eta: portByKey.get(key as string) ?? null, talk_to_vendor: false }) : "";
+      const w = key ? windowByKey.get(key) : null;
+      return bestDateText({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, not_needed_in_plan: o.not_needed_in_plan, plan_end: o.plan_end, best_port_eta: portByKey.get(key as string) ?? null, talk_to_vendor: w?.state === "TALK_TO_VENDOR" });
+    };
     const advisory = plan.buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE");
 
     // ── Family / item planning blocks: every item with use, arrival or lot in the horizon ──
@@ -187,12 +195,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           qtys: today.map((e) => `${dq(e.member, e.qty)} ${uomOf(e.member) ?? ""}`.trim()),
           suppliers: today.map((e) => supplierOf(e.reference, e.csn_id) ?? "—"),
           statuses: today.map((e) => arrivalStatus(e.kind, e.date_source)),
-          best_dates: today.map((e) => {
-            const o = e.reschedule_key ? optimumByKey.get(e.reschedule_key) : null;
-            const w = e.reschedule_key ? windowByKey.get(e.reschedule_key) : null;
-            if (o && o.shift_days !== 0 && w?.state === "TALK_TO_VENDOR") return `Talk to the vendor (${o.best.eta}, ${o.shift_days < 0 ? "prepone" : "postpone"} ${Math.abs(o.shift_days)} d)`;
-            return o && o.shift_days !== 0 ? `${o.best.eta} (${o.shift_days < 0 ? "prepone" : "postpone"} ${Math.abs(o.shift_days)} d)` : "";
-          }),
+          best_dates: today.map((e) => bestText(e.reschedule_key, e.original_date !== undefined ? e.original_date : e.date)),
         };
       });
 

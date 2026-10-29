@@ -960,3 +960,28 @@ Deno.test("owner 2026-10-28: a group's Max is never below its own Min", () => {
   const pol = result.level_policies.find((l) => l.level_id === "G");
   assert(pol && pol.desired_days !== null && pol.desired_days >= 30, `group Max (${pol?.desired_days}) must not be below its Min 30`);
 });
+
+// Owner 2026-10-29: the PDF "How PO22 plans RM purchases" (CMP003 MHEC family). Best date = the LATEST plant date at which every level still fills to Max.
+Deno.test("best date follows the waterfall: only the 8 Dec Gabrosa lot is time-critical, later lots are not needed inside the plan", () => {
+  const AS_OF = "2026-10-28";
+  const add = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+  const days: string[] = []; for (let d = AS_OF; d <= "2027-01-31"; d = add(d, 1)) days.push(d);
+  const G = "GAB", C = "COMB", T = "TS";
+  const pol = (id: string) => ({ material_id: id, target_days: 30, critical_days: 20, vendor_moq_qty_base: null, order_multiple_qty_base: null, configured_lead_time_days: null, cycle_days: 30, vendor_options: [] }) as unknown as OptimizerMaterialPlanningPolicy;
+  const own = days.map((d) => ({ material_id: G, required_by: d, qty_base: 6670 / 60 }));
+  const groups = days.flatMap((d) => [
+    { group_id: "A", candidates: [G, C], required_by: d, qty_base: 2720 / 60 },
+    { group_id: "B", candidates: [G, C, T], required_by: d, qty_base: 84390 / 60 },
+  ]);
+  const arr = ([["TS1", T, "2026-11-12", 25000], ["G2", G, "2026-12-08", 24000], ["TS2", T, "2026-12-24", 25000], ["TS3", T, "2027-01-11", 25000], ["C2", C, "2027-01-29", 24000]] as const)
+    .map(([k, m, d, q]) => ({ source_key: k, material_id: m, eta_to_plant: d, qty_base: q }));
+  const input = { as_of: AS_OF, horizon_end: "2027-04-30", opening_qty_by_material: { [G]: 17259, [C]: 73894, [T]: 26028 }, own_demand: own, group_demand: groups, confirmed_arrivals: arr, policies: [G, C, T].map(pol), plan_buys: false } as unknown as FamilyPlannerInput;
+  const g2 = optimizeFamilyArrival(input, "G2")!;
+  assert(!g2.not_needed_in_plan && g2.best.eta > "2026-12-08" && g2.best.eta < "2026-12-20", `G2 best ${g2.best.eta}`);
+  for (const k of ["TS2", "TS3", "C2"]) {
+    const o = optimizeFamilyArrival(input, k)!;
+    assert(o.not_needed_in_plan, `${k} should not be needed inside the plan`);
+  }
+  const c2 = optimizeFamilyArrival(input, "C2")!;
+  assert(c2.shift_days >= 0, "a lot with no risk is never preponed");
+});

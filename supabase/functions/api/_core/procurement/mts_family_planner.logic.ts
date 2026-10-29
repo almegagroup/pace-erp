@@ -1718,17 +1718,20 @@ function lastFamilyDemandDay(result: FamilyResult): string | null {
 }
 
 function familyScore(result: FamilyResult): [number, number, number] {
-  let short = 0; let critical = 0; let target = 0;
-  // Owner 2026-10-28: days after the PO21 plan's last demand day carry no risk (no plan, not no use).
+  // Owner 2026-10-29: a lot is judged by the owner's waterfall, not by member cover days. Risk = (1) stock-out or a group demand
+  // no member can serve, (2) a level that asks the pool for its top-up and the pool cannot fill it to Max (the PDF's "receipt or
+  // new order is needed" signal). Days after the PO21 plan's last demand day carry no risk (no plan, not no use).
+  let short = 0;
   const planEnd = lastFamilyDemandDay(result);
   for (const r of result.rows) {
     if (planEnd !== null && r.day > planEnd) continue;
     if (r.closing_qty_base < -EPSILON) short += 1;
-    if (r.critical_days !== null && r.max_cover_days !== null && r.max_cover_days < r.critical_days) critical += 1;
-    if (r.target_days !== null && r.max_cover_days !== null && r.max_cover_days < r.target_days) target += 1;
   }
   short += new Set(result.group_unmet.filter((u) => planEnd === null || u.day <= planEnd).map((u) => `${u.group_id}|${u.day}`)).size;
-  return [short, critical, target];
+  const notFilled = new Set(
+    result.level_events.filter((e) => e.shortfall > 1 && e.kind !== "OPENING_RESERVE" && (planEnd === null || e.day <= planEnd)).map((e) => `${e.level_kind}|${e.level_id}|${e.day}`),
+  ).size;
+  return [short, notFilled, 0];
 }
 
 /** Family Min / Max days on a day: whole family stock before / after that day's arrivals, against the family use ahead. */
@@ -1755,7 +1758,11 @@ export type FamilyArrivalScore = {
   days_below_target: number;
   first_below_target_day: string | null;
 };
-export type FamilyArrivalOptimum = { current: FamilyArrivalScore; best: FamilyArrivalScore; shift_days: number; reason: string } | null;
+export type FamilyArrivalOptimum = {
+  current: FamilyArrivalScore; best: FamilyArrivalScore; shift_days: number; reason: string;
+  /** True when every date up to the PO21 plan's last demand day is equally safe: the piece is not needed inside the plan. */
+  not_needed_in_plan: boolean; plan_end: string | null;
+} | null;
 
 /**
  * Owner 2026-10-22: when is a not-yet-shipped piece really needed? Dates across the horizon are
@@ -1803,12 +1810,15 @@ export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: strin
   let shift = Math.round((Date.parse(`${bestEta}T00:00:00Z`) - Date.parse(`${currentEta}T00:00:00Z`)) / 86_400_000);
   if (Math.abs(shift) < 3) { shift = 0; bestEta = currentEta; best = current; }
   const view = (eta: string, score: [number, number, number]): FamilyArrivalScore => ({
-    eta, ...familyDays(at(eta), eta), shortage_days: score[0], days_below_critical: score[1], days_below_target: score[2], first_below_target_day: null,
+    eta, ...familyDays(at(eta), eta), shortage_days: score[0], days_below_critical: 0, days_below_target: score[1], first_below_target_day: null,
   });
-  const reason = shift === 0
-    ? "Current date is right for the whole family."
-    : cmp(best, current) < 0
-      ? `Fewer family risk days (stock-out ${best[0]} vs ${current[0]}, below Critical ${best[1]} vs ${current[1]}, below Target ${best[2]} vs ${current[2]}).`
-      : `Same family risk; the ${shift > 0 ? "later" : "earlier"} date holds less money.`;
-  return { current: view(currentEta, current), best: view(bestEta, best), shift_days: shift, reason };
+  const notNeededInPlan = planEndDay !== null && best[0] === 0 && cmp(familyScore(at(planEndDay)), best) === 0 && cmp(current, best) === 0;
+  const reason = notNeededInPlan
+    ? `Not needed inside the PO21 plan (it ends ${planEndDay}): every level can still be filled whenever this lot lands before then.`
+    : shift === 0
+      ? "Current date is right: every level can be filled and no later date is safe."
+      : cmp(best, current) < 0
+        ? `Current date leaves ${current[0]} stock-out day(s) and ${current[1]} level top-up(s) the pool cannot fill to Max; this date leaves ${best[0]} and ${best[1]}.`
+        : `Every level is still filled to Max if the lot lands on ${bestEta}; later than that a level cannot be topped up.`;
+  return { current: view(currentEta, current), best: view(bestEta, best), shift_days: shift, reason, not_needed_in_plan: notNeededInPlan, plan_end: planEndDay };
 }

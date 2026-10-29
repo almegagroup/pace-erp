@@ -993,13 +993,21 @@ export async function computePlanning(p: PlanningParams) {
           .filter((r) => r.route === facts.route && (!facts.vendor_id || r.vendor_id === facts.vendor_id) && r.route_days !== undefined)
           .reduce<number | null>((max, r) => (max === null ? (r.route_days ?? null) : Math.max(max, r.route_days ?? 0)), null);
         const currentEta = event.original_date !== undefined ? event.original_date : event.date;
+        // Import only: port-to-plant days of the piece's own route; the best plant date minus these is the date it must reach the port.
+        const inlandDays = facts.route === "IMPORT"
+          ? (row.lead_time?.configured_routes ?? [])
+            .filter((r) => r.route === "IMPORT" && (!facts.vendor_id || r.vendor_id === facts.vendor_id) && r.inland_days !== undefined)
+            .reduce<number | null>((max, r) => (max === null ? (r.inland_days ?? null) : Math.max(max, r.inland_days ?? 0)), null)
+          : null;
+        const bestPortEta = best && inlandDays !== null ? new Date(Date.parse(`${best.best.eta}T00:00:00Z`) - inlandDays * 86_400_000).toISOString().slice(0, 10) : null;
         return {
+          best_port_eta: bestPortEta,
           material_id: row.material_id, material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id),
           reference: event.reference, qty: event.qty, kind: event.kind, reschedule_key: event.reschedule_key as string,
           eta_plant: currentEta,
           rescheduled_eta: event.original_date !== undefined ? event.date : null,
           optimum: best,
-          window: best && best.shift_days !== 0
+          window: best && best.shift_days !== 0 && !best.not_needed_in_plan
             ? rescheduleVerdict({ today: p.today, route: facts.route, routeDays, currentEta, proposedEta: best.best.eta, currentEtd: facts.etd, windows: rescheduleContext.windows })
             : null,
         };
