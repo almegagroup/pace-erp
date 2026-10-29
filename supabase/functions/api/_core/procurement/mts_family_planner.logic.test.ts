@@ -1013,3 +1013,28 @@ Deno.test("Exclusive stays above Critical: broad group leaves the narrow level's
   const exclusiveCritical = r.level_risk.filter((x) => x.level_kind === "OWN" && x.level_id === G && x.critical_days !== null && x.cover_days < x.critical_days);
   assert(exclusiveCritical.length === 0, `Exclusive below Critical on ${exclusiveCritical.length} day(s), first ${exclusiveCritical[0]?.day}`);
 });
+
+Deno.test("hold-back: when a broad level tops up from a short pool, the narrow level's refill of the shared material stays in the pool", () => {
+  const AS_OF = "2026-10-28";
+  const add = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+  const days: string[] = []; for (let d = AS_OF; d <= "2027-02-28"; d = add(d, 1)) days.push(d);
+  const G = "GAB", T = "TS";
+  const pol = (id: string) => ({ material_id: id, target_days: 30, critical_days: 15, vendor_moq_qty_base: null, order_multiple_qty_base: null, configured_lead_time_days: null, cycle_days: 30, vendor_options: [] }) as unknown as OptimizerMaterialPlanningPolicy;
+  // Exclusive Gabrosa 100/day; Group B (Gabrosa or TS) 1,000/day. Gabrosa 70,000, no TS: at day 0 Exclusive reserves 6,000, B 60,000, the pool keeps 4,000 Gabrosa.
+  const own = days.map((d) => ({ material_id: G, required_by: d, qty_base: 100 }));
+  const groups = days.map((d) => ({ group_id: "B", candidates: [G, T], required_by: d, qty_base: 1000 }));
+  const input = { as_of: AS_OF, horizon_end: "2027-02-28", opening_qty_by_material: { [G]: 70000, [T]: 0 }, own_demand: own, group_demand: groups, confirmed_arrivals: [], policies: [G, T].map(pol), plan_buys: false,
+    // Group B asks the pool at 50 days of cover, the Exclusive level only at 30: B asks first, while the Exclusive level has used 10 days of its Max.
+    group_coverage_policies: [{ material_group_id: "B", effective_from: AS_OF, target_days: 50, critical_days: 15, desired_max_days_override: 60 }],
+  } as unknown as FamilyPlannerInput;
+  const poolGabAfterBTopUp = (r: ReturnType<typeof planFamily>) => {
+    const e = r.level_events.find((x) => x.kind === "TOP_UP" && x.level_id === "B");
+    return e ? (r.level_matrix.find((m) => m.day === e.day)?.pool[G] ?? 0) : -1;
+  };
+  const withHold = poolGabAfterBTopUp(planFamily(input));
+  Deno.env.set("NO_HOLD_BACK", "1");
+  const without = poolGabAfterBTopUp(planFamily(input));
+  Deno.env.delete("NO_HOLD_BACK");
+  assert(without >= 0 && withHold >= 0, "Group B tops up in this shape");
+  assert(withHold > without + 500, `with hold-back the pool keeps ${withHold} KG Gabrosa after B's top-up, without ${without}`);
+});

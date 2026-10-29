@@ -672,4 +672,4 @@ Two general rules (no material is named in the code):
 
 Result on the PROD snapshot (MHEC): Exclusive below Critical 36 days -> 0; engine buys 88,000 -> 74,000 KG; family closing stock on 31 Mar 74,542 -> 60,542 KG (less excess).
 Other families in the snapshot run (partial data, so absolute numbers mean nothing): level-days below Critical 516 -> 480, nothing got worse.
-Not verified: CMP005 / CMP011 and the RDP family on complete PROD data. The hand-model regression test passes with or without rule 1 (rule 2 alone fixes that shape).
+Not verified: CMP005 / CMP011 and the RDP family on complete PROD data. Rule 1 has its own regression test (a short pool, Group B asking before the Exclusive level) that fails without it; the PROD-shaped hand model is fixed by rule 2 alone.
