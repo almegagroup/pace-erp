@@ -745,3 +745,21 @@ The Action tab (GET /planning) looked only to the end of next month (CM + NM) wh
 confirmed receipt after next month was called "after this planning horizon — shown as future evidence, not counted as current Family stock".
 `computePlanning` for GET /planning, the saved run and the AI review now use `PLANNING_EXTRA_MONTHS = 4` (CM + NM + 4 = six months), the same as the
 rolling plan. The Planning header shows the real horizon end. CMP003 PROD snapshot: receipts flagged "after horizon" 0.
+
+## 44. One plain instruction per order (owner 2026-10-30)
+
+Management could not tell, per order, what to do and by when: several dates (advised, "if another order does not come", Absolute latest) and
+two bases (Min and Critical) sat side by side, and the "if another order does not come" sentence still said Critical while its date was Min-based.
+Now: (a) that sentence says Min; (b) a new column **"What to do (engine)"** right after ST gives ONE instruction —
+NOT NEEDED / ON TIME / CAN WAIT until <date> (room N d) / TOO LATE: must be at plant by <date> / OVERDUE … CHASE THE VENDOR / NOT SHIPPED: ETD passed …
+CHASE THE VENDOR / SHARED SHIPMENT … use the earliest of all companies' dates. The long "Why this date" stays as the detail.
+
+## 45. One coherent recommended schedule per family (owner 2026-10-30)
+
+Each order's "can wait until" was judged alone (every other order on its recorded date), so the dates shown together could cost extra buying
+(CMP005 MHEC: "all together: 10,000 KG more has to be bought"). Management wants one picture: which shipment to reschedule, and to which date.
+The recommended schedule is now a SET of dates that holds together: (1) a Sub-CSN share is never postponed (one vessel, other companies' shares move too);
+a prepone is still advised; (2) the family's other orders start at their own latest dates and the one that moves most is pulled back to its recorded date
+until applying all of them needs no extra buying and adds no day below Min; (3) the family line says what applying ALL of the "What to do" dates costs.
+CMP003 PROD snapshot: MHEC family 4,000 KG less to buy, 1 fewer level-day below Min; RDP family no extra buying, no extra day below Min.
+Not verified on CMP005 / CMP011 data (offline copies could not be rebuilt).

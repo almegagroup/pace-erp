@@ -59,6 +59,8 @@ export type BestDateWhyInput = {
   overdue_days?: number | null;
   /** Owner 2026-10-30: the piece is a Sub-CSN share; moving it moves the other companies' shares too. */
   shared_note?: string | null;
+  /** The latest date for THIS company judged alone (a shared shipment is kept on its recorded date). */
+  alone_eta?: string | null;
   /** Owner 2026-10-30: the cost of the advised date against the level's Min (Target): extra days below Min and the lowest cover reached. */
   critical_latest_eta?: string | null;
   move_cost?: { below_min_days_now: number; below_min_days_moved: number; lowest_cover_days_moved: number | null; min_days: number | null; critical_days: number | null; level_label?: string | null } | null;
@@ -92,7 +94,7 @@ export function bestDateWhy(i: BestDateWhyInput): string {
     ? `without it ${b.level_label} (Min ${b.min_days} d${b.desired_days !== null ? ` / Max ${b.desired_days} d` : ""}) is below its Min from ${b.min_day}${b.topup ? ` (at its ${b.topup.day} top-up it asked the pool for ${fmt(b.topup.wanted)} ${i.uom}, the pool held ${fmt(b.topup.pool_before)} ${i.uom}, short by ${fmt(b.topup.shortfall)} ${i.uom})` : ""} and falls below its Critical${b.critical_days !== null ? ` (${b.critical_days} d)` : ""} on ${b.day}, down to ${Math.floor(b.cover_days)} d of cover`
     : "without it stock runs out or a group's demand is not served";
   const lead = i.shared_note
-    ? `Latest safe date for THIS company: ${i.best_eta} (recorded ${i.current_eta ?? "?"}): ${level}. Shared shipment (${i.shared_note}): any date change moves all shares together, so use the earliest of the companies' dates and do not postpone on this one alone.`
+    ? `Latest safe date for THIS company: ${i.alone_eta ?? i.best_eta} (recorded ${i.current_eta ?? "?"}): ${level}. Shared shipment (${i.shared_note}): any date change moves all shares together, so use the earliest of the companies' dates and do not postpone on this one alone.`
     : i.overdue_days && i.overdue_days > 0
     ? `The recorded plant date ${i.current_eta ?? "?"} has passed (${i.overdue_days} d overdue) and no shipment is recorded. It is needed at plant by ${i.best_eta}: ${level}.`
     : i.shift_days < 0
@@ -123,17 +125,58 @@ export function ifAbsentText(list: readonly IfAbsentInput[], currentEta: string 
     if (!x.best_eta) return `If ${other} does not come: no date can be advised.`;
     if (x.shift_days === 0) return `If ${other} does not come: this order must land at plant by its recorded date ${rec}${alone}.${overdue}`;
     return x.shift_days > 0
-      ? `If ${other} does not come: this order must land at plant by ${x.best_eta} at the latest, else a level falls below Critical (${x.shift_days} d after its recorded date ${rec})${alone}.${overdue}`
+      ? `If ${other} does not come: this order must land at plant by ${x.best_eta} at the latest, else a level falls below its Min (${x.shift_days} d after its recorded date ${rec})${alone}.${overdue}`
       : `If ${other} does not come: this order must land at plant by ${x.best_eta} (${-x.shift_days} d before its recorded date ${rec})${alone}.${overdue}`;
   }).join("\n");
 }
 
 export type TogetherInput = { extra_buy_qty: number; below_min_days_now: number; below_min_days_moved: number; critical_days_now: number; critical_days_moved: number; uom: string };
 
-/** One line for the family: every not-yet-shipped order moved to its own advised date at once. */
+/**
+ * One line for the family (owner 2026-10-30): the recommended schedule is the set of dates in "What to do" (an order is either moved to its date or kept).
+ * This says what applying ALL of them together costs.
+ */
 export function togetherText(t: TogetherInput): string {
   const buy = t.extra_buy_qty > 0.5 ? `${fmt(t.extra_buy_qty)} ${t.uom} more has to be bought` : t.extra_buy_qty < -0.5 ? `${fmt(-t.extra_buy_qty)} ${t.uom} less has to be bought` : "no extra buying";
-  const critical = t.critical_days_moved > t.critical_days_now ? `, ${t.critical_days_moved - t.critical_days_now} more level-days below Critical` : ", no level goes below Critical";
-  const min = t.below_min_days_moved !== t.below_min_days_now ? `, level-days below Min ${t.below_min_days_now} → ${t.below_min_days_moved}` : "";
-  return `If ALL not-yet-shipped orders move together to their advised dates: ${buy}${critical}${min}. Each date is judged alone; moving several at once costs this.`;
+  const min = t.below_min_days_moved > t.below_min_days_now ? `${t.below_min_days_moved - t.below_min_days_now} more level-days below Min` : t.below_min_days_moved < t.below_min_days_now ? `${t.below_min_days_now - t.below_min_days_moved} fewer level-days below Min` : "no extra day below Min";
+  const critical = t.critical_days_moved > t.critical_days_now ? `, ${t.critical_days_moved - t.critical_days_now} more level-days below Critical` : "";
+  return `RECOMMENDED SCHEDULE for this family = the "What to do" date of each order together (an order is moved to its date, or kept). Applying ALL of them: ${buy}, ${min}${critical}.`;
+}
+
+export type ActionInput = {
+  not_needed_in_plan: boolean;
+  best_eta: string;
+  current_eta: string | null;
+  shift_days: number;
+  overdue_days?: number | null;
+  /** Days since the recorded ETD passed with no shipment recorded (null = ETD not passed or unknown). */
+  etd_passed_days?: number | null;
+  shared_note?: string | null;
+  /** The latest date for THIS company judged alone (a shared shipment is kept on its recorded date, so this differs from best_eta). */
+  alone_eta?: string | null;
+};
+
+/**
+ * Owner 2026-10-30: ONE plain instruction per not-yet-shipped order for management: what to do now and by when.
+ * Everything else (levels, Min / Critical, the other order's effect) stays in the detail columns.
+ */
+export function actionText(i: ActionInput): string {
+  if (i.not_needed_in_plan) return "NOT NEEDED inside the plan. No date.";
+  const rec = i.current_eta ?? "?";
+  const chase = i.overdue_days && i.overdue_days > 0
+    ? `OVERDUE ${i.overdue_days} d (recorded ${rec}, no shipment recorded). CHASE THE VENDOR.`
+    : i.etd_passed_days && i.etd_passed_days > 0
+      ? `NOT SHIPPED: the ETD passed ${i.etd_passed_days} d ago. CHASE THE VENDOR.`
+      : null;
+  if (i.shared_note) {
+    const head = chase ? `${chase} ` : "";
+    if (i.shift_days >= 0 && i.alone_eta && i.alone_eta > rec) {
+      return `${head}SHARED SHIPMENT: KEEP the recorded date ${rec}. This company alone could take it up to ${i.alone_eta}, but ${i.shared_note}; a shared shipment is never postponed on one company's date. Use the EARLIEST of all the companies' dates.`;
+    }
+    return `${head}SHARED SHIPMENT: needed at plant by ${i.best_eta} for THIS company; ${i.shared_note}. Use the EARLIEST of all the companies' dates.`;
+  }
+  if (chase) return `${chase} Needed at plant by ${i.best_eta}.`;
+  if (i.shift_days < 0) return `TOO LATE: must be at plant by ${i.best_eta} (${-i.shift_days} d before recorded ${rec}).`;
+  if (i.shift_days === 0) return `ON TIME: keep ${rec}.`;
+  return `CAN WAIT until ${i.best_eta} (room of ${i.shift_days} d after recorded ${rec}). Needed by ${i.best_eta}.`;
 }
