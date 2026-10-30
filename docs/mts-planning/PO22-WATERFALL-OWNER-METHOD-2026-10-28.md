@@ -706,3 +706,11 @@ production procurement files. Lesson: local runs under Deno cannot show Node-onl
   Now DOLTEX lead = 5 d, first new lots land 3 / 4 Nov, stock-out days 0 (PROD snapshot run).
 - CMP003 PROD snapshot: runs-out 3 → 2, late orders 20 → 12, new orders 176 → 178.
 - Not changed: the PO22 Requirement tab's own "Lead (booking + route)" display (separate engine).
+
+## 39. Cost against Target (Min) of the advised date (owner 2026-10-30)
+
+The advised latest date only protects **Critical**. Owner asked how far the Target (Min) is given up. "Why this date" now adds one sentence
+when the advised date is later than the recorded one: how many more days the level sits below its Min than on the recorded date
+(counted only up to the landing day; days that are below Min even if the lot landed today are not blamed on the lot), and the lowest cover it
+sinks to (Min and Critical named). Example (PROD snapshot): Gabrosa lot recorded 8 Dec → advised 8 Jan: Exclusive below Min 9 more days (0 → 9),
+cover sinks to 21 d (Min 30, Critical 20). Not shown for overdue lots.

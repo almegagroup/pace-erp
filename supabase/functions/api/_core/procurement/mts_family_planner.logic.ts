@@ -1926,6 +1926,35 @@ export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: strin
 }
 
 /**
+ * Owner 2026-10-30: what a move costs against the TARGET (Min), not only against Critical. The advised date only guarantees Critical; moving the
+ * piece to `eta` leaves the level below its Min for more days and lets its cover sink to a lowest value. This measures exactly that, for the
+ * level the date was decided on (or every level when none is named), comparing the piece on its recorded date with the piece on `eta`.
+ */
+export type FamilyMoveCost = { below_min_days_now: number; below_min_days_moved: number; lowest_cover_days_moved: number | null; min_days: number | null; critical_days: number | null } | null;
+export function familyMoveCost(input: FamilyPlannerInput, pieceKey: string, eta: string, level: { level_kind: "OWN" | "GROUP"; level_id: string } | null): FamilyMoveCost {
+  const piece = input.confirmed_arrivals.find((a) => a.source_key === pieceKey);
+  if (!piece || !piece.eta_to_plant || !ISO_DAY.test(piece.eta_to_plant) || !ISO_DAY.test(eta)) return null;
+  const base = { ...input, plan_buys: false, trace: false };
+  const run = (when: string) => planFamily({ ...base, confirmed_arrivals: input.confirmed_arrivals.map((a) => (a.source_key === pieceKey ? { ...a, eta_to_plant: when } : a)) });
+  const now = run(piece.eta_to_plant);
+  const moved = eta === piece.eta_to_plant ? now : run(eta);
+  const planEnd = lastFamilyDemandDay(now);
+  // Only the days up to the landing day depend on this piece's date; later days are decided by the next lots (not in this run), so they are not counted.
+  const cutoff = eta > piece.eta_to_plant ? eta : piece.eta_to_plant;
+  // A day that is below Min even when the piece lands today is not caused by this piece's date, so it is left out of the cost.
+  const early = new Set(run(input.as_of).level_risk.map((x) => `${x.level_kind}|${x.level_id}|${x.day}`));
+  const pick = (r: FamilyResult) => r.level_risk.filter((x) => (planEnd === null || x.day <= planEnd) && x.day <= cutoff && !early.has(`${x.level_kind}|${x.level_id}|${x.day}`)
+    && (!level || (x.level_kind === level.level_kind && x.level_id === level.level_id)));
+  const nowRisk = pick(now);
+  const movedRisk = pick(moved);
+  const lowest = movedRisk.length ? movedRisk.reduce((a, b) => (b.cover_days < a.cover_days ? b : a)) : null;
+  return {
+    below_min_days_now: nowRisk.length, below_min_days_moved: movedRisk.length,
+    lowest_cover_days_moved: lowest ? lowest.cover_days : null, min_days: lowest ? lowest.min_days : null, critical_days: lowest ? lowest.critical_days : null,
+  };
+}
+
+/**
  * Owner 2026-10-29: what happens when SEVERAL not-yet-shipped pieces move at once. Each piece's advised date is judged alone; together they can need
  * more new buying or leave more level-days below Min. Both runs include the engine's own new buys, so the extra buying is the real cost.
  */

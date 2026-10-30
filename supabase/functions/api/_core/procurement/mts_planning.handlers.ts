@@ -30,7 +30,7 @@ import {
 import { familyClosure } from "./mts_item_plan.logic.ts";
 import { loadGroupCoveragePolicyVersions } from "./mts_group_policy.handlers.ts";
 import { bulkOnlyGroupIds, loadBulkMaterialIds } from "./mts_bulk_materials.ts";
-import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, optimizeFamilyArrival, optimizeFamilyTogether, planFamily } from "./mts_family_planner.logic.ts";
+import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, familyMoveCost, optimizeFamilyArrival, optimizeFamilyTogether, planFamily } from "./mts_family_planner.logic.ts";
 import { assemblePlanningInput, familyArrivalEta, priceUnitCode, familyArrivalRisk, isFamilyAllocatableArrival, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
@@ -1064,7 +1064,11 @@ export async function computePlanning(p: PlanningParams) {
           };
         }) : [];
         const together = jointFam ? jointFam.together : null;
+        // Owner 2026-10-30: against Target (Min): how many more days the level sits below its Min, and how low its cover goes, at the advised date.
+        const moveCost = best && !best.not_needed_in_plan && currentEta && best.best.eta > currentEta
+          ? familyMoveCost(input, ownKey, best.best.eta, best.binding ? { level_kind: best.binding.level_kind, level_id: best.binding.level_id } : null) : null;
         return {
+          move_cost: moveCost,
           if_absent: ifAbsent, together, joint_note: jointNote,
           best_port_eta: bestPortEta,
           best_etd: bestEtd,

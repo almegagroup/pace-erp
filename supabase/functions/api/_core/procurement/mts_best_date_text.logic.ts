@@ -54,7 +54,20 @@ export type BestDateWhyInput = {
   joint_note?: string | null;
   /** Days the recorded plant date is already in the past while nothing is shipped. */
   overdue_days?: number | null;
+  /** Owner 2026-10-30: the cost of the advised date against the level's Min (Target): extra days below Min and the lowest cover reached. */
+  move_cost?: { below_min_days_now: number; below_min_days_moved: number; lowest_cover_days_moved: number | null; min_days: number | null; critical_days: number | null; level_label?: string | null } | null;
 };
+
+/** One plain sentence: what landing on the advised date does to the Min (Target), which the date itself does not protect. */
+export function moveCostText(c: NonNullable<BestDateWhyInput["move_cost"]>, bestEta: string): string {
+  const who = c.level_label ? `${c.level_label}` : "A level";
+  const extra = c.below_min_days_moved - c.below_min_days_now;
+  if (extra <= 0) return `Landing on ${bestEta} adds no day below ${who}'s Min.`;
+  const low = c.lowest_cover_days_moved !== null
+    ? `, and its cover sinks to ${Math.floor(c.lowest_cover_days_moved)} d${c.min_days !== null ? ` (Min ${c.min_days} d${c.critical_days !== null ? `, Critical ${c.critical_days} d` : ""})` : ""}`
+    : "";
+  return `Cost against Min: landing on ${bestEta} leaves ${who} below its Min for ${extra} more day(s) than now (${c.below_min_days_now} → ${c.below_min_days_moved} days)${low}. The advised date protects Critical, not the Min.`;
+}
 
 /**
  * Plain reason for the advised date, in the PDF's terms: without this lot the level reaches its Min and the pool cannot refill it
@@ -73,7 +86,8 @@ export function bestDateWhy(i: BestDateWhyInput): string {
       : i.shift_days > 0
         ? `Can wait until ${i.best_eta} (${i.shift_days} d after the recorded date ${i.current_eta ?? "?"}): ${level}.`
         : `${i.current_eta ?? i.best_eta} is the latest safe date: ${level}.`;
-  const withJoint = i.joint_note ? `${lead} ${i.joint_note}` : lead;
+  const withCost = i.move_cost && !(i.overdue_days && i.overdue_days > 0) ? `${lead} ${moveCostText(i.move_cost, i.best_eta)}` : lead;
+  const withJoint = i.joint_note ? `${withCost} ${i.joint_note}` : withCost;
   return i.vendor_message ? `${withJoint} ${i.vendor_message}` : withJoint;
 }
 

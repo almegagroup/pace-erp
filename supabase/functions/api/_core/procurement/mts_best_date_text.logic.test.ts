@@ -49,3 +49,14 @@ Deno.test("together: extra buying and level-days when everything moves at once",
     "If ALL not-yet-shipped orders move together to their advised dates: 10,000 KG more has to be bought, no level goes below Critical, level-days below Min 1 → 7. Each date is judged alone; moving several at once costs this.",
   );
 });
+
+import { moveCostText } from "./mts_best_date_text.logic.ts";
+Deno.test("cost against Min: extra days below Min and the lowest cover, Critical still protected (owner 2026-10-30)", () => {
+  assertEquals(
+    moveCostText({ below_min_days_now: 0, below_min_days_moved: 9, lowest_cover_days_moved: 21.4, min_days: 30, critical_days: 20, level_label: "Exclusive — GABROSA M700" }, "2027-01-08"),
+    "Cost against Min: landing on 2027-01-08 leaves Exclusive — GABROSA M700 below its Min for 9 more day(s) than now (0 → 9 days), and its cover sinks to 21 d (Min 30 d, Critical 20 d). The advised date protects Critical, not the Min.",
+  );
+  assertEquals(moveCostText({ below_min_days_now: 5, below_min_days_moved: 5, lowest_cover_days_moved: null, min_days: null, critical_days: null }, "2027-01-08"), "Landing on 2027-01-08 adds no day below A level's Min.");
+  const w = bestDateWhy({ current_eta: "2026-12-08", best_eta: "2027-01-08", shift_days: 31, uom: "KG", vendor_message: null, binding: null, move_cost: { below_min_days_now: 0, below_min_days_moved: 9, lowest_cover_days_moved: 21, min_days: 30, critical_days: 20, level_label: "G" } });
+  assertEquals(w.includes("Cost against Min"), true);
+});
