@@ -1462,6 +1462,8 @@ export type InboundEvent = {
   reschedule_key?: string;
   /** Source date before a planning reschedule replaced `date`. */
   original_date?: string | null;
+  /** Owner 2026-10-30: a Sub-CSN share moves together with the other shares of its Mother CSN (one vessel); names the other companies' shares. */
+  shared_note?: string;
 };
 
 /**

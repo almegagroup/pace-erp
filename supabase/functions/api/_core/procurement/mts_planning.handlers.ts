@@ -1077,7 +1077,7 @@ export async function computePlanning(p: PlanningParams) {
           route: facts.route,
           binding: best?.binding ? { ...best.binding, level_label: best.binding.level_kind === "OWN" ? `Exclusive — ${nameOf(best.binding.level_id)}` : groupLabel.get(best.binding.level_id) ?? "Group" } : null,
           material_id: row.material_id, material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id),
-          reference: event.reference, qty: event.qty, kind: event.kind, reschedule_key: event.reschedule_key as string,
+          reference: event.reference, qty: event.qty, kind: event.kind, reschedule_key: event.reschedule_key as string, shared_note: event.shared_note ?? null,
           eta_plant: currentEta,
           rescheduled_eta: event.original_date !== undefined ? event.date : null,
           optimum: best,

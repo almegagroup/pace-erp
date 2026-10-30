@@ -729,3 +729,12 @@ When no lot can land before a level reaches its Min (lead time too long), the en
 how many days the level sits below its Min until the earliest possible lot lands, how low its cover goes, and whether even the Critical holds,
 next to the order's own Import ETD / Port ETA / Plant date (today + lead time). PROD snapshot CMP003: 9 engine orders carry this note
 (e.g. DOLTEX 30/80: 5 days below Min, cover down to 6 d, Critical broken).
+
+## 42. Sub-CSN shares: each company judges its own share; no postponing on one company's date (owner 2026-10-30)
+
+The system never distributes a shipment: the user orders for all companies and splits it with CSN / Sub-CSN. Each receiving company's plan
+therefore gives its own latest date for its own Sub-CSN share (like any not-yet-shipped lot). But all shares of one Mother CSN sail on one vessel:
+moving one share moves every share equally, so a "can wait / postpone" advice from one company could push another company below its Min.
+For a Sub-CSN piece the sheet says "Latest for THIS company … take the EARLIEST of all the companies' dates; never postpone on this company's
+date alone" and names the other shares ("Mother CSN … also feeds CMP011 9,000 KG"). No postpone / talk-to-vendor wording is shown for it.
+Not verified on PROD data for CMP005 / CMP011 (offline snapshot for those companies could not be rebuilt in this session); unit tests only.

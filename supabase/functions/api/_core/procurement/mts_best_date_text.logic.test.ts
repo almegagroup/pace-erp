@@ -64,3 +64,14 @@ Deno.test("the advised date protects the Min; the Critical limit and its cost ag
   });
   assertEquals(w.includes("falls below its Min on 2026-12-31") && w.includes("Absolute latest (Critical limit): 2027-01-08"), true);
 });
+
+Deno.test("Sub-CSN share: this company's latest date only, never 'can wait' / postpone, take the earliest of all companies (owner 2026-10-30)", () => {
+  const note = "Mother CSN 3000000330 also feeds CMP011 9,000 KG";
+  const t = bestDateText({ current_eta: "2026-11-17", best_eta: "2026-12-12", shift_days: 25, not_needed_in_plan: false, plan_end: null, best_port_eta: "2026-12-08", talk_to_vendor: true, shared_note: note });
+  assertEquals(t.startsWith("Latest for THIS company: plant by 2026-12-12 · at port by 2026-12-08."), true);
+  assertEquals(t.includes("can wait") || t.includes("Talk to the vendor"), false);
+  assertEquals(t.includes("EARLIEST of all the companies"), true);
+  const w = bestDateWhy({ current_eta: "2026-11-17", best_eta: "2026-12-12", shift_days: 25, uom: "KG", binding: null, shared_note: note, vendor_message: "Cannot be scheduled: Talk to the vendor to see whether postpone by 25 day(s) is possible." });
+  assertEquals(w.includes("whether postpone") || w.includes("Can wait"), false);
+  assertEquals(w.includes("do not postpone on this one alone"), true);
+});

@@ -14,6 +14,8 @@ export type BestDateInput = {
   talk_to_vendor: boolean;
   /** Days the recorded plant date is already in the past while nothing is shipped (owner 2026-10-29). */
   overdue_days?: number | null;
+  /** Owner 2026-10-30: the piece is a Sub-CSN share; moving it moves the other companies' shares too. */
+  shared_note?: string | null;
   /** Only when not_needed_in_plan; quantities already in the display unit. */
   cover?: { plan_days: number; left_with: number; left_without: number | null; avg_daily_use: number; uom: string } | null;
 };
@@ -30,6 +32,7 @@ export function bestDateText(i: BestDateInput): string {
     return `Not needed inside the PO21 plan${end}: stock already covers the whole plan (${c.plan_days} days). When the plan ends ${fmt(c.left_with)} ${c.uom} is still left over${without}. The plan has no use after that, so no ETA is set now (judged with every other order arriving as planned); schedule it when PO21 is extended.`;
   }
   const port = i.best_port_eta ? ` · at port by ${i.best_port_eta}` : "";
+  if (i.shared_note) return `Latest for THIS company: plant by ${i.best_eta}${port}. Shared shipment (${i.shared_note}): a date change moves every share equally. Take the EARLIEST of all the companies' dates; never postpone on this company's date alone.`;
   const vendor = i.talk_to_vendor ? "Talk to the vendor: " : "";
   // An overdue piece is not "postponed": its recorded date has already passed with no shipment recorded.
   if (i.overdue_days && i.overdue_days > 0) return `${vendor}Must land at plant by ${i.best_eta}${port} (recorded date ${i.current_eta ?? "?"} is ${i.overdue_days} d overdue, no shipment recorded)`;
@@ -54,6 +57,8 @@ export type BestDateWhyInput = {
   joint_note?: string | null;
   /** Days the recorded plant date is already in the past while nothing is shipped. */
   overdue_days?: number | null;
+  /** Owner 2026-10-30: the piece is a Sub-CSN share; moving it moves the other companies' shares too. */
+  shared_note?: string | null;
   /** Owner 2026-10-30: the cost of the advised date against the level's Min (Target): extra days below Min and the lowest cover reached. */
   critical_latest_eta?: string | null;
   move_cost?: { below_min_days_now: number; below_min_days_moved: number; lowest_cover_days_moved: number | null; min_days: number | null; critical_days: number | null; level_label?: string | null } | null;
@@ -86,7 +91,9 @@ export function bestDateWhy(i: BestDateWhyInput): string {
     : b
     ? `without it ${b.level_label} (Min ${b.min_days} d${b.desired_days !== null ? ` / Max ${b.desired_days} d` : ""}) is below its Min from ${b.min_day}${b.topup ? ` (at its ${b.topup.day} top-up it asked the pool for ${fmt(b.topup.wanted)} ${i.uom}, the pool held ${fmt(b.topup.pool_before)} ${i.uom}, short by ${fmt(b.topup.shortfall)} ${i.uom})` : ""} and falls below its Critical${b.critical_days !== null ? ` (${b.critical_days} d)` : ""} on ${b.day}, down to ${Math.floor(b.cover_days)} d of cover`
     : "without it stock runs out or a group's demand is not served";
-  const lead = i.overdue_days && i.overdue_days > 0
+  const lead = i.shared_note
+    ? `Latest safe date for THIS company: ${i.best_eta} (recorded ${i.current_eta ?? "?"}): ${level}. Shared shipment (${i.shared_note}): any date change moves all shares together, so use the earliest of the companies' dates and do not postpone on this one alone.`
+    : i.overdue_days && i.overdue_days > 0
     ? `The recorded plant date ${i.current_eta ?? "?"} has passed (${i.overdue_days} d overdue) and no shipment is recorded. It is needed at plant by ${i.best_eta}: ${level}.`
     : i.shift_days < 0
       ? `The recorded date ${i.current_eta ?? "?"} is too late: ${level}. It must land by ${i.best_eta} (${-i.shift_days} d earlier).`
@@ -96,7 +103,7 @@ export function bestDateWhy(i: BestDateWhyInput): string {
   const crit = i.critical_latest_eta && i.critical_latest_eta > i.best_eta ? i.critical_latest_eta : null;
   const withCost = crit && i.move_cost && !(i.overdue_days && i.overdue_days > 0) ? `${lead} ${moveCostText(i.move_cost, crit)}` : lead;
   const withJoint = i.joint_note ? `${withCost} ${i.joint_note}` : withCost;
-  return i.vendor_message ? `${withJoint} ${i.vendor_message}` : withJoint;
+  return i.vendor_message && !i.shared_note ? `${withJoint} ${i.vendor_message}` : withJoint;
 }
 
 export type IfAbsentInput = { reference: string; other_eta: string; best_eta: string | null; shift_days: number; not_needed_in_plan: boolean; binding_day: string | null };
