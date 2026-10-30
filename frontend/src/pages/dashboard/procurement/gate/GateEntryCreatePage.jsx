@@ -841,6 +841,7 @@ export default function GateEntryCreatePage() {
           {[
             [refLabel, refNumber],
             ["Material", matDisplay],
+            ["Item Type", csn.material_type || "—"],
             ["Quantity", csn.dispatch_qty ? `${Number(csn.dispatch_qty).toLocaleString()} ${csn.po_uom_code || ""}` : "—"],
             [isImport ? "BOE number" : "Invoice number", csn.invoice_number || csn.boe_number || "—"],
             [isImport ? "BL date (ATD)" : "LR date (ATD)", csn.bl_date || csn.lr_date || "—"],
@@ -1392,6 +1393,7 @@ export default function GateEntryCreatePage() {
               { key: "sto_number", label: "STO Number", width: "110px", render: () => stoDrawer.sto?.sto_number },
               { key: "csn_number", label: "CSN", width: "110px", render: (row) => row.stoLine?.csn_number || "—" },
               { key: "material_name", label: "Material", render: (row) => row.stoLine?.material_name || "—" },
+              { key: "material_type", label: "Item Type", width: "90px", render: (row) => row.stoLine?.material_type || "—" },
               { key: "uom_code", label: "UOM", width: "70px", render: (row) => row.stoLine?.uom_code || "—" },
               { key: "expected_qty", label: "Expected qty", width: "100px", render: (row) => Number(row.stoLine?.expected_qty ?? 0).toLocaleString() },
               {

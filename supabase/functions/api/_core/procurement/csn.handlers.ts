@@ -1175,7 +1175,7 @@ export async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
       ? serviceRoleClient.schema("erp_master").from("vendor_master").select("id, vendor_name").in("id", vendorIds)
       : Promise.resolve({ data: [], error: null }),
     materialIds.length
-      ? serviceRoleClient.schema("erp_master").from("material_master").select("id, material_name, pace_code, base_uom_code").in("id", materialIds)
+      ? serviceRoleClient.schema("erp_master").from("material_master").select("id, material_name, pace_code, base_uom_code, material_type").in("id", materialIds)
       : Promise.resolve({ data: [], error: null }),
     transporterIds.length
       ? serviceRoleClient.schema("erp_master").from("transporter_master").select("id, transporter_name").in("id", transporterIds)
@@ -1357,6 +1357,8 @@ export async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
         : null,
       material_name: material?.material_name ?? null,
       material_code: material?.pace_code ?? null,
+      // Item Type (RM / PM / INT / SFG / FG ...) straight from the material master.
+      material_type: material?.material_type ?? null,
       base_uom_code: material?.base_uom_code ?? null,
       // `consignment_note.po_qty` is the quantity allocated to this CSN at
       // its creation.  It intentionally remains immutable so the dispatch

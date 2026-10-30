@@ -369,7 +369,7 @@ async function hydrateGrn(grnId: string): Promise<JsonRecord> {
   let materialData: JsonRecord | null = null;
   if (isNewStyle && grn.material_id) {
     const { data } = await serviceRoleClient.schema("erp_master").from("material_master")
-      .select("id, pace_code, material_name, external_sku, batch_tracking_required, expiry_tracking_enabled, qa_required_on_inward")
+      .select("id, pace_code, material_name, material_type, external_sku, batch_tracking_required, expiry_tracking_enabled, qa_required_on_inward")
       .eq("id", String(grn.material_id)).maybeSingle();
     materialData = data;
   }
@@ -389,7 +389,7 @@ async function hydrateGrn(grnId: string): Promise<JsonRecord> {
     const [matResp, slocResp] = await Promise.all([
       matIds.length > 0
         ? serviceRoleClient.schema("erp_master").from("material_master")
-            .select("id, pace_code, material_name").in("id", matIds)
+            .select("id, pace_code, material_name, material_type").in("id", matIds)
         : { data: [], error: null },
       slocIds.length > 0
         ? serviceRoleClient.schema("erp_inventory").from("storage_location_master")
@@ -405,6 +405,7 @@ async function hydrateGrn(grnId: string): Promise<JsonRecord> {
         ...l,
         pace_code: mat?.pace_code ?? null,
         material_name: mat?.material_name ?? null,
+        material_type: (mat as JsonRecord | undefined)?.material_type ?? null,
         location_code: sloc?.code ?? null,
         location_name: sloc?.name ?? null,
       };
@@ -418,6 +419,7 @@ async function hydrateGrn(grnId: string): Promise<JsonRecord> {
     sto_number: stoNumber,
     pace_code: materialData?.pace_code ?? null,
     material_name: materialData?.material_name ?? null,
+    material_type: materialData?.material_type ?? null,
     external_sku: materialData?.external_sku ?? null,
     batch_tracking_required: materialData?.batch_tracking_required ?? false,
     expiry_tracking_enabled: materialData?.expiry_tracking_enabled ?? false,
@@ -471,7 +473,7 @@ export async function getGELinesForGRNHandler(
     const [matResp, poLineResp, existingGrnResp] = await Promise.all([
       matIds.length > 0
         ? serviceRoleClient.schema("erp_master").from("material_master")
-            .select("id, pace_code, material_name, external_sku, base_uom_code, qa_required_on_inward, batch_tracking_required, expiry_tracking_enabled, hsn_code")
+            .select("id, pace_code, material_name, material_type, external_sku, base_uom_code, qa_required_on_inward, batch_tracking_required, expiry_tracking_enabled, hsn_code")
             .in("id", matIds)
         : { data: [], error: null },
       poLineIds.length > 0
@@ -687,6 +689,7 @@ export async function getGELinesForGRNHandler(
       return {
         ...l,
         material_name: mat?.material_name ?? null,
+        material_type: (mat as JsonRecord | undefined)?.material_type ?? null,
         external_sku: mat?.external_sku ?? null,
         base_uom_code: baseUomCode,
         qa_required_on_inward: mat?.qa_required_on_inward ?? false,

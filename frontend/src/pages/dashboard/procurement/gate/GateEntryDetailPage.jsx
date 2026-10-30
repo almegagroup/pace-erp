@@ -224,6 +224,7 @@ export default function GateEntryDetailPage() {
               columns={[
                 { key: "line_number", label: "Line", width: "70px" },
                 { key: "material_name", label: "Material", width: "220px", render: (row) => row.material_name || "—" },
+                { key: "material_type", label: "Item Type", width: "90px", render: (row) => row.material_type || "—" },
                 {
                   key: "linked_csn",
                   label: "CSN",

@@ -126,6 +126,7 @@ export default function GRNDetailPage() {
                 <Fields items={[
                   ["PACE code", detail.pace_code || "—"],
                   ["Material", detail.material_name || "—"],
+                  ["Item Type", detail.material_type || "—"],
                   ["External code", detail.external_sku || "—"],
                   ["GE qty", detail.ge_qty != null ? `${detail.ge_qty} ${detail.uom_code || ""}` : "—"],
                   ["Received qty", detail.received_qty != null ? `${detail.received_qty} ${detail.uom_code || ""}` : "—"],
