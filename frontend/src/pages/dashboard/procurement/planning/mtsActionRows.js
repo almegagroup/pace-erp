@@ -72,7 +72,7 @@ export function buildActionRows(plan) {
       action: shortage ? "Resolve group stock-out risk" : "Resolve group Critical risk",
       by_when: shortage ?? critical, qty: group.unresolved_qty_base > 0 ? group.unresolved_qty_base : null, vendor: null,
       shortage_day: shortage, critical_day: critical,
-      why: `Follow in order: ${(group.ordered_actions ?? []).join(" → ")}.`,
+      why: `${shortage ? `All members of this group together run out of stock on ${shortage}` : `Together the members of this group fall below the Critical level on ${critical}`}${group.unresolved_qty_base > 0 ? `; about ${Math.round(group.unresolved_qty_base * 1000) / 1000} of demand has no stock or arrival behind it` : ""}. This is a risk for the whole group (its members share the demand), not for one item. Try in this order: ${(group.ordered_actions ?? []).map((x, i) => `${i + 1}) ${x}`).join("; ")}.`,
     });
   }
   for (const flag of plan.arrival_flags ?? []) {

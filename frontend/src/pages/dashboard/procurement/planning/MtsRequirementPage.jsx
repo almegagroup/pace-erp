@@ -21,7 +21,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
 import { usePo22ColumnLayouts } from "./usePo22ColumnLayouts.js";
-import { aggregateStoreItems, dayShort, issueNote, normaliseStoreRows, periodSpan, planItemRows, simpleStoreNote, storeWaitQty, transferRows } from "./mtsStoreInstruction.js";
+import { aggregateStoreItems, groupedItemRows, usageConsolidatedRows, usageDetailRows, dayShort, issueNote, normaliseStoreRows, periodSpan, planItemRows, simpleStoreNote, storeWaitQty, transferRows } from "./mtsStoreInstruction.js";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import { companyLabel } from "./mtsCompanyLabel.js";
@@ -1967,7 +1967,7 @@ function MemberSelection({ companyId, planMonth, plan, canEdit }) {
 // ─────────────────────────────────────────────────────────────────────────────
 function StoreReportTab({ companyId, companyText, planMonth, asOf, demandAt }) {
   const [runId, setRunId] = useState("");
-  const [view, setView] = useState("ITEMS");
+  const [view, setView] = useState("RECEIPT");
   const liveQ = usePlanningQuery(companyId, planMonth, asOf, demandAt);
   const runsQ = useQuery({ queryKey: ["procurement", "mts-requirement", "planning-runs", companyId], queryFn: () => listMtsPlanningRuns({ company_id: companyId }), enabled: Boolean(companyId), retry: false });
   const runQ = useQuery({ queryKey: ["procurement", "mts-requirement", "planning-run", companyId, runId], queryFn: () => getMtsPlanningRun({ company_id: companyId, id: runId }), enabled: Boolean(companyId && runId) });
@@ -2011,6 +2011,10 @@ function StoreReportTab({ companyId, companyText, planMonth, asOf, demandAt }) {
   const itemRows = useMemo(() => (source?.store_plan?.rows ? planItemRows(source.store_plan.rows) : aggregateStoreItems(normaliseStoreRows(source?.store_rows)).map((r) => ({ ...r, use_stock: r.qty, use_arrival: 0, use_assumed: 0, use_lot: 0 }))), [source]);
   const excessRows = useMemo(() => [...(source?.store_plan?.excess ?? [])].sort((a, b) => a.period_order - b.period_order || String(a.material_name).localeCompare(String(b.material_name))), [source]);
   const transfers = useMemo(() => transferRows(source?.store_transfers), [source]);
+  // Owner 2026-10-30: two simple tabs. Receipt & hold = grouped items only; Usage = per item × period × parent/child, with the consolidated total beside it.
+  const receiptRows = useMemo(() => groupedItemRows(itemRows), [itemRows]);
+  const usageRows = useMemo(() => usageDetailRows(itemRows), [itemRows]);
+  const usageTotals = useMemo(() => usageConsolidatedRows(itemRows), [itemRows]);
   // Owner 2026-10-28: the default Store view is SIMPLE — Period · Item · For · Issue now · Wait for receipt · Keep after this period · Note.
   const keyOf = (r) => (r.key_id?.startsWith("group:") ? null : r.key_id);
   const simpleColumns = [
@@ -2020,11 +2024,27 @@ function StoreReportTab({ companyId, companyText, planMonth, asOf, demandAt }) {
     { key: "group", label: "Material group", width: "200px", render: (r) => dash(r.group) },
     { key: "mother", label: "PO21 parent group", width: "180px", render: (r) => dash(r.mother) },
     { key: "child", label: "Child group(s)", width: "260px", render: (r) => dash(r.child) },
-    { key: "issue_now", label: "Issue now", width: "120px", align: "right", render: (r) => <span className="font-semibold text-emerald-800">{sq(keyOf(r), r.use_stock)}</span>, copyValue: (r) => sq(keyOf(r), r.use_stock) },
-    { key: "wait", label: "Wait for receipt", width: "130px", align: "right", render: (r) => (storeWaitQty(r) > 0.0005 ? <span className="text-amber-800">{sq(keyOf(r), storeWaitQty(r))}</span> : ""), copyValue: (r) => (storeWaitQty(r) > 0.0005 ? sq(keyOf(r), storeWaitQty(r)) : "") },
+    { key: "issue_now", label: "Issue now (stock in hand)", width: "150px", align: "right", render: (r) => <span className="font-semibold text-emerald-800">{sq(keyOf(r), r.use_stock)}</span>, copyValue: (r) => sq(keyOf(r), r.use_stock) },
+    { key: "wait", label: "Wait for receipt (do not issue yet)", width: "180px", align: "right", render: (r) => (storeWaitQty(r) > 0.0005 ? <span className="text-amber-800">{sq(keyOf(r), storeWaitQty(r))}</span> : ""), copyValue: (r) => (storeWaitQty(r) > 0.0005 ? sq(keyOf(r), storeWaitQty(r)) : "") },
     { key: "keep", label: "Keep aside after this period", width: "180px", align: "right", render: (r) => (r.keep === null || r.keep === undefined ? "—" : <span className="font-semibold text-sky-800">{sq(keyOf(r), r.keep)}</span>), copyValue: (r) => (r.keep === null || r.keep === undefined ? "" : sq(keyOf(r), r.keep)) },
     { key: "uom", label: "UoM", width: "60px", render: (r) => dash(du.uom(keyOf(r), r.uom)), copyValue: (r) => du.uom(keyOf(r), r.uom) },
     { key: "note", label: "Note", width: "420px", render: (r) => simpleStoreNote(r, (q) => sq(keyOf(r), q)), copyValue: (r) => simpleStoreNote(r, (q) => sq(keyOf(r), q)) },
+  ];
+  const usageColumns = [
+    { key: "use_from", label: "Use from", width: "90px", render: (r) => dayShort(r.period_from), copyValue: (r) => dayShort(r.period_from) },
+    { key: "use_to", label: "Use to", width: "90px", render: (r) => dayShort(r.period_to), copyValue: (r) => dayShort(r.period_to) },
+    { key: "item", label: "Item", width: "280px", render: (r) => (r.key_id?.startsWith("group:") ? <span className="text-rose-700">{r.item}</span> : r.item), copyValue: (r) => r.item },
+    { key: "mother", label: "PO21 parent group", width: "160px", render: (r) => dash(r.mother), copyValue: (r) => r.mother },
+    { key: "child", label: "Child group(s)", width: "240px", render: (r) => dash(r.child), copyValue: (r) => r.child },
+    { key: "use_qty", label: "Will be used", width: "120px", align: "right", render: (r) => <span className="font-semibold text-emerald-800">{sq(keyOf(r), r.use_qty)}</span>, copyValue: (r) => sq(keyOf(r), r.use_qty) },
+    { key: "uom", label: "UoM", width: "60px", render: (r) => dash(du.uom(keyOf(r), r.uom)), copyValue: (r) => du.uom(keyOf(r), r.uom) },
+  ];
+  const usageTotalColumns = [
+    { key: "use_from", label: "Use from", width: "90px", render: (r) => dayShort(r.period_from), copyValue: (r) => dayShort(r.period_from) },
+    { key: "use_to", label: "Use to", width: "90px", render: (r) => dayShort(r.period_to), copyValue: (r) => dayShort(r.period_to) },
+    { key: "item", label: "Item", width: "260px", render: (r) => (r.key_id?.startsWith("group:") ? <span className="text-rose-700">{r.item}</span> : r.item), copyValue: (r) => r.item },
+    { key: "use_qty", label: "Total use (all groups)", width: "150px", align: "right", render: (r) => <span className="font-semibold text-sky-800">{sq(keyOf(r), r.use_qty)}</span>, copyValue: (r) => sq(keyOf(r), r.use_qty) },
+    { key: "uom", label: "UoM", width: "60px", render: (r) => dash(du.uom(keyOf(r), r.uom)), copyValue: (r) => du.uom(keyOf(r), r.uom) },
   ];
   const itemColumns = [
     { key: "period", label: "Period", width: "130px" },
@@ -2094,18 +2114,31 @@ function StoreReportTab({ companyId, companyText, planMonth, asOf, demandAt }) {
     { key: "executable_qty", label: "From physical stock", width: "140px", align: "right", render: (g) => fmtQty(g.executable_qty), copyValue: (g) => g.executable_qty },
     { key: "not_backed_qty", label: "Not yet backed", width: "140px", align: "right", render: (g) => fmtQty(g.not_backed_qty), copyValue: (g) => g.not_backed_qty },
   ];
-  const columns = view === "ITEMS" ? simpleColumns : view === "ITEMS_FULL" ? itemColumns : view === "EXCESS" ? excessColumns : view === "TRANSFERS" ? transferColumns : view === "PRODUCT" ? productColumns : view === "MATERIAL" ? materialColumns : groupColumnsSummary;
-  const gridRows = view === "ITEMS" || view === "ITEMS_FULL" ? itemRows : view === "EXCESS" ? excessRows : view === "TRANSFERS" ? transfers : view === "PRODUCT" ? rows : view === "MATERIAL" ? materialSummary : groupSummary;
+  const columns = view === "RECEIPT" ? simpleColumns : view === "USAGE" ? usageColumns : view === "ITEMS" ? simpleColumns : view === "ITEMS_FULL" ? itemColumns : view === "EXCESS" ? excessColumns : view === "TRANSFERS" ? transferColumns : view === "PRODUCT" ? productColumns : view === "MATERIAL" ? materialColumns : groupColumnsSummary;
+  const gridRows = view === "RECEIPT" ? receiptRows : view === "USAGE" ? usageRows : view === "ITEMS" || view === "ITEMS_FULL" ? itemRows : view === "EXCESS" ? excessRows : view === "TRANSFERS" ? transfers : view === "PRODUCT" ? rows : view === "MATERIAL" ? materialSummary : groupSummary;
 
   async function exportExcel() {
     try {
       const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
+      // Usage tab: detail block on the left, a blank column, then the consolidated block — one sheet, rows lined up by position.
+      const isUsage = view === "USAGE";
+      const exportColumns = isUsage
+        ? [...usageColumns, { key: "gap", label: "", width: "30px" }, ...usageTotalColumns.map((c) => ({ ...c, key: `t_${c.key}`, label: `Total · ${c.label}` }))]
+        : columns;
+      const exportRows = isUsage ? Array.from({ length: Math.max(usageRows.length, usageTotals.length) }, (_, i) => ({ d: usageRows[i] ?? null, t: usageTotals[i] ?? null })) : gridRows;
       await downloadColoredExcelFile({
-        fileName: `po22_store_report_${source?.calendar?.as_of ?? asOf}.xlsx`,
-        sheetName: "Store Report",
-        columns: columns.map((c) => ({ key: c.key, label: c.label, width: c.width, align: c.align })),
-        rows: gridRows,
+        fileName: `po22_store_report_${view === "USAGE" ? "usage" : view === "RECEIPT" ? "receipt_hold" : "detail"}_${source?.calendar?.as_of ?? asOf}.xlsx`,
+        sheetName: view === "USAGE" ? "Usage" : view === "RECEIPT" ? "Receipt & hold" : "Store Report",
+        columns: exportColumns.map((c) => ({ key: c.key, label: c.label, width: c.width, align: c.align })),
+        rows: exportRows,
         getCellValue: (row, column) => {
+          if (isUsage) {
+            if (column.key === "gap") return "";
+            const total = column.key.startsWith("t_");
+            const rec = total ? row.t : row.d;
+            const col = total ? usageTotalColumns.find((c) => `t_${c.key}` === column.key) : usageColumns.find((c) => c.key === column.key);
+            return rec && col ? col.copyValue(rec) : "";
+          }
           const col = columns.find((c) => c.key === column.key);
           return col?.copyValue ? col.copyValue(row) : row[column.key] ?? "";
         },
@@ -2134,14 +2167,19 @@ function StoreReportTab({ companyId, companyText, planMonth, asOf, demandAt }) {
             {(runsQ.data?.rows ?? []).map((r) => <option key={r.id} value={r.id}>{new Date(r.created_at).toLocaleString()} · as-of {r.as_of} · {r.created_by_name}</option>)}
           </select>
         </label>
-        {["ITEMS", "ITEMS_FULL", "EXCESS", "TRANSFERS", "PRODUCT", "MATERIAL", "GROUP"].map((option) => (
-          <button key={option} type="button" onClick={() => setView(option)} className={`h-8 border px-3 text-xs font-semibold ${view === option ? "border-sky-300 bg-sky-50 text-sky-900" : "border-slate-300 bg-white text-slate-700"}`}>
-            {option === "ITEMS" ? "Items by period" : option === "ITEMS_FULL" ? "Items — full detail" : option === "EXCESS" ? "Excess left" : option === "TRANSFERS" ? `Transfers (${transfers.length})` : option === "PRODUCT" ? "Product-wise (detail)" : option === "MATERIAL" ? "Material summary" : "Group summary"}
-          </button>
+        {[["RECEIPT", "Receipt & hold"], ["USAGE", "Usage"]].map(([option, label]) => (
+          <button key={option} type="button" onClick={() => setView(option)} className={`h-8 border px-3 text-xs font-semibold ${view === option ? "border-sky-300 bg-sky-50 text-sky-900" : "border-slate-300 bg-white text-slate-700"}`}>{label}</button>
         ))}
+        <label className="grid gap-1 text-xs text-slate-700">
+          <span className="font-medium">More views</span>
+          <select value={["RECEIPT", "USAGE"].includes(view) ? "" : view} onChange={(event) => event.target.value && setView(event.target.value)} className={`${INPUT_CLASS} w-52`}>
+            <option value="">—</option>
+            {[["ITEMS", "Items by period (all items)"], ["ITEMS_FULL", "Items — full detail"], ["EXCESS", "Excess left"], ["TRANSFERS", `Transfers (${transfers.length})`], ["PRODUCT", "Product-wise (detail)"], ["MATERIAL", "Material summary"], ["GROUP", "Group summary"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          </select>
+        </label>
         <button type="button" onClick={() => void exportExcel()} disabled={!source} className="h-8 border border-emerald-600 bg-emerald-600 px-3 text-sm font-semibold text-white hover:bg-emerald-700 disabled:opacity-50">Excel</button>
       </div>
-      {view === "ITEMS" ? (
+      {view === "RECEIPT" || view === "ITEMS" ? (
         <p className="text-xs text-slate-600">
           <strong>Issue now</strong> = Store may issue this from stock it has today. <strong>Wait for receipt</strong> = do not issue yet; it depends on stock still to arrive.
           <strong> Keep aside</strong> = what must stay reserved for that group after this period&apos;s use (it is not part of Issue now); it covers up to the group&apos;s Max days of its demand.
@@ -2150,10 +2188,23 @@ function StoreReportTab({ companyId, companyText, planMonth, asOf, demandAt }) {
       <p className="text-xs text-slate-500">
         &quot;Use first from&quot; is a planning-only FEFO instruction: Opening Stock is valid for 120 days from its opening-stock date; GRN uses its recorded expiry/life or GRN date + 120 days. It does not post or verify a physical issue. &quot;Not yet backed&quot; depends on future arrivals or is short: never issue against it. If the production mix changes, follow the row of the product actually produced; shared stock cannot serve every product in full.
       </p>
-      {source && !hasPlan && (view === "ITEMS" || view === "ITEMS_FULL" || view === "EXCESS") ? (
+      {source && !hasPlan && (view === "RECEIPT" || view === "USAGE" || view === "ITEMS" || view === "ITEMS_FULL" || view === "EXCESS") ? (
         <p className="border border-amber-300 bg-amber-50 px-2 py-1 text-xs text-amber-900">This saved run is older than the month-by-month Store plan: it shows only this month and next, and its quantities are the older &quot;from physical stock&quot; figures. Calculate live for the whole horizon.</p>
       ) : null}
-      <ErpDenseGrid {...GRID_PROPS} columns={columns} rows={gridRows} rowKey={(r) => (view === "ITEMS" || view === "ITEMS_FULL" ? r.key : view === "EXCESS" ? `${r.period}|${r.material_id}` : view === "TRANSFERS" ? `${r.by}|${r.material_id}|${r.from}|${r.to}` : view === "PRODUCT" ? `${r.pool_key}|${r.period}|${r.material_id ?? "rest"}|${r.receipt_reference ?? "none"}|${r.receipt_valid_until ?? ""}` : view === "MATERIAL" ? r.key : r.group_id)} emptyMessage={(runId ? runQ.isLoading : liveQ.isLoading) ? "Loading…" : "No demand in CM + NM."} maxHeight="calc(100vh - 340px)" />
+      {view === "USAGE" ? (
+        <div className="grid gap-2 xl:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)]">
+          <div className="grid gap-1">
+            <p className="text-xs font-semibold text-slate-700">Usage — which item is used in which period, for which parent / child group</p>
+            <ErpDenseGrid {...GRID_PROPS} columns={usageColumns} rows={usageRows} rowKey={(r) => r.key} emptyMessage={liveQ.isLoading ? "Loading…" : "No usage in the plan."} maxHeight="calc(100vh - 360px)" />
+          </div>
+          <div className="grid gap-1">
+            <p className="text-xs font-semibold text-slate-700">Consolidated — total use of each item per period</p>
+            <ErpDenseGrid {...GRID_PROPS} columns={usageTotalColumns} rows={usageTotals} rowKey={(r) => r.key} emptyMessage={liveQ.isLoading ? "Loading…" : "No usage in the plan."} maxHeight="calc(100vh - 360px)" />
+          </div>
+        </div>
+      ) : (
+        <ErpDenseGrid {...GRID_PROPS} columns={columns} rows={gridRows} rowKey={(r) => (view === "RECEIPT" || view === "ITEMS" || view === "ITEMS_FULL" ? r.key : view === "EXCESS" ? `${r.period}|${r.material_id}` : view === "TRANSFERS" ? `${r.by}|${r.material_id}|${r.from}|${r.to}` : view === "PRODUCT" ? `${r.pool_key}|${r.period}|${r.material_id ?? "rest"}|${r.receipt_reference ?? "none"}|${r.receipt_valid_until ?? ""}` : view === "MATERIAL" ? r.key : r.group_id)} emptyMessage={(runId ? runQ.isLoading : liveQ.isLoading) ? "Loading…" : view === "RECEIPT" ? "No grouped item in the plan." : "No demand in CM + NM."} maxHeight="calc(100vh - 340px)" />
+      )}
     </div>
   );
 }
