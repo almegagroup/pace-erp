@@ -763,3 +763,11 @@ a prepone is still advised; (2) the family's other orders start at their own lat
 until applying all of them needs no extra buying and adds no day below Min; (3) the family line says what applying ALL of the "What to do" dates costs.
 CMP003 PROD snapshot: MHEC family 4,000 KG less to buy, 1 fewer level-day below Min; RDP family no extra buying, no extra day below Min.
 Not verified on CMP005 / CMP011 data (offline copies could not be rebuilt).
+
+## 46. The same need through the other route: import <-> local (owner 2026-10-30)
+
+Allocations can force a vendor (e.g. Celanese import) where the plan has a local one (Chemexim). Each ENGINE row of the Prediction table now also lists, in
+"Other route (import ↔ local)", every eligible alternative of the OPPOSITE route type: the members of the need's group (or the same item) with a vendor of that
+route, each with the ETD / ETA to Port (import only) / ETA to Plant that would land it on the SAME plant date (plant date − route days; port = plant − port-to-plant
+days). Only options that can still connect when ordered from today (the ETD is not in the past) are listed; one that would arrive after the need date is left out.
+CMP003 PROD snapshot: 35 of 178 engine rows carry at least one alternative.

@@ -174,6 +174,37 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       };
     };
     const advisory = plan.buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE");
+    /**
+     * Owner 2026-10-30: for an engine order, what the SAME need would look like through the OTHER route (import <-> local): every eligible member of the
+     * need's group (or the same item) with a vendor of the opposite route type, with the ETD / ETA to Port / ETA to Plant that would land it on the same plant date.
+     * Only options that can still connect when ordered from today (the ETD is not in the past) are listed.
+     */
+    const addDaysIso2 = (day: string, n: number) => new Date(Date.parse(`${day}T00:00:00Z`) + n * 86_400_000).toISOString().slice(0, 10);
+    const routesOf = (materialId: string, vendorId: string | null | undefined) => (rowById.get(materialId)?.lead_time?.configured_routes ?? [])
+      .filter((r) => r.route_days !== undefined && (!vendorId || r.vendor_id === vendorId));
+    const alternativesFor = (buy: { material_id: string; vendor_id?: string | null; need_kind?: string; trigger_group_id?: string | null } | undefined, plantDate: string | null) => {
+      if (!buy || !plantDate) return [] as Array<{ route: string; material: string; vendor: string; etd: string; port: string | null; plant: string; moq: number | null }>;
+      const chosenOption = buy.vendor_id ? (vendorOptions.get(buy.material_id) ?? []).find((o) => o.vendor_id === buy.vendor_id) : undefined;
+      const chosenRoutes = routesOf(buy.material_id, buy.vendor_id);
+      const chosenRoute = (chosenRoutes.find((r) => chosenOption && r.route_days === chosenOption.lead_time_days) ?? chosenRoutes[0])?.route ?? null;
+      if (!chosenRoute) return [];
+      const groupMaterials = buy.need_kind === "GROUP" && buy.trigger_group_id
+        ? (reqData.masters.groupMembers.get(buy.trigger_group_id) ?? []).filter((m) => m.active).map((m) => m.material_id) : [];
+      const candidates = [...new Set([buy.material_id, ...groupMaterials])];
+      const out: Array<{ route: string; material: string; vendor: string; etd: string; port: string | null; plant: string; moq: number | null }> = [];
+      for (const m of candidates) {
+        for (const option of vendorOptions.get(m) ?? []) {
+          for (const r of routesOf(m, option.vendor_id)) {
+            if (r.route === chosenRoute || r.route_days === undefined || option.lead_time_days === null) continue;
+            const etd = addDaysIso2(plantDate, -r.route_days);
+            if (etd < calendar.asOf) continue; // ordered from today it would land after the need date: it would not connect
+            const port = r.route === "IMPORT" && r.inland_days !== undefined ? addDaysIso2(plantDate, -r.inland_days) : null;
+            out.push({ route: r.route, material: nameOf(m), vendor: r.vendor_label, etd, port, plant: plantDate, moq: option.moq_qty_base ?? null });
+          }
+        }
+      }
+      return out;
+    };
 
     // ── Family / item planning blocks: every item with use, arrival or lot in the horizon ──
     const active = new Set(projection.rows.filter((r) => !bulkRm.has(r.material_id) && (r.demand_qty_base > 0 || r.confirmed_arrival_qty_base > 0 || r.planned_lot_qty_base > 0)).map((r) => r.material_id));
@@ -271,7 +302,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         return {
           ...p, max_days: p.date ? gridByDay.get(p.date)?.max_days ?? null : null, min_days: p.date ? gridByDay.get(p.date)?.min_days ?? null : null,
           max_days_est: p.date ? gridByDay.get(p.date)?.max_days_est ?? null : null, min_days_est: p.date ? gridByDay.get(p.date)?.min_days_est ?? null : null,
-          trigger_cover_days: buy?.trigger_cover_days ?? null, trigger_min_days: buy?.trigger_min_days ?? null, trigger_kind: buy?.need_kind ?? null, min_gap: buy?.min_gap ?? null,
+          trigger_cover_days: buy?.trigger_cover_days ?? null, trigger_min_days: buy?.trigger_min_days ?? null, trigger_kind: buy?.need_kind ?? null, min_gap: buy?.min_gap ?? null, alternatives: p.source === "ENGINE" ? alternativesFor(buy, p.date) : [],
           trigger_group: buy?.trigger_group_id ? groupLabel.get(buy.trigger_group_id) ?? null : null,
           // Every group this one physical lot also feeds (same arrival date), so the sheet can name them all.
           trigger_also_groups: (buy?.covers ?? []).filter((c: string) => c !== "OWN" && c !== "MEMBER_GUARD" && c !== buy?.trigger_group_id).map((c: string) => groupLabel.get(c) ?? "—"),
