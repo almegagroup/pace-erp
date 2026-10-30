@@ -140,11 +140,19 @@ async function generateProcurementDocNumber(docType: string): Promise<string> {
 }
 
 // §133.12 — a line/allocation's remaining balance = its own total qty minus
-// every non-cancelled DO's already-drawn quantity against it. Generalizes
+// every non-cancelled DO's already-drawn quantity against it by default.  A
+// Depot SO is the explicit exception: the owner locked that a cancelled Depot
+// DO consumes its SO quantity permanently, so its direct SO-line calculation
+// opts in to including cancelled rows. Generalizes
 // delivery_order.handlers.ts's old fetchLockedLineIds (a boolean lock) into
 // a running sum, since one vehicle no longer has to take a line's entire
 // remaining balance at once (§133.12 Page 1 point 3).
-async function computeDrawnQtyByColumn(column: "so_line_id" | "sto_line_id" | "so_map_allocation_id" | "packing_order_id", ids: string[], excludeDcId?: string): Promise<Map<string, number>> {
+async function computeDrawnQtyByColumn(
+  column: "so_line_id" | "sto_line_id" | "so_map_allocation_id" | "packing_order_id",
+  ids: string[],
+  excludeDcId?: string,
+  includeCancelled = false,
+): Promise<Map<string, number>> {
   const map = new Map<string, number>();
   if (ids.length === 0) return map;
   const rows = await fetchInChunks<JsonRecord>(ids, (chunk) => {
@@ -152,8 +160,8 @@ async function computeDrawnQtyByColumn(column: "so_line_id" | "sto_line_id" | "s
       .schema("erp_procurement")
       .from("delivery_challan_line")
       .select(`${column}, quantity, delivery_challan!inner(status)`)
-      .in(column, chunk)
-      .neq("delivery_challan.status", "CANCELLED");
+      .in(column, chunk);
+    if (!includeCancelled) query = query.neq("delivery_challan.status", "CANCELLED");
     if (excludeDcId) query = query.neq("dc_id", excludeDcId);
     return query;
   });
@@ -418,17 +426,14 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
       }, ctx.request_id, req);
     }
 
-    // DEPENDENT_* — read through SO Map's active allocations, grouped by
-    // fo_id or customer_address_id.
-    const { data: allocations, error: allocError } = await serviceRoleClient
-      .schema("erp_procurement").from("sales_order_map_allocation")
-      .select("*").eq("so_id", soId).eq("status", "ACTIVE");
-    if (allocError) return doErrorResponse(req, ctx, "DO_SO_MAP_ALLOCATION_FETCH_FAILED", 500, "Unable to load SO Map allocations.");
-    const allocationRows = (allocations ?? []) as JsonRecord[];
-    // §133.9 Depot / No-Inbound-Depot: without an FO there is one already
-    // resolved destination, so no customer-address mapping is required.
-    if (toUpperTrimmedString((so as JsonRecord).bill_to_type) === "DEPOT" && allocationRows.length === 0) {
-      const drawnByLine = await computeDrawnQtyByColumn("so_line_id", lineRows.map((row) => String(row.id)));
+    // A Depot has one fixed Ship-To chosen on the SO itself. It is never a
+    // quantity allocation workflow: old SO Map rows are historical evidence
+    // only and must not shrink this SO line's next dispatchable balance.
+    // This covers Dependent Depot and No-Inbound Depot alike, identified by
+    // their resolved Bill-To rather than a fragile dispatch-type shortcut.
+    if (toUpperTrimmedString((so as JsonRecord).bill_to_type) === "DEPOT") {
+      const depotSoLineIds = lineRows.map((row) => String(row.id));
+      const drawnByLine = await computeDrawnQtyByColumn("so_line_id", depotSoLineIds, undefined, true);
       const withRemaining = lineRows.map((row) => {
         const total = Number(row.base_qty ?? row.quantity ?? 0);
         const drawn = drawnByLine.get(String(row.id)) ?? 0;
@@ -446,6 +451,14 @@ export async function listDoAddSoOptionsHandler(req: Request, ctx: ProcurementHa
         }],
       }, ctx.request_id, req);
     }
+
+    // DEPENDENT_DIRECT / non-Depot DEPENDENT_NO_INBOUND — read through SO
+    // Map's active allocations, grouped by FO or customer address.
+    const { data: allocations, error: allocError } = await serviceRoleClient
+      .schema("erp_procurement").from("sales_order_map_allocation")
+      .select("*").eq("so_id", soId).eq("status", "ACTIVE");
+    if (allocError) return doErrorResponse(req, ctx, "DO_SO_MAP_ALLOCATION_FETCH_FAILED", 500, "Unable to load SO Map allocations.");
+    const allocationRows = (allocations ?? []) as JsonRecord[];
     const drawnByAllocation = await computeDrawnQtyByColumn("so_map_allocation_id", allocationRows.map((row) => String(row.id)));
 
     const foIds = [...new Set(allocationRows.map((row) => toTrimmedString(row.fo_id)).filter(Boolean))];
@@ -941,6 +954,31 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
     );
     const stoLineMap = new Map(stoLineRows.map((row) => [String(row.id), row]));
     const allocationMap = new Map(allocationRows.map((row) => [String(row.id), row]));
+    // Depot dispatch is deliberately direct from the SO line. Resolve the
+    // owning SO once here so submit-time validation cannot be tricked back
+    // into an old SO Map allocation by a stale browser payload.
+    const sourceSoIds = [...new Set(
+      [...soLineMap.values()].map((row) => toTrimmedString(row.so_id)).filter(Boolean),
+    )];
+    const { data: sourceSoRows, error: sourceSoError } = sourceSoIds.length
+      ? await serviceRoleClient.schema("erp_procurement").from("sales_order")
+        .select("id, bill_to_type").in("id", sourceSoIds)
+      : { data: [] as JsonRecord[], error: null };
+    if (sourceSoError) throw new Error("DO_SOURCE_SO_FETCH_FAILED");
+    const depotSoIds = new Set(
+      ((sourceSoRows ?? []) as JsonRecord[])
+        .filter((row) => toUpperTrimmedString(row.bill_to_type) === "DEPOT")
+        .map((row) => toTrimmedString(row.id)),
+    );
+    const depotSoLineIds = [...new Set(
+      [...soLineMap.values()]
+        .filter((row) => depotSoIds.has(toTrimmedString(row.so_id)))
+        .map((row) => toTrimmedString(row.id))
+        .filter(Boolean),
+    )];
+    const drawnByDepotSoLine = await computeDrawnQtyByColumn(
+      "so_line_id", depotSoLineIds, excludeDcId, true,
+    );
 
     // §133.18 -- never trust a client-submitted packing_order_id for an
     // FO-linked line without checking it's actually one of that FO's own
@@ -1010,6 +1048,7 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
     // but that's a Plan Feed-side invariant this handler shouldn't silently
     // depend on -- this makes the <= check exact regardless.
     const allocationUsedInThisSubmission = new Map<string, number>();
+    const directSoUsedInThisSubmission = new Map<string, number>();
     const stoUsedInThisSubmission = new Map<string, number>();
     const stockUsedInThisSubmission = new Map<string, number>();
 
@@ -1029,9 +1068,20 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
         throw new Error("DO_LINE_INVALID");
       }
 
-      const soMapAllocationId = toTrimmedString(raw.so_map_allocation_id);
-      const soLineId = toTrimmedString(raw.so_line_id);
+      let soMapAllocationId = toTrimmedString(raw.so_map_allocation_id);
+      let soLineId = toTrimmedString(raw.so_line_id);
       const stoLineId = toTrimmedString(raw.sto_line_id);
+
+      // A legacy/stale client may still submit a Depot allocation id. Its
+      // source is the SO line, never the allocation ceiling; normalize it
+      // before choosing the validation branch and before persisting the line.
+      if (soMapAllocationId) {
+        const mappedSourceLineId = toTrimmedString(allocationMap.get(soMapAllocationId)?.so_line_id);
+        if (mappedSourceLineId && depotSoLineIds.includes(mappedSourceLineId)) {
+          soLineId = mappedSourceLineId;
+          soMapAllocationId = "";
+        }
+      }
 
       let materialId: string;
       let uomCode: string;
@@ -1042,6 +1092,7 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
       let expiryDate: string | null = toTrimmedString(raw.expiry_date) || null;
       let packingOrderId: string | null = toTrimmedString(raw.packing_order_id) || null;
       let salesSourceLine: JsonRecord | null = null;
+      let usesDirectSoLine = false;
 
       if (soMapAllocationId) {
         const allocation = allocationMap.get(soMapAllocationId);
@@ -1119,7 +1170,12 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
         materialId = toTrimmedString(sourceLine.material_id);
         salesSourceLine = sourceLine;
         uomCode = toTrimmedString(sourceLine.uom_code);
-        remaining = Number(sourceLine.base_qty ?? sourceLine.quantity ?? 0) - (drawnBySoLine.get(soLineId) ?? 0);
+        const historicalDrawn = depotSoLineIds.includes(soLineId)
+          ? (drawnByDepotSoLine.get(soLineId) ?? 0)
+          : (drawnBySoLine.get(soLineId) ?? 0);
+        remaining = Number(sourceLine.base_qty ?? sourceLine.quantity ?? 0) - historicalDrawn
+          - (directSoUsedInThisSubmission.get(soLineId) ?? 0);
+        usesDirectSoLine = true;
         sourceType = "SALES_ORDER";
         sourceId = toTrimmedString(sourceLine.so_id);
         if (!batchNumber) batchNumber = toTrimmedString(sourceLine.batch_number) || null;
@@ -1167,6 +1223,9 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
       }
       if (soMapAllocationId) {
         allocationUsedInThisSubmission.set(soMapAllocationId, (allocationUsedInThisSubmission.get(soMapAllocationId) ?? 0) + quantity);
+      }
+      if (usesDirectSoLine && soLineId) {
+        directSoUsedInThisSubmission.set(soLineId, (directSoUsedInThisSubmission.get(soLineId) ?? 0) + quantity);
       }
       if (!deferStockReservation) {
         const stockKey = `${storageLocationId}|${materialId}`;
