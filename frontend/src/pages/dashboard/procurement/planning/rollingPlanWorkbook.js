@@ -152,7 +152,13 @@ const triggeredBy = (x) => {
   if (x.trigger_kind === "OWN") return `Its own use${also}`;
   return also.trim();
 };
-const PRED_HEAD = ["", "Import ETD / Dispatch date", "LCL-ETD / Port ETA", "Date", "Quantity to Dispatch", "Family Max Days", "Family Min Days", "Material", "Supplier", "PO by", "UoM", "Cover that triggered the order (d)", "Item's own Min it was compared with (d)", "Triggered by"];
+/** Owner 2026-10-30: a late new order cannot save the Min: say how long it is below Min, how low the cover goes and whether Critical holds. */
+const minGapText = (g) => {
+  if (!g) return "";
+  const crit = g.critical_days !== null && g.critical_days !== undefined ? `, Critical ${g.critical_days} d` : "";
+  return `Min cannot be saved: below Min for ${g.days_below_min} day(s) (${g.from} to ${g.to}), cover down to ${Math.floor(g.lowest_cover_days)} d (Min ${g.min_days} d${crit}). ${g.critical_broken ? "Critical is ALSO broken." : "Critical holds."}`;
+};
+const PRED_HEAD = ["", "Import ETD / Dispatch date", "LCL-ETD / Port ETA", "Date", "Quantity to Dispatch", "Family Max Days", "Family Min Days", "Material", "Supplier", "PO by", "UoM", "Cover that triggered the order (d)", "Item's own Min it was compared with (d)", "Triggered by", "Min / Critical status"];
 
 /**
  * Days of cover. When the stock outlasts the PO21 plan the engine sends no day count but an estimate at the plan's average daily use:
@@ -225,10 +231,11 @@ function writeBlocks(sheet, companies, kind) {
       for (const x of b.prediction) {
         const row = sheet.addRow([
           x.source === "YOU" ? "Planner" : "Engine", day(x.import_etd), day(x.port_eta), day(x.date), num(x.qty), coverCell(x.max_days, x.max_days_est, 0, b.plan_end), coverCell(x.min_days, x.min_days_est, 0, b.plan_end), x.material, x.supplier ?? "", day(x.po_by),
-          x.uom ?? "", days(x.trigger_cover_days), days(x.trigger_min_days), triggeredBy(x),
+          x.uom ?? "", days(x.trigger_cover_days), days(x.trigger_min_days), triggeredBy(x), minGapText(x.min_gap),
         ]);
         row.eachCell((cell, i) => { cell.border = BORDER; if (i >= 5 && i <= 7) cell.numFmt = NUM; });
         row.getCell(14).alignment = { wrapText: true, vertical: "top" };
+        row.getCell(15).alignment = { wrapText: true, vertical: "top" };
       }
     }
     sheet.addRow([]);

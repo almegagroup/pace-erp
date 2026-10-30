@@ -722,3 +722,10 @@ without this lot (stock-out and unserved group demand still count). The old, loo
 "Absolute latest (Critical limit): <date>", with what it would cost against the Min (extra days below Min, lowest cover). The jointly-safe check
 also compares days below Min (not Critical). `optimizeFamilyArrival(input, key, protect)` defaults to `"MIN"`; `"CRITICAL"` restores the old rule.
 Effect on the CMP003 PROD snapshot: advised dates move earlier (e.g. CABLE TIE: 6 Dec → 21 Nov), "moves advised" 5 → 3.
+
+## 41. A new order that is too late to save the Min (owner 2026-10-30)
+
+When no lot can land before a level reaches its Min (lead time too long), the engine now says so on that order (Prediction → "Min / Critical status"):
+how many days the level sits below its Min until the earliest possible lot lands, how low its cover goes, and whether even the Critical holds,
+next to the order's own Import ETD / Port ETA / Plant date (today + lead time). PROD snapshot CMP003: 9 engine orders carry this note
+(e.g. DOLTEX 30/80: 5 days below Min, cover down to 6 d, Critical broken).

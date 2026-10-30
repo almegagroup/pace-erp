@@ -169,6 +169,11 @@ export type FamilyBuy = OptimizerAdvisoryBuy & {
   /** Owner 2026-10-29: the group whose free stock triggered this lot (null for an own-use trigger). */
   trigger_group_id?: string | null;
   trigger_min_days?: number | null;
+  /**
+   * Owner 2026-10-30: only for a LATE new order (no lot can land before the level reaches its Min). The Min cannot be saved: how many days the
+   * level sits below its Min until the earliest possible lot lands, how low its cover goes, and whether even the Critical is broken.
+   */
+  min_gap?: { days_below_min: number; from: string; to: string; lowest_cover_days: number; min_days: number; critical_days: number | null; critical_broken: boolean } | null;
 };
 
 export type FamilyResult = Omit<OptimizerProjectionResult, "advisory_buys"> & {
@@ -1688,7 +1693,20 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
     risks: risks.sort((a, b) => a.material_id.localeCompare(b.material_id)),
     group_pool_risks: groupPoolRisks,
     arrival_flags: arrivalFlags.sort((a, b) => a.source_key.localeCompare(b.source_key)),
-    advisory_buys: buys.sort((a, b) => a.material_id.localeCompare(b.material_id) || a.sequence - b.sequence),
+    advisory_buys: buys.map((b) => {
+      if (b.status !== "ADVISORY_LATE" || !b.need_date || !b.estimated_plant_eta) return b;
+      const from = allDays.indexOf(b.need_date);
+      const to = allDays.indexOf(b.estimated_plant_eta);
+      const levelIdx = b.need_kind === "OWN" ? ids.indexOf(b.material_id) : pools.findIndex((p) => p.group_id === b.trigger_group_id);
+      if (from < 0 || to < 0 || levelIdx < 0) return b;
+      const dip = sim.risk.filter((r) => r.kind === b.need_kind && r.level === levelIdx && r.day >= from && r.day < to);
+      if (dip.length === 0) return b;
+      const low = dip.reduce((a, c) => (c.cover < a.cover ? c : a));
+      return { ...b, min_gap: {
+        days_below_min: dip.length, from: allDays[dip[0].day], to: allDays[dip[dip.length - 1].day], lowest_cover_days: low.cover, min_days: low.min, critical_days: low.critical,
+        critical_broken: low.critical !== null && low.cover + 1e-9 < low.critical,
+      } };
+    }).sort((a, b) => a.material_id.localeCompare(b.material_id) || a.sequence - b.sequence),
     group_unmet: groupUnmet,
     level_events: sim.levelEvents.map((event) => ({
       day: allDays[event.day], kind: event.kind, level_kind: event.level_kind,
