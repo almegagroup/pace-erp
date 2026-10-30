@@ -1833,13 +1833,18 @@ export type FamilyArrivalOptimum = {
    * fill one day after the advised date; for a prepone it is the one the current date leaves unfilled. Null when no date is advised.
    */
   binding: { day: string; min_day: string; level_kind: "OWN" | "GROUP"; level_id: string; cover_days: number; min_days: number; critical_days: number | null; desired_days: number | null; topup: { day: string; wanted: number; shortfall: number; pool_before: number } | null } | null;
+  /** Owner 2026-10-30: what the date protects ("MIN" = every level stays at or above its Min; "CRITICAL" = only above Critical). */
+  protect: "MIN" | "CRITICAL";
+  /** Owner 2026-10-30: the absolute latest plant date that still keeps every level above its CRITICAL (null when none is needed / no later date). */
+  critical_latest_eta: string | null;
 } | null;
 
 /**
- * Owner 2026-10-29, the PDF's rule: a level may sit below its Min (it keeps asking the pool) but must stay above its Critical.
- * A piece is "needed" when, without it, a level goes below Critical (or stock runs out / group demand is unserved) inside the plan.
+ * Owner 2026-10-30: the advised date PROTECTS THE MIN (default). A piece is "needed" when, without it, a level goes below its Min (or stock
+ * runs out / group demand is unserved) inside the plan. `protect = "CRITICAL"` is the older, looser rule (only Critical is guarded); the
+ * absolute latest date under that looser rule is always returned as `critical_latest_eta`.
  */
-export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: string): FamilyArrivalOptimum {
+export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: string, protect: "MIN" | "CRITICAL" = "MIN"): FamilyArrivalOptimum {
   const piece = input.confirmed_arrivals.find((a) => a.source_key === pieceKey);
   if (!piece || !piece.eta_to_plant || !ISO_DAY.test(piece.eta_to_plant)) return null;
   const currentEta = piece.eta_to_plant;
@@ -1867,11 +1872,18 @@ export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: strin
   const withoutRisk = riskDays(without);
   const earlyRisk = riskDays(earliest);
   const isCritical = (x: { critical_days: number | null; cover_days: number }) => x.critical_days !== null && x.cover_days + 1e-9 < x.critical_days;
-  const prevented = [
+  const preventedFor = (onlyCritical: boolean) => [
     ...without.rows.filter((row) => inPlan(row.day) && row.closing_qty_base < -EPSILON && !earlyRisk.has(`STOCK|${row.day}`)).map((row) => ({ day: row.day, level: null as null | { level_kind: "OWN" | "GROUP"; level_id: string } })),
     ...without.group_unmet.filter((u) => inPlan(u.day) && !earlyRisk.has(`UNMET|${u.group_id}|${u.day}`)).map((u) => ({ day: u.day, level: { level_kind: "GROUP" as const, level_id: u.group_id } })),
-    ...without.level_risk.filter((x) => inPlan(x.day) && isCritical(x) && !earlyRisk.has(`${x.level_kind}|${x.level_id}|${x.day}`)).map((x) => ({ day: x.day, level: { level_kind: x.level_kind, level_id: x.level_id } })),
+    ...without.level_risk.filter((x) => inPlan(x.day) && (!onlyCritical || isCritical(x)) && !earlyRisk.has(`${x.level_kind}|${x.level_id}|${x.day}`)).map((x) => ({ day: x.day, level: { level_kind: x.level_kind, level_id: x.level_id } })),
   ].sort((a, b) => a.day.localeCompare(b.day));
+  const prevented = preventedFor(protect === "CRITICAL");
+  const preventedCritical = preventedFor(true);
+  let criticalLatest: string | null = null;
+  if (preventedCritical.length > 0) {
+    criticalLatest = addDays(preventedCritical[0].day, -1);
+    if (criticalLatest < input.as_of) criticalLatest = input.as_of;
+  }
   const needed = prevented.length > 0;
   const firstDay = prevented[0]?.day ?? null;
   let bestEta = currentEta;
@@ -1887,13 +1899,14 @@ export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: strin
     const sc = familyScore(r);
     return { eta, ...familyDays(r, eta), shortage_days: sc[0], days_below_critical: sc[1], days_below_target: sc[2], first_below_target_day: null };
   };
+  const limit = protect === "MIN" ? "Min" : "Critical";
   const reason = notNeededInPlan
-    ? `Not needed inside the PO21 plan (it ends ${planEndDay}): without this lot no level goes below its Critical before the plan ends.`
+    ? `Not needed inside the PO21 plan (it ends ${planEndDay}): without this lot no level goes below its ${limit} before the plan ends.`
     : shift === 0
-      ? `Current date is right: without this lot a level first goes below its Critical on ${firstDay ?? "—"}.`
+      ? `Current date is right: without this lot a level first goes below its ${limit} on ${firstDay ?? "—"}.`
       : shift > 0
-        ? `Can wait: without this lot a level first goes below its Critical on ${firstDay}.`
-        : `Too late: without this lot a level first goes below its Critical on ${firstDay}.`;
+        ? `Can wait: without this lot a level first goes below its ${limit} on ${firstDay}.`
+        : `Too late: without this lot a level first goes below its ${limit} on ${firstDay}.`;
   // Why this piece is needed: the level that first depends on it, in the run without the piece.
   let binding: NonNullable<FamilyArrivalOptimum>["binding"] = null;
   const first = prevented[0];
@@ -1922,7 +1935,7 @@ export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: strin
       avg_daily_use: roundQty(use / tail.length),
     };
   }
-  return { current: view(currentEta, cur), best: view(bestEta, best), shift_days: shift, reason, not_needed_in_plan: notNeededInPlan, plan_end: planEndDay, plan_cover: planCover, binding };
+  return { current: view(currentEta, cur), best: view(bestEta, best), shift_days: shift, reason, not_needed_in_plan: notNeededInPlan, plan_end: planEndDay, plan_cover: planCover, binding, protect, critical_latest_eta: criticalLatest };
 }
 
 /**

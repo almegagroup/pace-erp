@@ -714,3 +714,11 @@ when the advised date is later than the recorded one: how many more days the lev
 (counted only up to the landing day; days that are below Min even if the lot landed today are not blamed on the lot), and the lowest cover it
 sinks to (Min and Critical named). Example (PROD snapshot): Gabrosa lot recorded 8 Dec → advised 8 Jan: Exclusive below Min 9 more days (0 → 9),
 cover sinks to 21 d (Min 30, Critical 20). Not shown for overdue lots.
+
+## 40. The advised date now protects the MIN (owner 2026-10-30, replaces the Critical-only rule of §30)
+
+Owner: the Target (Min) must be protected, not only Critical. The advised latest date is now the day before a level would first go below its **Min**
+without this lot (stock-out and unserved group demand still count). The old, looser date is kept as information:
+"Absolute latest (Critical limit): <date>", with what it would cost against the Min (extra days below Min, lowest cover). The jointly-safe check
+also compares days below Min (not Critical). `optimizeFamilyArrival(input, key, protect)` defaults to `"MIN"`; `"CRITICAL"` restores the old rule.
+Effect on the CMP003 PROD snapshot: advised dates move earlier (e.g. CABLE TIE: 6 Dec → 21 Nov), "moves advised" 5 → 3.

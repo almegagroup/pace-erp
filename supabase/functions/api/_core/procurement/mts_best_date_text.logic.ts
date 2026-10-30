@@ -55,18 +55,22 @@ export type BestDateWhyInput = {
   /** Days the recorded plant date is already in the past while nothing is shipped. */
   overdue_days?: number | null;
   /** Owner 2026-10-30: the cost of the advised date against the level's Min (Target): extra days below Min and the lowest cover reached. */
+  critical_latest_eta?: string | null;
   move_cost?: { below_min_days_now: number; below_min_days_moved: number; lowest_cover_days_moved: number | null; min_days: number | null; critical_days: number | null; level_label?: string | null } | null;
 };
 
-/** One plain sentence: what landing on the advised date does to the Min (Target), which the date itself does not protect. */
-export function moveCostText(c: NonNullable<BestDateWhyInput["move_cost"]>, bestEta: string): string {
-  const who = c.level_label ? `${c.level_label}` : "A level";
+/**
+ * Owner 2026-10-30: the advised date protects the MIN. This sentence names the looser limit: the absolute latest date that still keeps the
+ * level above its CRITICAL, and what that would cost against the Min (extra days below Min, lowest cover).
+ */
+export function moveCostText(c: NonNullable<BestDateWhyInput["move_cost"]>, criticalEta: string): string {
+  const who = c.level_label ? `${c.level_label}` : "a level";
   const extra = c.below_min_days_moved - c.below_min_days_now;
-  if (extra <= 0) return `Landing on ${bestEta} adds no day below ${who}'s Min.`;
+  if (extra <= 0) return `Absolute latest (Critical limit): ${criticalEta}; it adds no day below the Min.`;
   const low = c.lowest_cover_days_moved !== null
-    ? `, and its cover sinks to ${Math.floor(c.lowest_cover_days_moved)} d${c.min_days !== null ? ` (Min ${c.min_days} d${c.critical_days !== null ? `, Critical ${c.critical_days} d` : ""})` : ""}`
+    ? `, with its cover down to ${Math.floor(c.lowest_cover_days_moved)} d${c.min_days !== null ? ` (Min ${c.min_days} d${c.critical_days !== null ? `, Critical ${c.critical_days} d` : ""})` : ""}`
     : "";
-  return `Cost against Min: landing on ${bestEta} leaves ${who} below its Min for ${extra} more day(s) than now (${c.below_min_days_now} → ${c.below_min_days_moved} days)${low}. The advised date protects Critical, not the Min.`;
+  return `Absolute latest (Critical limit): ${criticalEta}. Landing that late leaves ${who} below its Min for ${extra} more day(s) than now (${c.below_min_days_now} → ${c.below_min_days_moved} days)${low}.`;
 }
 
 /**
@@ -76,7 +80,10 @@ export function moveCostText(c: NonNullable<BestDateWhyInput["move_cost"]>, best
 export function bestDateWhy(i: BestDateWhyInput): string {
   const b = i.binding;
   if (!b && i.joint_note) return i.vendor_message ? `${i.joint_note} ${i.vendor_message}` : i.joint_note;
-  const level = b
+  const atMin = !!b && b.day === b.min_day;
+  const level = b && atMin
+    ? `without it ${b.level_label} (Min ${b.min_days} d${b.desired_days !== null ? ` / Max ${b.desired_days} d` : ""}) falls below its Min on ${b.day}${b.topup ? ` (at its ${b.topup.day} top-up it asked the pool for ${fmt(b.topup.wanted)} ${i.uom}, the pool held ${fmt(b.topup.pool_before)} ${i.uom}, short by ${fmt(b.topup.shortfall)} ${i.uom})` : ""}, down to ${Math.floor(b.cover_days)} d of cover${b.critical_days !== null ? ` (Critical ${b.critical_days} d)` : ""}`
+    : b
     ? `without it ${b.level_label} (Min ${b.min_days} d${b.desired_days !== null ? ` / Max ${b.desired_days} d` : ""}) is below its Min from ${b.min_day}${b.topup ? ` (at its ${b.topup.day} top-up it asked the pool for ${fmt(b.topup.wanted)} ${i.uom}, the pool held ${fmt(b.topup.pool_before)} ${i.uom}, short by ${fmt(b.topup.shortfall)} ${i.uom})` : ""} and falls below its Critical${b.critical_days !== null ? ` (${b.critical_days} d)` : ""} on ${b.day}, down to ${Math.floor(b.cover_days)} d of cover`
     : "without it stock runs out or a group's demand is not served";
   const lead = i.overdue_days && i.overdue_days > 0
@@ -86,7 +93,8 @@ export function bestDateWhy(i: BestDateWhyInput): string {
       : i.shift_days > 0
         ? `Can wait until ${i.best_eta} (${i.shift_days} d after the recorded date ${i.current_eta ?? "?"}): ${level}.`
         : `${i.current_eta ?? i.best_eta} is the latest safe date: ${level}.`;
-  const withCost = i.move_cost && !(i.overdue_days && i.overdue_days > 0) ? `${lead} ${moveCostText(i.move_cost, i.best_eta)}` : lead;
+  const crit = i.critical_latest_eta && i.critical_latest_eta > i.best_eta ? i.critical_latest_eta : null;
+  const withCost = crit && i.move_cost && !(i.overdue_days && i.overdue_days > 0) ? `${lead} ${moveCostText(i.move_cost, crit)}` : lead;
   const withJoint = i.joint_note ? `${withCost} ${i.joint_note}` : withCost;
   return i.vendor_message ? `${withJoint} ${i.vendor_message}` : withJoint;
 }

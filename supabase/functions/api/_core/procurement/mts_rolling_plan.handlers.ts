@@ -168,7 +168,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const binding = a.binding ? { ...a.binding, topup: a.binding.topup ? { ...a.binding.topup, wanted: q(a.binding.topup.wanted), shortfall: q(a.binding.topup.shortfall), pool_before: q(a.binding.topup.pool_before) } : null } : null;
       return {
         absent, etd: a.best_etd ?? "", port: a.best_port_eta ?? "", plant: o.best.eta,
-        why: bestDateWhy({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, binding, uom, vendor_message: w?.state === "TALK_TO_VENDOR" ? w.message : null, joint_note: a.joint_note ?? null, overdue_days: overdueOf(currentEta),
+        why: bestDateWhy({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, binding, uom, vendor_message: w?.state === "TALK_TO_VENDOR" ? w.message : null, joint_note: a.joint_note ?? null, overdue_days: overdueOf(currentEta), critical_latest_eta: a.critical_latest_eta ?? null,
           move_cost: a.move_cost ? { ...a.move_cost, level_label: a.binding?.level_label ?? null } : null }),
       };
     };
