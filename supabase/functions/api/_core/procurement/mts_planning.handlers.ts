@@ -57,6 +57,8 @@ type PlanningParams = {
   companyId: string; planMonth: string; asOf: string; demandAt: string | null; today: string;
   /** P1 item plan: months after NM (horizon = CM + NM + extra) with a beyond-plan forecast. */
   extraMonths?: number;
+  /** Owner 2026-10-30: also build the schedule check (every level's Min / Max / cover at the advised dates). Rolling plan Excel only. */
+  scheduleChecks?: boolean;
   /** P4: lots the user fixed (or applied from AI); the engine plans the rest around them. */
   manualLots?: OptimizerManualLot[];
   /** Simulation only (never saved): reschedule key → plant date. */
@@ -759,6 +761,48 @@ export async function computePlanning(p: PlanningParams) {
     jointCache.set(cacheKey, result);
     return result;
   };
+  // Owner 2026-10-30: schedule check. Per family, move every not-yet-shipped order to its advised date (the joint schedule, or its own best date) and re-run
+  // the family: for each day something lands, each level's Min / Max / cover and the pool left, so the advised dates can be verified against the method.
+  const scheduleChecks = (() => {
+    if (!p.scheduleChecks) return [] as Array<{ member_ids: string[]; arrivals: Array<{ source_key: string; material_id: string; reference: string; qty_base: number; recorded: string | null; advised: string | null; movable: boolean }>; engine_lots: Array<{ material_id: string; day: string; qty_base: number }>; days: ReadonlyArray<{ day: string; pool_qty: number; levels: ReadonlyArray<{ level_kind: "OWN" | "GROUP"; level_id: string; cover_days: number | null; min_days: number | null; max_days: number | null; reserve_qty: number }> }> }>;
+    const seen = new Set<string>();
+    const out: Array<{ member_ids: string[]; arrivals: Array<{ source_key: string; material_id: string; reference: string; qty_base: number; recorded: string | null; advised: string | null; movable: boolean }>; engine_lots: Array<{ material_id: string; day: string; qty_base: number }>; days: ReadonlyArray<{ day: string; pool_qty: number; levels: ReadonlyArray<{ level_kind: "OWN" | "GROUP"; level_id: string; cover_days: number | null; min_days: number | null; max_days: number | null; reserve_qty: number }> }> }> = [];
+    const refByKey = new Map<string, string>(req.output.rows.flatMap((r) => r.inbound_events.map((event, index) => [`A|${r.material_id}|${index}|${event.reference}`, event.reference] as [string, string])));
+    for (const id of universe) {
+      const input = familyInputFor(id);
+      const members = Object.keys(input.opening_qty_by_material).sort();
+      const famKey = members.join("§");
+      if (members.length === 0 || seen.has(famKey)) continue;
+      seen.add(famKey);
+      const movable = input.confirmed_arrivals.filter((a) => movableSourceKeys.has(a.source_key))
+        .sort((a, b) => String(a.eta_to_plant).localeCompare(String(b.eta_to_plant)) || a.source_key.localeCompare(b.source_key));
+      let moves = new Map<string, string>();
+      if (movable.length > 1) moves = jointFor(input, movable).moves;
+      else if (movable.length === 1) {
+        const alt = optimizeFamilyArrival(input, movable[0].source_key);
+        if (alt) {
+          const d = alt.not_needed_in_plan ? (alt.plan_end ?? alt.best.eta) : alt.best.eta;
+          moves.set(movable[0].source_key, sharedSourceKeys.has(movable[0].source_key) && d > String(movable[0].eta_to_plant) ? String(movable[0].eta_to_plant) : d);
+        }
+      }
+      const movedArrivals = input.confirmed_arrivals.map((a) => (moves.has(a.source_key) ? { ...a, eta_to_plant: moves.get(a.source_key)! } : a));
+      const res = planFamily({ ...input, plan_buys: true, trace: false, level_days: true, confirmed_arrivals: movedArrivals });
+      const engineLots = res.rows.filter((r) => r.planned_lot_qty_base > 0.000001).map((r) => ({ material_id: r.material_id, day: r.day, qty_base: r.planned_lot_qty_base }));
+      const eventDays = new Set<string>([...movedArrivals.map((a) => String(a.eta_to_plant)), ...engineLots.map((l) => l.day)]);
+      const keep = new Set<string>();
+      for (const d of eventDays) { keep.add(d); keep.add(new Date(Date.parse(`${d}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10)); }
+      out.push({
+        member_ids: members,
+        arrivals: input.confirmed_arrivals.map((a) => ({
+          source_key: a.source_key, material_id: a.material_id, reference: refByKey.get(a.source_key) ?? a.source_key.split("|").slice(3).join("|"), qty_base: a.qty_base,
+          recorded: a.eta_to_plant, advised: moves.get(a.source_key) ?? a.eta_to_plant, movable: movableSourceKeys.has(a.source_key),
+        })),
+        engine_lots: engineLots,
+        days: res.level_days.filter((d) => keep.has(d.day)),
+      });
+    }
+    return out;
+  })();
   const arrivalScope = p.arrivalFamilyOf ? new Set(Object.keys(familyInputFor(p.arrivalFamilyOf).opening_qty_by_material)) : null;
   // Owner 2026-10-28 (D9): a proposed move is only advice if the vendor can still move the shipment (ETD window).
   const rescheduleContext = await loadRescheduleContext(p.companyId, req.output.rows
@@ -1028,6 +1072,7 @@ export async function computePlanning(p: PlanningParams) {
       })),
     // Owner 2026-10-21: not-yet-shipped CSN / PO pieces the planner may move earlier / later
     // (planning side only; CSN Tracker is never changed).
+    schedule_checks: scheduleChecks,
     reschedulable_arrivals: req.output.rows.filter((row) => !arrivalScope || arrivalScope.has(row.material_id)).flatMap((row) => {
       const pieces = row.inbound_events.filter((event) => event.reschedule_key);
       if (pieces.length === 0) return [];

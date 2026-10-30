@@ -406,6 +406,33 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
   ], companies.flatMap((c) => c.arrivals.map((a) => ({ ...a, company: companyLabel(c) }))), { color: (r) => (r.no_eta || r.overdue ? RED : null) });
   widths(arr, [26, 34, 44, 30, 18, 12, 7, 14, 14, 12, 16, 22, 60]);
 
+  // Owner 2026-10-30: schedule check — one pair of tabs per company. CHECK = every not-yet-shipped order on its advised date, level by level (Min / Max / cover / excess);
+  // LEVELS = the whole plan (existing consignments on their advised dates + the engine's new orders), level by level on each landing date.
+  for (const c of companies) {
+    const sc = c.schedule_check ?? { check_rows: [], level_rows: [] };
+    const tone = (r) => (String(r.verdict ?? "").startsWith("BELOW") ? RED : r.verdict === "Above Max" ? AMBER : null);
+    const check = wb.addWorksheet(sheetName(`${c.company_code ?? companyLabel(c)} CHECK`, used));
+    addTable(check, [
+      { label: "Family (groups)", key: "family" }, { label: "Order (not shipped)", key: "order" }, { label: "Qty", value: (r) => num(r.qty), num: true }, { label: "UoM", key: "uom" },
+      { label: "Recorded plant date", value: (r) => day(r.recorded) }, { label: "Engine advised date", value: (r) => day(r.advised) }, { label: "Moved by (days, + later)", value: (r) => num(r.shift_days), num: true },
+      { label: "Level (Exclusive / group)", key: "level" }, { label: "Level Min (d)", value: (r) => num(r.min_days), num: true }, { label: "Level Max (d)", value: (r) => num(r.max_days), num: true },
+      { label: "Cover day before landing (d)", value: (r) => num(r.cover_before), num: true }, { label: "Cover end of landing day (d)", value: (r) => num(r.cover_after), num: true },
+      { label: "Level reserve after (qty)", value: (r) => num(r.reserve), num: true }, { label: "Excess in pool after (qty)", value: (r) => num(r.excess_after), num: true },
+      { label: "Verdict vs Min", key: "verdict" },
+    ], sc.check_rows, { color: tone });
+    widths(check, [44, 50, 11, 7, 13, 13, 11, 34, 9, 9, 13, 13, 14, 14, 24]);
+    check.views = [{ state: "frozen", xSplit: 2, ySplit: 1 }];
+    const levels = wb.addWorksheet(sheetName(`${c.company_code ?? companyLabel(c)} LEVELS`, used));
+    addTable(levels, [
+      { label: "Family (groups)", key: "family" }, { label: "Date", value: (r) => day(r.date) }, { label: "What lands (existing / new)", key: "event" }, { label: "Qty", value: (r) => num(r.qty), num: true }, { label: "UoM", key: "uom" },
+      { label: "Level (Exclusive / group)", key: "level" }, { label: "Level Min (d)", value: (r) => num(r.min_days), num: true }, { label: "Level Max (d)", value: (r) => num(r.max_days), num: true },
+      { label: "Cover end of day (d)", value: (r) => num(r.cover_days), num: true }, { label: "Level reserve (qty)", value: (r) => num(r.reserve), num: true },
+      { label: "Excess in pool after (qty)", value: (r) => num(r.excess_after), num: true }, { label: "Verdict vs Min", key: "verdict" },
+    ], sc.level_rows, { color: tone });
+    widths(levels, [44, 12, 56, 11, 7, 34, 9, 9, 13, 14, 14, 24]);
+    levels.views = [{ state: "frozen", xSplit: 3, ySplit: 1 }];
+  }
+
   writeWaterfall(wb, companies, used);
   writeExplain(wb, companies, used);
 

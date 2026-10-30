@@ -108,6 +108,8 @@ export type FamilyPlannerInput = {
   plan_buys?: boolean;
   /** false = skip the event log / Material × Level matrix (the arrival optimizer re-runs the family many times). */
   trace?: boolean;
+  /** Owner 2026-10-30: also return, for every day, each level's cover / Min / Max (days) and the pool, for the schedule check Excel. */
+  level_days?: boolean;
   /** Days (YYYY-MM-DD) that always get a Material × Level snapshot — e.g. the end of the current / next month for the Store "keep" quantity. */
   checkpoints?: readonly string[];
 };
@@ -185,6 +187,8 @@ export type FamilyResult = Omit<OptimizerProjectionResult, "advisory_buys"> & {
   advisory_buys: readonly FamilyBuy[];
   /** Event log of the waterfall (receipts, top-ups, waiting levels) and the Material × Level matrix on each event day. */
   level_events: readonly FamilyLevelEvent[];
+  /** Only when the input asked for `level_days`: end-of-day cover of every level against its Min and Max (days), reserve held and the pool left. */
+  level_days: ReadonlyArray<{ day: string; pool_qty: number; levels: ReadonlyArray<{ level_kind: "OWN" | "GROUP"; level_id: string; cover_days: number | null; min_days: number | null; max_days: number | null; reserve_qty: number }> }>;
   level_matrix: readonly FamilyLevelMatrix[];
   level_policies: readonly FamilyLevelPolicy[];
   /** Owner 2026-10-29: every day a level's own reserve covers fewer days than its Min (Target) — the level is being run below its protection. */
@@ -409,6 +413,7 @@ type Sim = {
   matrix: Array<{ day: number; own: number[]; groups: number[][]; pool: number[]; closing: number[] }>;
   /** Per day and level: the level's own reserve covers fewer days than its Min (Target). */
   risk: Array<{ day: number; kind: "OWN" | "GROUP"; level: number; cover: number; min: number; critical: number | null }>;
+  levelDays: Array<{ day: number; pool_qty: number; levels: Array<{ kind: "OWN" | "GROUP"; level: number; cover: number | null; min: number | null; max: number | null; reserve: number }> }>;
 };
 
 /** Every material the planner sees in this input (same set the per-family run builds). */
@@ -502,6 +507,16 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     advisory_buys: [...all("advisory_buys")].sort((a, b) => a.material_id.localeCompare(b.material_id) || a.sequence - b.sequence),
     group_unmet: all("group_unmet"),
     level_events: [...all("level_events")].sort((a, b) => a.day.localeCompare(b.day)),
+    level_days: (() => {
+      const byDay = new Map<string, { day: string; pool_qty: number; levels: FamilyResult["level_days"][number]["levels"][number][] }>();
+      for (const part of parts) for (const d of part.level_days) {
+        const cur = byDay.get(d.day) ?? { day: d.day, pool_qty: 0, levels: [] };
+        cur.pool_qty = roundQty(cur.pool_qty + d.pool_qty);
+        cur.levels.push(...d.levels);
+        byDay.set(d.day, cur);
+      }
+      return [...byDay.values()].sort((a, b) => a.day.localeCompare(b.day));
+    })(),
     level_matrix: [...all("level_matrix")].sort((a, b) => a.day.localeCompare(b.day)),
     level_policies: all("level_policies"),
     level_risk: [...all("level_risk")].sort((a, b) => a.day.localeCompare(b.day)),
@@ -699,6 +714,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       levelEvents: [],
       matrix: [],
       risk: [],
+      levelDays: [],
     };
     for (const l of lots) s.planned[mIndex.get(l.material_id)!][l.index] += l.qty;
     const bal = ids.map((id) => Number(input.opening_qty_by_material[id] ?? 0));
@@ -1117,6 +1133,15 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
         const cover = coverDays(ownReserve[m], own[m], i);
         if (cover !== null && cover + 1e-9 < target) s.risk.push({ day: i, kind: "OWN", level: m, cover, min: target, critical: targets[m][i].critical });
       });
+      if (input.level_days) {
+        s.levelDays.push({
+          day: i, pool_qty: roundQty(ids.reduce((sum, _x, m) => sum + Math.max(0, bal[m] - ownReserve[m] - purposeReserve.reduce((acc, reserve) => acc + Math.max(0, reserve[m]), 0)), 0)),
+          levels: [
+            ...ids.flatMap((_id, m) => (own[m].every((qty) => qty <= EPSILON) ? [] : [{ kind: "OWN" as const, level: m, cover: coverDays(ownReserve[m], own[m], i), min: targets[m][i].target, max: memberDesiredMax[m][i], reserve: roundQty(ownReserve[m]) }])),
+            ...pools.map((pool, p) => ({ kind: "GROUP" as const, level: p, cover: coverDays(purposeReserve[p].reduce((sum, qty) => sum + Math.max(0, qty), 0), pool.demand, i), min: groupCoverageAt(pool, i).target, max: groupCoverageAt(pool, i).desired, reserve: roundQty(purposeReserve[p].reduce((sum, qty) => sum + Math.max(0, qty), 0)) })),
+          ],
+        });
+      }
       pools.forEach((_pool, p) => {
         const bucketFree = purposeReserve[p].reduce((sum, qty) => sum + Math.max(0, qty), 0)
           + excessReserve[p].reduce((sum, qty) => sum + Math.max(0, qty), 0);
@@ -1749,6 +1774,10 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       day: allDays[r.day], level_kind: r.kind,
       level_id: r.kind === "OWN" ? ids[r.level] : pools[r.level].group_id,
       cover_days: r.cover, min_days: r.min, critical_days: r.critical,
+    })),
+    level_days: sim.levelDays.map((d) => ({
+      day: allDays[d.day], pool_qty: d.pool_qty,
+      levels: d.levels.map((l) => ({ level_kind: l.kind, level_id: l.kind === "OWN" ? ids[l.level] : pools[l.level].group_id, cover_days: l.cover, min_days: l.min, max_days: l.max, reserve_qty: l.reserve })),
     })),
     level_matrix: sim.matrix.map((snap) => ({
       day: allDays[snap.day],
