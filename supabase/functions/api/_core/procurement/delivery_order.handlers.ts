@@ -504,7 +504,7 @@ export async function createDeliveryOrderHandler(req: Request, ctx: ProcurementH
     // STO has no packaging-cost mechanism (§113.9 was SO-only), so it always
     // computes with an empty PackagingCostInput.
     const commercialByLine = preparedLines.map(({ sourceLine, quantity }) => {
-      const rate = Number((isSalesOrder ? sourceLine.net_rate : sourceLine.transfer_price) ?? 0);
+      const rate = Number((isSalesOrder ? sourceLine.net_rate : Number(sourceLine.transfer_price ?? 0) + Number(sourceLine.conversion_cost_per_unit ?? 0)) ?? 0);
       const packaging: PackagingCostInput = isSalesOrder
         ? {
             basis: (sourceLine.packaging_cost_basis as string | null) ?? null,
@@ -628,7 +628,7 @@ export async function createDeliveryOrderHandler(req: Request, ctx: ProcurementH
           sto_line_id: isSalesOrder ? null : sourceLine.id,
           quantity,
           uom_code: sourceLine.uom_code,
-          unit_value: isSalesOrder ? sourceLine.net_rate : sourceLine.transfer_price,
+          unit_value: isSalesOrder ? sourceLine.net_rate : Number(sourceLine.transfer_price ?? 0) + Number(sourceLine.conversion_cost_per_unit ?? 0),
           line_total: commercial.totalValue,
           storage_location_id: storageLocationId,
           gst_rate: sourceLine.gst_rate != null ? Number(sourceLine.gst_rate) : null,

@@ -148,6 +148,7 @@ function GELinesScreen({ geData, onSelectLine, onBack, successNotice }) {
                   </span>
                 ),
               },
+              { key: "material_type", label: "Item Type", width: "90px", render: (row) => row.material_type || "—" },
               { key: "po_number", label: "PO", width: "120px", render: (row) => row.po_number || "—" },
               { key: "vendor", label: "Vendor", width: "210px", render: vendorDisplay },
               // Section 145 -- Order in LOT: the lot this Gate Entry line was received against.

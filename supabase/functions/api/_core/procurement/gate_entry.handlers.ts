@@ -577,7 +577,7 @@ async function hydrateGateEntry(ctx: ProcurementHandlerContext, gateEntryId: str
       : Promise.resolve({ data: [], error: null }),
     matIds.length > 0
       ? serviceRoleClient.schema("erp_master").from("material_master")
-          .select("id, pace_code, material_name")
+          .select("id, pace_code, material_name, material_type")
           .in("id", matIds)
       : Promise.resolve({ data: [], error: null }),
     serviceRoleClient.schema("erp_procurement").from("gate_exit_inbound")
@@ -602,6 +602,7 @@ async function hydrateGateEntry(ctx: ProcurementHandlerContext, gateEntryId: str
       return {
         ...line,
         material_name: mat ? `${mat.pace_code} — ${mat.material_name}` : null,
+        material_type: mat?.material_type ?? null,
         linked_csn: (csns.data ?? []).find((csn: JsonRecord) => String(csn.id) === String(line.csn_id)) ?? null,
       };
     }),
@@ -1517,13 +1518,17 @@ export async function listOpenPOsForGEHandler(
 
     const lineMatIds = [...new Set(lines.map((l) => l.material_id).filter(Boolean))] as string[];
     const lineMatMap = new Map<string, string>();
+    const lineMatTypeMap = new Map<string, string>();
     if (lineMatIds.length > 0) {
       const { data: mats } = await serviceRoleClient
         .schema("erp_master")
         .from("material_master")
-        .select("id, material_name")
+        .select("id, material_name, material_type")
         .in("id", lineMatIds);
-      for (const m of mats ?? []) lineMatMap.set(String(m.id), String(m.material_name ?? ""));
+      for (const m of mats ?? []) {
+        lineMatMap.set(String(m.id), String(m.material_name ?? ""));
+        lineMatTypeMap.set(String(m.id), String(m.material_type ?? ""));
+      }
     }
 
     // `open_qty` already excludes successfully posted GRNs. Reserve only
@@ -1603,6 +1608,7 @@ export async function listOpenPOsForGEHandler(
       linesMap.get(poId)!.push({
         ...line,
         material_name: lineMatMap.get(String(line.material_id)) ?? null,
+        material_type: lineMatTypeMap.get(String(line.material_id)) || null,
         open_qty: openQty,
         pending_ge_qty: reservedQty,
         available_ge_qty: availableQty,
@@ -1698,13 +1704,17 @@ export async function listOpenSTOsForGEHandler(
 
     const lineMatIds = [...new Set(lines.map((l) => l.material_id).filter(Boolean))] as string[];
     const lineMatMap = new Map<string, string>();
+    const lineMatTypeMap = new Map<string, string>();
     if (lineMatIds.length > 0) {
       const { data: mats } = await serviceRoleClient
         .schema("erp_master")
         .from("material_master")
-        .select("id, material_name")
+        .select("id, material_name, material_type")
         .in("id", lineMatIds);
-      for (const m of mats ?? []) lineMatMap.set(String(m.id), String(m.material_name ?? ""));
+      for (const m of mats ?? []) {
+        lineMatMap.set(String(m.id), String(m.material_name ?? ""));
+        lineMatTypeMap.set(String(m.id), String(m.material_type ?? ""));
+      }
     }
 
     // §3.7 STO GE-Creation Drawer design — each STO line's CSN (linked via
@@ -1769,6 +1779,7 @@ export async function listOpenSTOsForGEHandler(
       linesMap.get(stoId)!.push({
         ...line,
         material_name: lineMatMap.get(String(line.material_id)) ?? null,
+        material_type: lineMatTypeMap.get(String(line.material_id)) || null,
         expected_qty: csn ? Number(csn.dispatch_qty ?? 0) : Number(line.quantity ?? 0),
         csn_id: csn?.id ?? null,
         csn_number: csn?.csn_number ?? null,
@@ -2154,7 +2165,7 @@ export async function gateReportHandler(
 
     const [materials, vendors, companies] = await Promise.all([
       fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient.schema("erp_master").from("material_master")
-        .select("id, pace_code, material_name").in("id", chunk)).catch(() => [] as JsonRecord[]),
+        .select("id, pace_code, material_name, material_type").in("id", chunk)).catch(() => [] as JsonRecord[]),
       fetchInChunks<JsonRecord>(vendorIds, (chunk) => serviceRoleClient.schema("erp_master").from("vendor_master")
         .select("id, vendor_code, vendor_name").in("id", chunk)).catch(() => [] as JsonRecord[]),
       fetchInChunks<JsonRecord>(companyIds, (chunk) => serviceRoleClient.schema("erp_master").from("companies")
@@ -2194,6 +2205,7 @@ export async function gateReportHandler(
         line_number: line.line_number,
         material_code: mat?.pace_code ?? null,
         material_name: mat?.material_name ?? null,
+        material_type: mat?.material_type ?? null,
         ge_qty: line.ge_qty,
         uom_code: line.uom_code,
         gross_weight: line.gross_weight ?? null,

@@ -261,6 +261,7 @@ function buildColumnDefs() {
     { key: "hss_mother_vendor_name", label: "HSS Mother Company", width: "180px" },
     { key: "material_code", label: "Material Code", width: "130px" },
     { key: "material_name", label: "Material", width: "180px" },
+    { key: "material_type", label: "Item Type", width: "90px" },
     { key: "material_group_name", label: "Material Group", width: "150px" },
     { key: "po_date", label: "PO Date", width: "120px" },
     { key: "order_qty", label: "Order Qty", width: "110px" },
@@ -1244,6 +1245,10 @@ export default function CSNTrackerPage() {
                 <EditField label="Dispatch Qty" rowId={currentRow.id} fieldName="dispatch_qty" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                   <input type="number" min="0" step="0.0001" value={draft.dispatch_qty ?? ""} onChange={(event) => patchDraft("dispatch_qty", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500" />
                 </EditField>
+                <div className="grid gap-1 text-xs text-slate-700">
+                  <span className="font-semibold">Item Type</span>
+                  <span className="h-[26px] border border-slate-200 bg-slate-50 px-2 py-1 text-sm text-slate-800">{currentRow.material_type || "—"}</span>
+                </div>
                 <EditField label="Material Group" rowId={currentRow.id} fieldName="material_category_id" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
                   {currentGroupOptions.length > 0 ? (
                     <select value={draft.material_category_id ?? ""} onChange={(event) => patchDraft("material_category_id", event.target.value)} className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500">

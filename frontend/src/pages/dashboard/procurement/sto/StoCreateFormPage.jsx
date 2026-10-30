@@ -17,6 +17,10 @@ import {
   confirmSTO,
   createSTO,
   getLastStoPaymentTerm,
+  getStoLaneTransit,
+  getFgStoLaneTransit,
+  createFgSto,
+  listFgStoMaterials,
   listAvailableSubCsnsForSto,
 } from "../procurementApi.js";
 
@@ -35,7 +39,14 @@ const REBATE_BASIS_OPTIONS = [
   { value: "PO_UOM", label: "PO UOM" },
 ];
 
-function createEmptyLine(defaultPaymentTermId = "") {
+function addDaysIso(isoDate, days) {
+  if (!isoDate || !Number.isFinite(days)) return "";
+  const date = new Date(`${isoDate}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function createEmptyLine(defaultPaymentTermId = "", defaultExpectedDeliveryDate = "") {
   return {
     material_id: "",
     source_csn_id: "",
@@ -50,7 +61,7 @@ function createEmptyLine(defaultPaymentTermId = "") {
     rebate_rate: "",
     rebate_rate_uom_basis: "BASE_UOM",
     rebate_remarks: "",
-    expected_delivery_date: "",
+    expected_delivery_date: defaultExpectedDeliveryDate,
   };
 }
 
@@ -170,12 +181,14 @@ function LineMoreDrawer({ line, visible, onClose, onChange }) {
   );
 }
 
-export default function StoCreateFormPage({ openingMode = false }) {
+// fgMode = the SO01 "Create FG STO" tab: same STO form, INTER_PLANT only (no distribution / sub-CSN),
+// materials limited to the sending company's MTS FG SKUs, permission = SO01's (PROC_SO_CREATE).
+export default function StoCreateFormPage({ openingMode = false, fgMode = false }) {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
   const runtimeDefaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
   const [form, setForm] = useState({
-    sto_type: openingMode ? "INTER_PLANT" : "CONSIGNMENT_DISTRIBUTION",
+    sto_type: openingMode || fgMode ? "INTER_PLANT" : "CONSIGNMENT_DISTRIBUTION",
     sending_company_id: runtimeDefaultCompanyId,
     receiving_company_id: "",
     sending_cost_center_id: "",
@@ -204,8 +217,13 @@ export default function StoCreateFormPage({ openingMode = false }) {
     },
     // material_type changing the queryKey shouldn't blank the whole page —
     // keep the previous list on screen while the new one loads.
-    { placeholderData: keepPreviousData }
+    { placeholderData: keepPreviousData, enabled: !fgMode }
   );
+  const fgMaterialQuery = useQuery({
+    queryKey: ["procurement", "fg-sto-materials", form.sending_company_id],
+    queryFn: () => listFgStoMaterials({ sending_company_id: form.sending_company_id }),
+    enabled: fgMode && Boolean(form.sending_company_id),
+  });
   const sendingCostCenterQuery = useCostCentersQuery(
     { company_id: form.sending_company_id, active: true },
     { enabled: Boolean(form.sending_company_id) }
@@ -224,7 +242,34 @@ export default function StoCreateFormPage({ openingMode = false }) {
     enabled: Boolean(form.sending_company_id && form.receiving_company_id),
   });
 
-  const materials = materialQuery.materials;
+  // Company-to-company lead time lane (Lead Time Masters > Company to Company). Every non-opening
+  // STO needs one: the CSN's ETA to plant = LR date + these transit days.
+  const laneQuery = useQuery({
+    queryKey: ["procurement", fgMode ? "fg-sto-lane-transit" : "sto-lane-transit", form.sending_company_id, form.receiving_company_id, form.sto_date],
+    queryFn: () =>
+      (fgMode ? getFgStoLaneTransit : getStoLaneTransit)({
+        sending_company_id: form.sending_company_id,
+        receiving_company_id: form.receiving_company_id,
+        date: form.sto_date || undefined,
+      }),
+    enabled: !openingMode && Boolean(form.sending_company_id && form.receiving_company_id),
+  });
+  const laneChecked = !openingMode && laneQuery.isSuccess;
+  const laneTransitDays = laneChecked && laneQuery.data?.transit_days != null ? Number(laneQuery.data.transit_days) : null;
+  const laneMissing = laneChecked && laneTransitDays === null;
+
+  // Prefill blank Expected Delivery Dates with STO date + transit days (user can still change them).
+  useEffect(() => {
+    if (laneTransitDays === null) return;
+    const prefill = addDaysIso(form.sto_date, laneTransitDays);
+    if (!prefill) return;
+    setLines((current) => current.map((line) => (line.expected_delivery_date ? line : { ...line, expected_delivery_date: prefill })));
+  }, [laneTransitDays, form.sto_date]);
+
+  const materials = useMemo(
+    () => (fgMode ? (Array.isArray(fgMaterialQuery.data) ? fgMaterialQuery.data : []) : materialQuery.materials),
+    [fgMode, fgMaterialQuery.data, materialQuery.materials]
+  );
   const paymentTerms = paymentTermQuery.paymentTerms;
   const sendingCostCenters = useMemo(
     () => (Array.isArray(sendingCostCenterQuery.data?.data) ? sendingCostCenterQuery.data.data : []),
@@ -294,7 +339,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
   });
 
   const loading =
-    (materialQuery.isLoading && !materialQuery.data) ||
+    (!fgMode && materialQuery.isLoading && !materialQuery.data) ||
     paymentTermQuery.isLoading ||
     (Boolean(form.sending_company_id) && sendingCostCenterQuery.isLoading) ||
     (Boolean(form.receiving_company_id) && receivingCostCenterQuery.isLoading);
@@ -386,7 +431,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
   }
 
   function addLine() {
-    setLines((current) => [...current, createEmptyLine(defaultPaymentTermId)]);
+    setLines((current) => [...current, createEmptyLine(defaultPaymentTermId, laneTransitDays === null ? "" : addDaysIso(form.sto_date, laneTransitDays))]);
   }
 
   function removeLine(index) {
@@ -426,6 +471,10 @@ export default function StoCreateFormPage({ openingMode = false }) {
     }
     if (!form.sending_cost_center_id || !form.receiving_cost_center_id) {
       setError("Sending and receiving cost centers are required.");
+      return;
+    }
+    if (laneMissing) {
+      setError("No company-to-company lead time exists for this sending/receiving pair. Add it in Lead Time Masters > Company to Company first.");
       return;
     }
     if (openingMode && !form.sto_number.trim()) {
@@ -485,7 +534,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
           expected_delivery_date: line.expected_delivery_date || null,
         })),
       };
-      const created = await createSTO(payload);
+      const created = await (fgMode ? createFgSto : createSTO)(payload);
 
       if (openingMode && created?.status === "DRAFT") {
         try {
@@ -685,7 +734,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
     <>
       <ErpScreenScaffold
         eyebrow="Procurement"
-        title={openingMode ? "Create Opening / Legacy Stock Transfer Order" : "Create Stock Transfer Order"}
+        title={openingMode ? "Create Opening / Legacy Stock Transfer Order" : fgMode ? "Create FG STO (MTS finished goods)" : "Create Stock Transfer Order"}
         actions={[
           { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
           {
@@ -697,10 +746,12 @@ export default function StoCreateFormPage({ openingMode = false }) {
                 : "Create STO",
             tone: "primary",
             onClick: () => void handleSubmit(),
-            disabled: saving || loading,
+            disabled: saving || loading || laneMissing,
           },
         ]}
         notices={[
+          ...(laneMissing ? [{ key: "sto-lane-missing", tone: "error", message: "No company-to-company lead time for this sending/receiving pair. Add it in Lead Time Masters > Company to Company; the STO cannot be created until then." }] : []),
+          ...(laneTransitDays !== null ? [{ key: "sto-lane-days", tone: "success", message: `Company lead time: ${laneTransitDays} day${laneTransitDays === 1 ? "" : "s"} (used for the CSN ETA to plant; blank Expected Delivery Dates default to STO date + ${laneTransitDays}).` }] : []),
           ...(error ? [{ key: "sto-create-error", tone: "error", message: error }] : []),
           ...(notice ? [{ key: "sto-create-notice", tone: "success", message: notice }] : []),
         ]}
@@ -723,7 +774,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
                     />
                   </label>
                 )}
-                {(
+                {!fgMode && (
                   <label className="grid gap-1 text-xs font-semibold text-slate-700">
                     STO Type <span className="text-rose-500">*</span>
                     <select
@@ -803,6 +854,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
                     </span>
                   </label>
                 )}
+                {!fgMode && (
                 <label className="grid gap-1 text-xs font-semibold text-slate-700">
                   Material Type
                   <select
@@ -825,6 +877,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
                     ))}
                   </select>
                 </label>
+                )}
                 {openingMode ? (
                   <label className="grid gap-1 text-xs font-semibold text-slate-700">
                     STO Date <span className="text-rose-500">*</span>

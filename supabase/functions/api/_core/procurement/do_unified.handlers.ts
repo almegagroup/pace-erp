@@ -1203,7 +1203,12 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
         const sourceLine = stoLineMap.get(stoLineId);
         if (!sourceLine) throw new Error("DO_SOURCE_LINE_NOT_FOUND");
         // STO commercial values use the same base-UOM snapshot as SO lines.
-        salesSourceLine = { ...sourceLine, rate: sourceLine.transfer_price, rate_basis: "BASE_UOM" };
+        // FG STO: invoice/DO rate = transfer price + AC04 conversion cost (NULL on RM/PM/INT lines).
+        salesSourceLine = {
+          ...sourceLine,
+          rate: Number((Number(sourceLine.transfer_price ?? 0) + Number(sourceLine.conversion_cost_per_unit ?? 0)).toFixed(6)),
+          rate_basis: "BASE_UOM",
+        };
         materialId = toTrimmedString(sourceLine.material_id);
         uomCode = toTrimmedString(sourceLine.uom_code);
         remaining = Number(sourceLine.quantity ?? 0) - (drawnByStoLine.get(stoLineId) ?? 0) - (stoUsedInThisSubmission.get(stoLineId) ?? 0);
