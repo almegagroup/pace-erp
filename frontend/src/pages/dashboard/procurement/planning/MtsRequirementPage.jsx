@@ -1750,7 +1750,7 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
           {saving ? "Saving…" : "Save this run"}
         </button>
         <label className="flex items-center gap-1 text-xs text-slate-600"><input type="checkbox" checked={showNoBuy} onChange={(event) => setShowNoBuy(event.target.checked)} /> Show materials with no buy</label>
-        {plan ? <span className="text-xs text-slate-500">Advisory only — never creates a PO. CM + NM horizon {plan.calendar.as_of} → {plan.calendar.nm_end} · Source {String(plan.source_fingerprint).slice(0, 12)}</span> : null}
+        {plan ? <span className="text-xs text-slate-500">Advisory only — never creates a PO. Horizon {plan.calendar.as_of} → {plan.calendar.horizon_end ?? plan.calendar.nm_end} · Source {String(plan.source_fingerprint).slice(0, 12)}</span> : null}
       </div>
       {planningQ.error ? <p className="text-sm text-rose-700">{errorText(planningQ.error)}</p> : null}
 
