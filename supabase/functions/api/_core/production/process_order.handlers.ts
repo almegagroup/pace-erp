@@ -234,6 +234,7 @@ async function fetchMachine(companyId: string, machineId: string): Promise<JsonR
 
 const KG_UOM_CODES = new Set(["KG", "KGS", "KILOGRAM", "KILOGRAMS"]);
 const LITRE_UOM_CODES = new Set(["L", "LT", "LTR", "LITRE", "LITRES"]);
+const KILOLITRE_UOM_CODES = new Set(["KL", "KLTR", "KILOLITRE", "KILOLITRES", "KILOLITER", "KILOLITERS"]);
 const MACHINE_CAPACITY_TOLERANCE = 1.1;
 
 function resolveMachineCapacityKg(machine: JsonRecord, stroke: JsonRecord): number | null {
@@ -241,9 +242,10 @@ function resolveMachineCapacityKg(machine: JsonRecord, stroke: JsonRecord): numb
   const capacityUom = toUpperTrimmedString(machine.capacity_uom_code);
   if (!Number.isFinite(capacity) || capacity <= 0 || !capacityUom) return null;
   if (KG_UOM_CODES.has(capacityUom)) return capacity;
-  if (LITRE_UOM_CODES.has(capacityUom)) {
+  if (LITRE_UOM_CODES.has(capacityUom) || KILOLITRE_UOM_CODES.has(capacityUom)) {
     const factor = Number(stroke.conversion_factor ?? 0);
-    return Number.isFinite(factor) && factor > 0 ? capacity * factor : null;
+    const litres = KILOLITRE_UOM_CODES.has(capacityUom) ? capacity * 1000 : capacity;
+    return Number.isFinite(factor) && factor > 0 ? litres * factor : null;
   }
   return null;
 }
