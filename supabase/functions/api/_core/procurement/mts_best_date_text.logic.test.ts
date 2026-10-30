@@ -86,3 +86,8 @@ Deno.test("action: one plain instruction per order for management (owner 2026-10
   assertEquals(actionText({ not_needed_in_plan: false, best_eta: "2027-02-08", current_eta: "2026-11-02", shift_days: 98, etd_passed_days: 6 }), "NOT SHIPPED: the ETD passed 6 d ago. CHASE THE VENDOR. Needed at plant by 2027-02-08.");
   assertEquals(actionText({ not_needed_in_plan: false, best_eta: "2026-12-07", current_eta: "2026-11-17", shift_days: 20, shared_note: "Mother CSN 3000000330 also feeds CMP011 9,000 KG" }), "SHARED SHIPMENT: needed at plant by 2026-12-07 for THIS company; Mother CSN 3000000330 also feeds CMP011 9,000 KG. Use the EARLIEST of all the companies' dates.");
 });
+
+Deno.test("action: a shared shipment is KEPT on its recorded date while this company alone could take later (owner 2026-10-30)", () => {
+  const t = actionText({ not_needed_in_plan: false, best_eta: "2026-11-17", current_eta: "2026-11-17", shift_days: 0, shared_note: "Mother CSN 3000000330 also feeds CMP011 9,000 KG", alone_eta: "2026-12-07" });
+  assertEquals(t, "SHARED SHIPMENT: KEEP the recorded date 2026-11-17. This company alone could take it up to 2026-12-07, but Mother CSN 3000000330 also feeds CMP011 9,000 KG; a shared shipment is never postponed on one company's date. Use the EARLIEST of all the companies' dates.");
+});

@@ -167,9 +167,9 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const q = (n: number) => inUnit(unit, n) ?? 0;
       const binding = a.binding ? { ...a.binding, topup: a.binding.topup ? { ...a.binding.topup, wanted: q(a.binding.topup.wanted), shortfall: q(a.binding.topup.shortfall), pool_before: q(a.binding.topup.pool_before) } : null } : null;
       return {
-        action: actionText({ not_needed_in_plan: false, best_eta: o.best.eta, current_eta: currentEta, shift_days: o.shift_days, overdue_days: overdueOf(currentEta), etd_passed_days: w && w.days_to_current_etd !== null && w.days_to_current_etd < 0 ? -w.days_to_current_etd : null, shared_note: a.shared_note ?? null }),
+        action: actionText({ not_needed_in_plan: false, best_eta: o.best.eta, current_eta: currentEta, shift_days: o.shift_days, overdue_days: overdueOf(currentEta), etd_passed_days: w && w.days_to_current_etd !== null && w.days_to_current_etd < 0 ? -w.days_to_current_etd : null, shared_note: a.shared_note ?? null, alone_eta: a.alone_best_eta ?? null }),
         absent, etd: a.best_etd ?? "", port: a.best_port_eta ?? "", plant: o.best.eta,
-        why: bestDateWhy({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, binding, uom, vendor_message: w?.state === "TALK_TO_VENDOR" ? w.message : null, joint_note: a.joint_note ?? null, overdue_days: overdueOf(currentEta), critical_latest_eta: a.critical_latest_eta ?? null, shared_note: a.shared_note ?? null,
+        why: bestDateWhy({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, binding, uom, vendor_message: w?.state === "TALK_TO_VENDOR" ? w.message : null, joint_note: a.joint_note ?? null, overdue_days: overdueOf(currentEta), critical_latest_eta: a.critical_latest_eta ?? null, shared_note: a.shared_note ?? null, alone_eta: a.alone_best_eta ?? null,
           move_cost: a.move_cost ? { ...a.move_cost, level_label: a.binding?.level_label ?? null } : null }),
       };
     };
