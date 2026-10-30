@@ -408,31 +408,49 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
   ], companies.flatMap((c) => c.arrivals.map((a) => ({ ...a, company: companyLabel(c) }))), { color: (r) => (r.no_eta || r.overdue ? RED : null) });
   widths(arr, [26, 34, 44, 30, 18, 12, 7, 14, 14, 12, 16, 22, 60]);
 
-  // Owner 2026-10-30: schedule check — one pair of tabs per company. CHECK = every not-yet-shipped order on its advised date, level by level (Min / Max / cover / excess);
-  // LEVELS = the whole plan (existing consignments on their advised dates + the engine's new orders), level by level on each landing date.
+  // Owner 2026-10-30: schedule check — two simple tabs per company.
+  // 1 DATES = each not-yet-shipped consignment: existing ETA, engine ETA, the group that decided it, that group's Min / Max days on both dates.
+  // 2 LEVELS = each Exclusive and each group on its own: every lot that feeds it, what it keeps, Min / Max days on the existing and on the engine ETA, excess left.
+  // Min days = days the level's own reserve lasts; Max days = days that reserve plus the shared excess would last.
   for (const c of companies) {
-    const sc = c.schedule_check ?? { check_rows: [], level_rows: [] };
-    const tone = (r) => (String(r.verdict ?? "").startsWith("BELOW") ? RED : r.verdict === "Above Max" ? AMBER : null);
-    const check = wb.addWorksheet(sheetName(`${c.company_code ?? companyLabel(c)} CHECK`, used));
-    addTable(check, [
-      { label: "Family (groups)", key: "family" }, { label: "Type", key: "type" }, { label: "Order / new lot", key: "order" }, { label: "Qty", value: (r) => num(r.qty), num: true }, { label: "UoM", key: "uom" },
-      { label: "Recorded plant date", value: (r) => day(r.recorded) }, { label: "Engine advised date", value: (r) => day(r.advised) }, { label: "Moved by (days, + later)", value: (r) => num(r.shift_days), num: true }, { label: "Engine instruction (What to do)", key: "instruction" },
-      { label: "Level (Exclusive / group)", key: "level" }, { label: "Level Min (d)", value: (r) => num(r.min_days), num: true }, { label: "Level Max (d)", value: (r) => num(r.max_days), num: true },
-      { label: "Cover day before landing (d)", value: (r) => num(r.cover_before), num: true }, { label: "Cover end of landing day (d)", value: (r) => num(r.cover_after), num: true },
-      { label: "Level reserve after (qty)", value: (r) => num(r.reserve), num: true }, { label: "Excess in pool after (qty)", value: (r) => num(r.excess_after), num: true },
-      { label: "Verdict vs Min", key: "verdict" },
-    ], sortBy(sc.check_rows, ["family", "advised", "order"]), { color: tone });
-    widths(check, [44, 24, 50, 11, 7, 13, 13, 11, 46, 34, 9, 9, 13, 13, 14, 14, 24]);
-    check.views = [{ state: "frozen", xSplit: 3, ySplit: 1 }];
-    const levels = wb.addWorksheet(sheetName(`${c.company_code ?? companyLabel(c)} LEVELS`, used));
-    addTable(levels, [
-      { label: "Family (groups)", key: "family" }, { label: "Date", value: (r) => day(r.date) }, { label: "What lands (existing / new)", key: "event" }, { label: "Qty", value: (r) => num(r.qty), num: true }, { label: "UoM", key: "uom" },
-      { label: "Level (Exclusive / group)", key: "level" }, { label: "Level Min (d)", value: (r) => num(r.min_days), num: true }, { label: "Level Max (d)", value: (r) => num(r.max_days), num: true },
-      { label: "Cover end of day (d)", value: (r) => num(r.cover_days), num: true }, { label: "Level reserve (qty)", value: (r) => num(r.reserve), num: true },
-      { label: "Excess in pool after (qty)", value: (r) => num(r.excess_after), num: true }, { label: "Verdict vs Min", key: "verdict" },
-    ], sortBy(sc.level_rows, ["family", "level", "date"]), { color: tone });
-    widths(levels, [44, 12, 56, 11, 7, 34, 9, 9, 13, 14, 14, 24]);
-    levels.views = [{ state: "frozen", xSplit: 3, ySplit: 1 }];
+    const sc = c.schedule_check ?? { date_rows: [], level_rows: [] };
+    const code = c.company_code ?? companyLabel(c);
+    const dates = wb.addWorksheet(sheetName(`${code} 1 DATES`, used));
+    addTable(dates, [
+      { label: "Family (groups)", key: "family" }, { label: "Consignment (not shipped)", key: "order" }, { label: "Qty", value: (r) => num(r.qty), num: true }, { label: "UoM", key: "uom" },
+      { label: "Existing ETA", value: (r) => day(r.recorded) }, { label: "Engine ETA", value: (r) => day(r.engine) }, { label: "Moved (days, + later)", value: (r) => num(r.shift_days), num: true },
+      { label: "Group", key: "group" },
+      { label: "Min days on Existing ETA", value: (r) => num(r.min_recorded), num: true }, { label: "Max days on Existing ETA (reserve + excess, up to Max)", value: (r) => num(r.max_recorded), num: true },
+      { label: "Min days on Engine ETA", value: (r) => num(r.min_engine), num: true }, { label: "Max days on Engine ETA (reserve + excess, up to Max)", value: (r) => num(r.max_engine), num: true },
+      { label: "Excess qty on Engine ETA", value: (r) => num(r.excess_engine), num: true },
+    ], sortBy(sc.date_rows, ["family", "engine", "order"]));
+    widths(dates, [34, 60, 11, 6, 13, 13, 10, 40, 12, 12, 12, 12, 14]);
+    dates.views = [{ state: "frozen", xSplit: 2, ySplit: 1 }];
+
+    const levels = wb.addWorksheet(sheetName(`${code} 2 LEVELS`, used));
+    const lcols = [
+      { label: "Lot", key: "kind" }, { label: "PO / CSN", key: "order" }, { label: "Material", key: "material" }, { label: "Lot qty", value: (r) => num(r.qty), num: true },
+      { label: "Kept for this level (qty)", value: (r) => num(r.kept), num: true },
+      { label: "Existing ETA", value: (r) => day(r.recorded) }, { label: "Engine ETA", value: (r) => day(r.engine) },
+      { label: "Min days (Existing ETA)", value: (r) => num(r.min_recorded), num: true }, { label: "Max days (Existing ETA, up to Max)", value: (r) => num(r.max_recorded), num: true },
+      { label: "Min days (Engine ETA)", value: (r) => num(r.min_engine), num: true }, { label: "Max days (Engine ETA, up to Max)", value: (r) => num(r.max_engine), num: true },
+      { label: "Excess qty (Engine ETA)", value: (r) => num(r.excess_engine), num: true },
+    ];
+    let lastKey = null;
+    for (const r of sc.level_rows) {
+      const key = `${r.family}§${r.level}`;
+      if (key !== lastKey) {
+        if (lastKey !== null) levels.addRow([]);
+        const t = levels.addRow([`${r.family}  ›  ${r.level}`]);
+        t.font = { bold: true, size: 12 };
+        t.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDDE7F5" } };
+        styleHeader(levels.addRow(lcols.map((x) => x.label)));
+        lastKey = key;
+      }
+      const row = levels.addRow(lcols.map((x) => (x.value ? x.value(r) : r[x.key]) ?? null));
+      lcols.forEach((x, k) => { const cell = row.getCell(k + 1); cell.border = BORDER; if (x.num) cell.numFmt = NUM; });
+    }
+    widths(levels, [20, 52, 36, 11, 14, 13, 13, 11, 11, 11, 11, 14]);
   }
 
   writeWaterfall(wb, companies, used);

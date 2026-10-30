@@ -769,10 +769,12 @@ export async function computePlanning(p: PlanningParams) {
   };
   // Owner 2026-10-30: schedule check. Per family, move every not-yet-shipped order to its advised date (the joint schedule, or its own best date) and re-run
   // the family: for each day something lands, each level's Min / Max / cover and the pool left, so the advised dates can be verified against the method.
+  type CheckDays = ReadonlyArray<{ day: string; pool_qty: number; levels: ReadonlyArray<{ level_kind: "OWN" | "GROUP"; level_id: string; level_key: string; members: readonly string[]; cover_days: number | null; max_cover_days: number | null; min_days: number | null; max_days: number | null; reserve_qty: number }> }>;
+  type CheckFamily = { member_ids: string[]; arrivals: Array<{ source_key: string; material_id: string; reference: string; qty_base: number; recorded: string | null; advised: string | null; movable: boolean }>; engine_lots: Array<{ material_id: string; day: string; qty_base: number }>; days: CheckDays; days_recorded: CheckDays };
   const scheduleChecks = (() => {
-    if (!p.scheduleChecks) return [] as Array<{ member_ids: string[]; arrivals: Array<{ source_key: string; material_id: string; reference: string; qty_base: number; recorded: string | null; advised: string | null; movable: boolean }>; engine_lots: Array<{ material_id: string; day: string; qty_base: number }>; days: ReadonlyArray<{ day: string; pool_qty: number; levels: ReadonlyArray<{ level_kind: "OWN" | "GROUP"; level_id: string; cover_days: number | null; min_days: number | null; max_days: number | null; reserve_qty: number }> }> }>;
+    if (!p.scheduleChecks) return [] as CheckFamily[];
     const seen = new Set<string>();
-    const out: Array<{ member_ids: string[]; arrivals: Array<{ source_key: string; material_id: string; reference: string; qty_base: number; recorded: string | null; advised: string | null; movable: boolean }>; engine_lots: Array<{ material_id: string; day: string; qty_base: number }>; days: ReadonlyArray<{ day: string; pool_qty: number; levels: ReadonlyArray<{ level_kind: "OWN" | "GROUP"; level_id: string; cover_days: number | null; min_days: number | null; max_days: number | null; reserve_qty: number }> }> }> = [];
+    const out: CheckFamily[] = [];
     const refByKey = new Map<string, string>(req.output.rows.flatMap((r) => r.inbound_events.map((event, index) => [`A|${r.material_id}|${index}|${event.reference}`, event.reference] as [string, string])));
     for (const id of universe) {
       const input = familyInputFor(id);
@@ -795,8 +797,7 @@ export async function computePlanning(p: PlanningParams) {
       if (forced) {
         moves = new Map();
         for (const a of input.confirmed_arrivals) {
-          const ref = refByKey.get(a.source_key) ?? "";
-          const d = forced.arrivals.get(ref);
+          const d = forced.arrivals.get(refByKey.get(a.source_key) ?? "");
           if (d) moves.set(a.source_key, d);
         }
       }
@@ -806,10 +807,12 @@ export async function computePlanning(p: PlanningParams) {
         : [];
       const res = planFamily({ ...input, plan_buys: !forced, trace: false, level_days: true, confirmed_arrivals: movedArrivals, manual_lots: [...(input.manual_lots ?? []), ...forcedLots] });
       const engineLots = forced ? forcedLots.map((l) => ({ material_id: l.material_id, day: l.plant_eta, qty_base: l.qty_base })) : res.rows.filter((r) => r.planned_lot_qty_base > 0.000001).map((r) => ({ material_id: r.material_id, day: r.day, qty_base: r.planned_lot_qty_base }));
-      const eventDays = new Set<string>([...movedArrivals.map((a) => String(a.eta_to_plant)), ...engineLots.map((l) => l.day)]);
-      const keep = new Set<string>();
-      keep.add(input.as_of);
-      for (const d of eventDays) { keep.add(d); keep.add(new Date(Date.parse(`${d}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10)); }
+      // The same new lots on the RECORDED plant dates, so the two pictures differ only by the not-yet-shipped orders' dates.
+      const resRecorded = planFamily({ ...input, plan_buys: false, trace: false, level_days: true, confirmed_arrivals: input.confirmed_arrivals,
+        manual_lots: [...(input.manual_lots ?? []), ...engineLots.map((l) => ({ material_id: l.material_id, plant_eta: l.day, qty_base: l.qty_base }))] });
+      const eventDays = new Set<string>([...movedArrivals.map((a) => String(a.eta_to_plant)), ...input.confirmed_arrivals.map((a) => String(a.eta_to_plant)), ...engineLots.map((l) => l.day)]);
+      const keep = new Set<string>([input.as_of]);
+      for (const d of eventDays) keep.add(d);
       out.push({
         member_ids: members,
         arrivals: input.confirmed_arrivals.map((a) => ({
@@ -818,6 +821,7 @@ export async function computePlanning(p: PlanningParams) {
         })),
         engine_lots: engineLots,
         days: res.level_days.filter((d) => keep.has(d.day)),
+        days_recorded: resRecorded.level_days.filter((d) => keep.has(d.day)),
       });
     }
     return out;
