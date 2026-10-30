@@ -1221,6 +1221,153 @@ export async function upsertDomesticLeadTimeHandler(req: Request, ctx: Procureme
   }
 }
 
+// Company-to-company transit days (STO / FG STO CSN ETA). One row = one unordered
+// company pair, valid in BOTH directions (canonical order company_a_id < company_b_id).
+// Caller must have access to BOTH companies of a pair to create/change/delete it.
+async function assertBothCompaniesInScope(ctx: ProcurementHandlerContext, companyAId: string, companyBId: string) {
+  await assertCompanyScope(ctx, companyAId);
+  await assertCompanyScope(ctx, companyBId);
+}
+
+export async function listCompanyLeadTimesHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const url = new URL(req.url);
+    const activeParam = url.searchParams.get("is_active");
+    let query = serviceRoleClient
+      .schema("erp_master")
+      .from("lead_time_master_company")
+      .select(`*, company_a:company_a_id(company_code, company_name), company_b:company_b_id(company_code, company_name)`)
+      .order("effective_from", { ascending: false });
+    if (activeParam !== "all") query = query.eq("active", true);
+    const scopedCompanyIds = await listL2MastersScopedCompanyIds(ctx);
+    if (scopedCompanyIds && scopedCompanyIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+    if (scopedCompanyIds) {
+      const list = scopedCompanyIds.join(",");
+      query = query.or(`company_a_id.in.(${list}),company_b_id.in.(${list})`);
+    }
+    const { data, error } = await query;
+    if (error) throw new Error("PROCUREMENT_COMPANY_LEAD_TIME_LIST_FAILED");
+    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_COMPANY_LEAD_TIME_LIST_FAILED";
+    return procurementErrorResponse(req, ctx, code, 500, "Company lead time list failed");
+  }
+}
+
+export async function upsertCompanyLeadTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    // ACL-gated via route-acl-registry (PROC_DOMESTIC_LEAD_TIME_MASTER:WRITE).
+    const body = await parseBody(req);
+    const company1 = toTrimmedString(body.company_1_id);
+    const company2 = toTrimmedString(body.company_2_id);
+    if (!company1 || !company2 || company1 === company2) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_LEAD_TIME_PAIR_INVALID", 400, "Two different companies are required.");
+    }
+    const [companyAId, companyBId] = company1 < company2 ? [company1, company2] : [company2, company1];
+    const transitDays = parseNullableInt(body.transit_days);
+    if (transitDays == null || transitDays < 0) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_LEAD_TIME_DAYS_INVALID", 400, "Transit days must be 0 or more.");
+    }
+    const effectiveFrom = toTrimmedString(body.effective_from);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom)) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_LEAD_TIME_DATE_INVALID", 400, "Effective From date is required.");
+    }
+    if (!(await ensureCompanyExists(companyAId)) || !(await ensureCompanyExists(companyBId))) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_NOT_FOUND", 404, "Company not found");
+    }
+    try {
+      await assertBothCompaniesInScope(ctx, companyAId, companyBId);
+    } catch {
+      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to both companies of this lane.");
+    }
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("lead_time_master_company")
+      .insert({
+        company_a_id: companyAId,
+        company_b_id: companyBId,
+        transit_days: transitDays,
+        effective_from: effectiveFrom,
+        effective_to: toTrimmedString(body.effective_to) || null,
+        active: body.active !== false,
+        created_by: ctx.auth_user_id,
+      })
+      .select("*")
+      .single();
+    if (error) {
+      const duplicate = (error as { code?: string }).code === "23505";
+      throw new Error(duplicate ? "PROCUREMENT_COMPANY_LEAD_TIME_DUPLICATE" : "PROCUREMENT_COMPANY_LEAD_TIME_CREATE_FAILED");
+    }
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_COMPANY_LEAD_TIME_CREATE_FAILED";
+    const status = code.endsWith("_DUPLICATE") ? 409 : code.includes("NOT_FOUND") ? 404 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Company lead time create failed");
+  }
+}
+
+export async function updateCompanyLeadTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    // ACL-gated via route-acl-registry (PROC_DOMESTIC_LEAD_TIME_MASTER:EDIT). The pair is immutable.
+    const id = getLastPathSegment(req);
+    const body = await parseBody(req);
+    const { data: existing, error: existingError } = await serviceRoleClient
+      .schema("erp_master").from("lead_time_master_company")
+      .select("id, company_a_id, company_b_id").eq("id", id).maybeSingle();
+    if (existingError) throw new Error("PROCUREMENT_COMPANY_LEAD_TIME_UPDATE_FAILED");
+    if (!existing) return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_LEAD_TIME_NOT_FOUND", 404, "Company lead time record not found");
+    try {
+      await assertBothCompaniesInScope(ctx, String((existing as JsonRecord).company_a_id), String((existing as JsonRecord).company_b_id));
+    } catch {
+      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to both companies of this lane.");
+    }
+    const updates: JsonRecord = {};
+    if (body.transit_days !== undefined) {
+      const days = parseNullableInt(body.transit_days);
+      if (days == null || days < 0) return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_LEAD_TIME_DAYS_INVALID", 400, "Transit days must be 0 or more.");
+      updates.transit_days = days;
+    }
+    if (body.effective_from !== undefined) updates.effective_from = toTrimmedString(body.effective_from);
+    if (body.effective_to !== undefined) updates.effective_to = toTrimmedString(body.effective_to) || null;
+    if (body.active !== undefined) updates.active = body.active !== false;
+    if (Object.keys(updates).length === 0) {
+      return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_LEAD_TIME_NO_CHANGES", 400, "No changes provided");
+    }
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master").from("lead_time_master_company")
+      .update(updates).eq("id", id).select("*").single();
+    if (error || !data) throw new Error("PROCUREMENT_COMPANY_LEAD_TIME_UPDATE_FAILED");
+    return okResponse({ data }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_COMPANY_LEAD_TIME_UPDATE_FAILED";
+    const status = code.includes("NOT_FOUND") ? 404 : code.includes("NO_CHANGES") || code.endsWith("_INVALID") ? 400 : 500;
+    return procurementErrorResponse(req, ctx, code, status, "Company lead time update failed");
+  }
+}
+
+export async function deleteCompanyLeadTimeHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    // ACL-gated via route-acl-registry (PROC_DOMESTIC_LEAD_TIME_MASTER:DELETE).
+    const id = getLastPathSegment(req);
+    const { data: existing, error: fetchError } = await serviceRoleClient
+      .schema("erp_master").from("lead_time_master_company")
+      .select("id, company_a_id, company_b_id").eq("id", id).maybeSingle();
+    if (fetchError) throw new Error("PROCUREMENT_COMPANY_LEAD_TIME_DELETE_FAILED");
+    if (!existing) return procurementErrorResponse(req, ctx, "PROCUREMENT_COMPANY_LEAD_TIME_NOT_FOUND", 404, "Company lead time record not found");
+    try {
+      await assertBothCompaniesInScope(ctx, String((existing as JsonRecord).company_a_id), String((existing as JsonRecord).company_b_id));
+    } catch {
+      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to both companies of this lane.");
+    }
+    const { error } = await serviceRoleClient.schema("erp_master").from("lead_time_master_company").delete().eq("id", id);
+    if (error) throw new Error("PROCUREMENT_COMPANY_LEAD_TIME_DELETE_FAILED");
+    return okResponse({ ok: true }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_COMPANY_LEAD_TIME_DELETE_FAILED";
+    return procurementErrorResponse(req, ctx, code, code.includes("NOT_FOUND") ? 404 : 500, "Company lead time delete failed");
+  }
+}
+
 export async function listTransportersHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     const url = new URL(req.url);

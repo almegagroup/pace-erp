@@ -475,6 +475,8 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/lead-times/import":          { skipAcl: false, resourceCode: "PROC_IMPORT_LEAD_TIME_MASTER",   action: "WRITE" },
   "GET:/api/procurement/lead-times/domestic":         { skipAcl: false, resourceCode: "PROC_DOMESTIC_LEAD_TIME_MASTER", action: "VIEW"  },
   "POST:/api/procurement/lead-times/domestic":        { skipAcl: false, resourceCode: "PROC_DOMESTIC_LEAD_TIME_MASTER", action: "WRITE" },
+  "GET:/api/procurement/lead-times/company":          { skipAcl: false, resourceCode: "PROC_DOMESTIC_LEAD_TIME_MASTER", action: "VIEW"  },
+  "POST:/api/procurement/lead-times/company":         { skipAcl: false, resourceCode: "PROC_DOMESTIC_LEAD_TIME_MASTER", action: "WRITE" },
   "GET:/api/procurement/transporters":                { skipAcl: false, resourceCode: "PROC_TRANSPORTER_MASTER",        action: "VIEW"  },
   "POST:/api/procurement/transporters":               { skipAcl: false, resourceCode: "PROC_TRANSPORTER_MASTER",        action: "WRITE" },
   "GET:/api/procurement/transporters/contacts":       { skipAcl: false, resourceCode: "PROC_TRANSPORTER_MASTER",        action: "VIEW"  },
@@ -1755,6 +1757,13 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: {
       DELETE: { skipAcl: false, resourceCode: "PROC_IMPORT_LEAD_TIME_MASTER", action: "DELETE" },
       PATCH:  { skipAcl: false, resourceCode: "PROC_IMPORT_LEAD_TIME_MASTER", action: "EDIT"   },
+    },
+  },
+  {
+    pattern: /^\/api\/procurement\/lead-times\/company\/[^/]+$/,
+    methods: {
+      DELETE: { skipAcl: false, resourceCode: "PROC_DOMESTIC_LEAD_TIME_MASTER", action: "DELETE" },
+      PATCH:  { skipAcl: false, resourceCode: "PROC_DOMESTIC_LEAD_TIME_MASTER", action: "EDIT"   },
     },
   },
   {
