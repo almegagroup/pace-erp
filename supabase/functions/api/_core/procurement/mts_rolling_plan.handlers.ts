@@ -128,6 +128,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     const vendorByPo = new Map(pos.map((p) => [text(p.po_number), vendorName.get(text(p.vendor_id)) ?? null]));
     const vendorByCsn = new Map(csnRows.map((c) => [text(c.id), vendorName.get(text(c.vendor_id)) ?? null]));
     const groupLabel = new Map(groupRows.map((g) => [text(g.id), text(g.group_name) || text(g.group_code) || "—"]));
+    const groupFullLabel = new Map(groupRows.map((g) => [text(g.id), [text(g.group_code), text(g.group_name)].filter(Boolean).join(" — ") || "—"]));
     const portToPlant = new Map<string, number>();
     for (const id of materialIds) {
       const gaps = historyCsns.filter((c) => text(c.material_id) === id)
@@ -505,11 +506,11 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const members = fam.member_ids.filter((m) => !bulkRm.has(m));
       if (members.length === 0) continue;
       const lead = members[0];
-      const groupNames = [...new Set(fam.days.flatMap((d) => d.levels.filter((l) => l.level_kind === "GROUP").map((l) => groupLabel.get(l.level_id) ?? "")).filter(Boolean))];
+      const groupNames = [...new Set(fam.days.flatMap((d) => d.levels.filter((l) => l.level_kind === "GROUP").map((l) => groupFullLabel.get(l.level_id) ?? "")).filter(Boolean))];
       const familyName = groupNames.length ? groupNames.join(" / ") : members.map(nameOf).join(" / ");
       const uom = uomOf(lead);
       const q = (n: number) => dq(lead, n) ?? 0;
-      const levelLabel = (kind: string, id: string) => (kind === "OWN" ? `Exclusive — ${nameOf(id)}` : groupLabel.get(id) ?? "Group");
+      const levelLabel = (kind: string, id: string) => (kind === "OWN" ? `Exclusive — ${nameOf(id)}` : groupFullLabel.get(id) ?? "Group");
       const dayMap = new Map(fam.days.map((d) => [d.day, d]));
       const prevOf = (d: string) => addDaysIso2(d, -1);
       const events: Array<{ day: string; label: string; qty: number; type: string; recorded: string | null; shift: number | null }> = [
@@ -530,8 +531,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           const verdict = cover === null || lv.min_days === null ? "" : cover + 1e-9 < lv.min_days ? `BELOW Min by ${Math.max(1, Math.round(lv.min_days - cover))} d` : lv.max_days !== null && cover > lv.max_days + 1e-9 ? "Above Max" : "OK: at or above Min";
           const base = { family: familyName, level: levelLabel(lv.level_kind, lv.level_id), uom };
           levelRows.push({ ...base, date: ev.day, event: ev.label, qty: ev.qty, min_days: whole(lv.min_days), max_days: whole(lv.max_days), cover_days: whole(cover), reserve: q(lv.reserve_qty), excess_after: q(after.pool_qty), verdict });
-          if (ev.type === "Not shipped (engine date)") {
-            checkRows.push({ ...base, order: ev.label, qty: ev.qty, recorded: ev.recorded, advised: ev.day, shift_days: ev.shift, min_days: whole(lv.min_days), max_days: whole(lv.max_days),
+          if (ev.type !== "Shipped / in transit (fixed)") {
+            checkRows.push({ ...base, type: ev.type, order: ev.label, qty: ev.qty, recorded: ev.recorded, advised: ev.day, shift_days: ev.shift, min_days: whole(lv.min_days), max_days: whole(lv.max_days),
               cover_before: whole(bf?.cover_days ?? null), cover_after: whole(cover), reserve: q(lv.reserve_qty), excess_after: q(after.pool_qty), verdict });
           }
         }

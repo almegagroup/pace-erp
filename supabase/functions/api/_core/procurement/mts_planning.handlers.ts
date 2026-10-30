@@ -53,6 +53,12 @@ const num = (value: unknown): number | null => {
 };
 const unique = (values: Array<string | null | undefined>) => [...new Set(values.filter((v): v is string => Boolean(v)))];
 
+/**
+ * Verification only (never set by the API): the plant dates and new lots of an already-downloaded plan, so its schedule can be checked level by level.
+ * `arrivals` = piece reference -> plant date; `lots` = predicted order (material name, plant date, qty in base unit).
+ */
+export const verificationOverride: { schedule: { arrivals: Map<string, string>; lots: Array<{ material: string; date: string; qty: number }> } | null } = { schedule: null };
+
 type PlanningParams = {
   companyId: string; planMonth: string; asOf: string; demandAt: string | null; today: string;
   /** P1 item plan: months after NM (horizon = CM + NM + extra) with a beyond-plan forecast. */
@@ -785,11 +791,24 @@ export async function computePlanning(p: PlanningParams) {
           moves.set(movable[0].source_key, sharedSourceKeys.has(movable[0].source_key) && d > String(movable[0].eta_to_plant) ? String(movable[0].eta_to_plant) : d);
         }
       }
+      const forced = verificationOverride.schedule;
+      if (forced) {
+        moves = new Map();
+        for (const a of input.confirmed_arrivals) {
+          const ref = refByKey.get(a.source_key) ?? "";
+          const d = forced.arrivals.get(ref);
+          if (d) moves.set(a.source_key, d);
+        }
+      }
       const movedArrivals = input.confirmed_arrivals.map((a) => (moves.has(a.source_key) ? { ...a, eta_to_plant: moves.get(a.source_key)! } : a));
-      const res = planFamily({ ...input, plan_buys: true, trace: false, level_days: true, confirmed_arrivals: movedArrivals });
-      const engineLots = res.rows.filter((r) => r.planned_lot_qty_base > 0.000001).map((r) => ({ material_id: r.material_id, day: r.day, qty_base: r.planned_lot_qty_base }));
+      const forcedLots = forced
+        ? forced.lots.flatMap((l) => { const mid = members.find((m) => text(req.materialRows.get(m)?.material_name) === l.material); return mid ? [{ material_id: mid, plant_eta: l.date, qty_base: l.qty }] : []; })
+        : [];
+      const res = planFamily({ ...input, plan_buys: !forced, trace: false, level_days: true, confirmed_arrivals: movedArrivals, manual_lots: [...(input.manual_lots ?? []), ...forcedLots] });
+      const engineLots = forced ? forcedLots.map((l) => ({ material_id: l.material_id, day: l.plant_eta, qty_base: l.qty_base })) : res.rows.filter((r) => r.planned_lot_qty_base > 0.000001).map((r) => ({ material_id: r.material_id, day: r.day, qty_base: r.planned_lot_qty_base }));
       const eventDays = new Set<string>([...movedArrivals.map((a) => String(a.eta_to_plant)), ...engineLots.map((l) => l.day)]);
       const keep = new Set<string>();
+      keep.add(input.as_of);
       for (const d of eventDays) { keep.add(d); keep.add(new Date(Date.parse(`${d}T00:00:00Z`) - 86_400_000).toISOString().slice(0, 10)); }
       out.push({
         member_ids: members,

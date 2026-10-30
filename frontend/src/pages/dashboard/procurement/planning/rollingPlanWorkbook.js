@@ -69,6 +69,8 @@ function addTable(sheet, columns, rows, { color } = {}) {
     if (tone) row.eachCell((cell) => { cell.font = { ...(cell.font ?? {}), color: { argb: tone } }; });
   }
 }
+/** Stable multi-key sort for the schedule-check tabs (each level's picture reads top to bottom by date). */
+const sortBy = (rows, keys) => [...rows].sort((a, b) => { for (const k of keys) { const x = String(a[k] ?? ""); const y = String(b[k] ?? ""); if (x !== y) return x.localeCompare(y); } return 0; });
 function widths(sheet, list) {
   list.forEach((w, i) => { sheet.getColumn(i + 1).width = w; });
 }
@@ -413,22 +415,22 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
     const tone = (r) => (String(r.verdict ?? "").startsWith("BELOW") ? RED : r.verdict === "Above Max" ? AMBER : null);
     const check = wb.addWorksheet(sheetName(`${c.company_code ?? companyLabel(c)} CHECK`, used));
     addTable(check, [
-      { label: "Family (groups)", key: "family" }, { label: "Order (not shipped)", key: "order" }, { label: "Qty", value: (r) => num(r.qty), num: true }, { label: "UoM", key: "uom" },
-      { label: "Recorded plant date", value: (r) => day(r.recorded) }, { label: "Engine advised date", value: (r) => day(r.advised) }, { label: "Moved by (days, + later)", value: (r) => num(r.shift_days), num: true },
+      { label: "Family (groups)", key: "family" }, { label: "Type", key: "type" }, { label: "Order / new lot", key: "order" }, { label: "Qty", value: (r) => num(r.qty), num: true }, { label: "UoM", key: "uom" },
+      { label: "Recorded plant date", value: (r) => day(r.recorded) }, { label: "Engine advised date", value: (r) => day(r.advised) }, { label: "Moved by (days, + later)", value: (r) => num(r.shift_days), num: true }, { label: "Engine instruction (What to do)", key: "instruction" },
       { label: "Level (Exclusive / group)", key: "level" }, { label: "Level Min (d)", value: (r) => num(r.min_days), num: true }, { label: "Level Max (d)", value: (r) => num(r.max_days), num: true },
       { label: "Cover day before landing (d)", value: (r) => num(r.cover_before), num: true }, { label: "Cover end of landing day (d)", value: (r) => num(r.cover_after), num: true },
       { label: "Level reserve after (qty)", value: (r) => num(r.reserve), num: true }, { label: "Excess in pool after (qty)", value: (r) => num(r.excess_after), num: true },
       { label: "Verdict vs Min", key: "verdict" },
-    ], sc.check_rows, { color: tone });
-    widths(check, [44, 50, 11, 7, 13, 13, 11, 34, 9, 9, 13, 13, 14, 14, 24]);
-    check.views = [{ state: "frozen", xSplit: 2, ySplit: 1 }];
+    ], sortBy(sc.check_rows, ["family", "advised", "order"]), { color: tone });
+    widths(check, [44, 24, 50, 11, 7, 13, 13, 11, 46, 34, 9, 9, 13, 13, 14, 14, 24]);
+    check.views = [{ state: "frozen", xSplit: 3, ySplit: 1 }];
     const levels = wb.addWorksheet(sheetName(`${c.company_code ?? companyLabel(c)} LEVELS`, used));
     addTable(levels, [
       { label: "Family (groups)", key: "family" }, { label: "Date", value: (r) => day(r.date) }, { label: "What lands (existing / new)", key: "event" }, { label: "Qty", value: (r) => num(r.qty), num: true }, { label: "UoM", key: "uom" },
       { label: "Level (Exclusive / group)", key: "level" }, { label: "Level Min (d)", value: (r) => num(r.min_days), num: true }, { label: "Level Max (d)", value: (r) => num(r.max_days), num: true },
       { label: "Cover end of day (d)", value: (r) => num(r.cover_days), num: true }, { label: "Level reserve (qty)", value: (r) => num(r.reserve), num: true },
       { label: "Excess in pool after (qty)", value: (r) => num(r.excess_after), num: true }, { label: "Verdict vs Min", key: "verdict" },
-    ], sc.level_rows, { color: tone });
+    ], sortBy(sc.level_rows, ["family", "level", "date"]), { color: tone });
     widths(levels, [44, 12, 56, 11, 7, 34, 9, 9, 13, 14, 14, 24]);
     levels.views = [{ state: "frozen", xSplit: 3, ySplit: 1 }];
   }
