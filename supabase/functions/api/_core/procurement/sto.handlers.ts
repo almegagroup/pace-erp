@@ -54,6 +54,8 @@ type PreparedStoLine = {
   rebate_rate_uom_basis: string | null;
   rebate_remarks: string | null;
   expected_delivery_date: string | null;
+  // Server-resolved (FG STO only): AC04 conversion cost per base unit added to transfer_price.
+  conversion_cost_per_unit?: number | null;
   sending_storage_location_id?: string | null;
   receiving_storage_location_id?: string | null;
   source_csn_id?: string | null;
@@ -984,6 +986,7 @@ async function createStoFromBody(
   req: Request,
   ctx: ProcurementHandlerContext,
   presetBody: JsonRecord | null,
+  conversionCostByLine?: Array<number | null>,
 ): Promise<Response> {
   try {
     assertProcurementReadRole(ctx);
@@ -1042,6 +1045,11 @@ async function createStoFromBody(
         return stoErrorResponse(req, ctx, "STO_LINE_INVALID", 400, code);
       }
     }
+    if (conversionCostByLine) {
+      preparedLines.forEach((preparedLine, index) => {
+        preparedLine.conversion_cost_per_unit = conversionCostByLine[index] ?? null;
+      });
+    }
     // Freight is resolved at invoice-group level.  One STO must therefore
     // carry one unambiguous freight term; never silently take the first line.
     if (new Set(preparedLines.map((line) => line.freight_term)).size !== 1) {
@@ -1097,6 +1105,7 @@ async function createStoFromBody(
         quantity: line.quantity,
         uom_code: line.uom_code,
         transfer_price: line.transfer_price,
+        conversion_cost_per_unit: line.conversion_cost_per_unit ?? null,
         transfer_price_currency: line.currency_code,
         currency_code: line.currency_code,
         payment_term_id: line.payment_term_id,
@@ -1388,6 +1397,40 @@ export async function listFgStoMaterialsHandler(
   }
 }
 
+const FG_STO_LITRE_UOM_CODES = new Set(["L", "LT", "LTR", "LITRE", "LITRES"]);
+
+// AC04 conversion cost per KG for each FG SKU line: SKU -> prodshade (mts_company_skus) -> segment
+// (IWC when the prodshade's base UoM is a litre unit, else POWDER -- same rule the MTS Process PO page
+// uses) -> erp_production.resolve_conversion_rate(company, segment, prodshade, date).
+async function resolveFgConversionCosts(companyId: string, skuIds: string[], onDate: string): Promise<Array<number | null>> {
+  const { data: skuRows, error: skuError } = await serviceRoleClient.schema("erp_planning").rpc("mts_company_skus", { p_company_id: companyId });
+  if (skuError) throw new Error("FG_STO_SKU_LOOKUP_FAILED");
+  const prodshadeBySku = new Map<string, string>();
+  for (const row of (skuRows ?? []) as JsonRecord[]) {
+    prodshadeBySku.set(toTrimmedString(row.sku_material_id), toTrimmedString(row.prodshade_material_id));
+  }
+  const prodshadeIds = [...new Set(skuIds.map((id) => prodshadeBySku.get(id) ?? "").filter(Boolean))];
+  const uomByProdshade = new Map<string, string>();
+  if (prodshadeIds.length > 0) {
+    const { data, error } = await serviceRoleClient.schema("erp_master").from("material_master").select("id, base_uom_code").in("id", prodshadeIds);
+    if (error) throw new Error("FG_STO_PRODSHADE_LOOKUP_FAILED");
+    for (const row of (data ?? []) as JsonRecord[]) uomByProdshade.set(toTrimmedString(row.id), toUpperTrimmedString(row.base_uom_code));
+  }
+  const rateByKey = new Map<string, number | null>();
+  await Promise.all(prodshadeIds.map(async (prodshadeId) => {
+    const segment = FG_STO_LITRE_UOM_CODES.has(uomByProdshade.get(prodshadeId) ?? "") ? "IWC" : "POWDER";
+    const { data, error } = await serviceRoleClient.schema("erp_production").rpc("resolve_conversion_rate", {
+      p_company_id: companyId, p_segment_code: segment, p_prodshade_material_id: prodshadeId, p_posting_date: onDate,
+    });
+    if (error) throw new Error("FG_STO_CONVERSION_RATE_LOOKUP_FAILED");
+    rateByKey.set(prodshadeId, data == null ? null : Number(data));
+  }));
+  return skuIds.map((skuId) => {
+    const prodshadeId = prodshadeBySku.get(skuId) ?? "";
+    return prodshadeId && rateByKey.has(prodshadeId) ? rateByKey.get(prodshadeId) ?? null : null;
+  });
+}
+
 export async function createFgStoHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -1408,7 +1451,24 @@ export async function createFgStoHandler(
         `Line ${bad + 1}: only MTS finished-goods SKUs of the sending company can go on an FG STO.`,
       );
     }
-    return await createStoFromBody(req, ctx, { ...body, sto_type: "INTER_PLANT", is_opening_sto: false, sending_company_id: sendingCompanyId });
+    // AC04 conversion cost per KG for each SKU (sending company, SKU's prodshade + segment, STO date).
+    const conversionCostByLine = await resolveFgConversionCosts(
+      sendingCompanyId,
+      lines.map((line) => toTrimmedString(line.material_id)),
+      toTrimmedString(body.sto_date) || todayIsoDate(),
+    );
+    const missing = conversionCostByLine.findIndex((rate) => rate == null);
+    if (missing >= 0) {
+      return stoErrorResponse(
+        req, ctx, "FG_STO_CONVERSION_RATE_MISSING", 422,
+        `Line ${missing + 1}: no AC04 Conversion Cost is configured for this SKU's prodshade/segment at the sending company. Add it in Conversion Cost (AC04) first.`,
+      );
+    }
+    return await createStoFromBody(
+      req, ctx,
+      { ...body, sto_type: "INTER_PLANT", is_opening_sto: false, sending_company_id: sendingCompanyId },
+      conversionCostByLine,
+    );
   } catch (error) {
     const code = error instanceof Error ? error.message : "FG_STO_CREATE_FAILED";
     return stoErrorResponse(req, ctx, code, 500, code);

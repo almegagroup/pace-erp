@@ -990,7 +990,9 @@ export async function createAndPostGRNFromLineHandler(
 
     // Accounts
     const rateConfirmed = body.rate_confirmed === true;
-    const poRate = parseNullableNumber(body.po_rate) ?? parseNullableNumber(poLineData?.unit_rate) ?? parseNullableNumber(stoLineData?.transfer_price);
+    const poRate = parseNullableNumber(body.po_rate) ?? parseNullableNumber(poLineData?.unit_rate) ?? (stoLineData && parseNullableNumber(stoLineData.transfer_price) !== null
+      ? Number(((parseNullableNumber(stoLineData.transfer_price) ?? 0) + (parseNullableNumber(stoLineData.conversion_cost_per_unit) ?? 0)).toFixed(6))
+      : null);
     const invoiceRate = parseNullableNumber(body.invoice_rate);
     const gstPct = parseNullableNumber(body.gst_pct);
     if (!isBulkNoInvoice && gstPct === null) {
