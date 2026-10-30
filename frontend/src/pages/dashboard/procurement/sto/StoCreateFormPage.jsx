@@ -18,6 +18,9 @@ import {
   createSTO,
   getLastStoPaymentTerm,
   getStoLaneTransit,
+  getFgStoLaneTransit,
+  createFgSto,
+  listFgStoMaterials,
   listAvailableSubCsnsForSto,
 } from "../procurementApi.js";
 
@@ -178,12 +181,14 @@ function LineMoreDrawer({ line, visible, onClose, onChange }) {
   );
 }
 
-export default function StoCreateFormPage({ openingMode = false }) {
+// fgMode = the SO01 "Create FG STO" tab: same STO form, INTER_PLANT only (no distribution / sub-CSN),
+// materials limited to the sending company's MTS FG SKUs, permission = SO01's (PROC_SO_CREATE).
+export default function StoCreateFormPage({ openingMode = false, fgMode = false }) {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
   const runtimeDefaultCompanyId = resolveDefaultTransactionCompanyId(runtimeContext);
   const [form, setForm] = useState({
-    sto_type: openingMode ? "INTER_PLANT" : "CONSIGNMENT_DISTRIBUTION",
+    sto_type: openingMode || fgMode ? "INTER_PLANT" : "CONSIGNMENT_DISTRIBUTION",
     sending_company_id: runtimeDefaultCompanyId,
     receiving_company_id: "",
     sending_cost_center_id: "",
@@ -212,8 +217,13 @@ export default function StoCreateFormPage({ openingMode = false }) {
     },
     // material_type changing the queryKey shouldn't blank the whole page —
     // keep the previous list on screen while the new one loads.
-    { placeholderData: keepPreviousData }
+    { placeholderData: keepPreviousData, enabled: !fgMode }
   );
+  const fgMaterialQuery = useQuery({
+    queryKey: ["procurement", "fg-sto-materials", form.sending_company_id],
+    queryFn: () => listFgStoMaterials({ sending_company_id: form.sending_company_id }),
+    enabled: fgMode && Boolean(form.sending_company_id),
+  });
   const sendingCostCenterQuery = useCostCentersQuery(
     { company_id: form.sending_company_id, active: true },
     { enabled: Boolean(form.sending_company_id) }
@@ -235,9 +245,9 @@ export default function StoCreateFormPage({ openingMode = false }) {
   // Company-to-company lead time lane (Lead Time Masters > Company to Company). Every non-opening
   // STO needs one: the CSN's ETA to plant = LR date + these transit days.
   const laneQuery = useQuery({
-    queryKey: ["procurement", "sto-lane-transit", form.sending_company_id, form.receiving_company_id, form.sto_date],
+    queryKey: ["procurement", fgMode ? "fg-sto-lane-transit" : "sto-lane-transit", form.sending_company_id, form.receiving_company_id, form.sto_date],
     queryFn: () =>
-      getStoLaneTransit({
+      (fgMode ? getFgStoLaneTransit : getStoLaneTransit)({
         sending_company_id: form.sending_company_id,
         receiving_company_id: form.receiving_company_id,
         date: form.sto_date || undefined,
@@ -256,7 +266,10 @@ export default function StoCreateFormPage({ openingMode = false }) {
     setLines((current) => current.map((line) => (line.expected_delivery_date ? line : { ...line, expected_delivery_date: prefill })));
   }, [laneTransitDays, form.sto_date]);
 
-  const materials = materialQuery.materials;
+  const materials = useMemo(
+    () => (fgMode ? (Array.isArray(fgMaterialQuery.data) ? fgMaterialQuery.data : []) : materialQuery.materials),
+    [fgMode, fgMaterialQuery.data, materialQuery.materials]
+  );
   const paymentTerms = paymentTermQuery.paymentTerms;
   const sendingCostCenters = useMemo(
     () => (Array.isArray(sendingCostCenterQuery.data?.data) ? sendingCostCenterQuery.data.data : []),
@@ -326,7 +339,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
   });
 
   const loading =
-    (materialQuery.isLoading && !materialQuery.data) ||
+    (!fgMode && materialQuery.isLoading && !materialQuery.data) ||
     paymentTermQuery.isLoading ||
     (Boolean(form.sending_company_id) && sendingCostCenterQuery.isLoading) ||
     (Boolean(form.receiving_company_id) && receivingCostCenterQuery.isLoading);
@@ -521,7 +534,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
           expected_delivery_date: line.expected_delivery_date || null,
         })),
       };
-      const created = await createSTO(payload);
+      const created = await (fgMode ? createFgSto : createSTO)(payload);
 
       if (openingMode && created?.status === "DRAFT") {
         try {
@@ -721,7 +734,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
     <>
       <ErpScreenScaffold
         eyebrow="Procurement"
-        title={openingMode ? "Create Opening / Legacy Stock Transfer Order" : "Create Stock Transfer Order"}
+        title={openingMode ? "Create Opening / Legacy Stock Transfer Order" : fgMode ? "Create FG STO (MTS finished goods)" : "Create Stock Transfer Order"}
         actions={[
           { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
           {
@@ -761,7 +774,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
                     />
                   </label>
                 )}
-                {(
+                {!fgMode && (
                   <label className="grid gap-1 text-xs font-semibold text-slate-700">
                     STO Type <span className="text-rose-500">*</span>
                     <select
@@ -841,6 +854,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
                     </span>
                   </label>
                 )}
+                {!fgMode && (
                 <label className="grid gap-1 text-xs font-semibold text-slate-700">
                   Material Type
                   <select
@@ -863,6 +877,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
                     ))}
                   </select>
                 </label>
+                )}
                 {openingMode ? (
                   <label className="grid gap-1 text-xs font-semibold text-slate-700">
                     STO Date <span className="text-rose-500">*</span>

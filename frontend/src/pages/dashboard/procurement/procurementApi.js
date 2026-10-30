@@ -686,6 +686,18 @@ export function getStoLaneTransit(params) {
   return fetchProcurement("GET", "/api/procurement/stos/lane-transit", undefined, params);
 }
 
+export function listFgStoMaterials(params) {
+  return fetchProcurement("GET", "/api/procurement/fg-stos/materials", undefined, params);
+}
+
+export function getFgStoLaneTransit(params) {
+  return fetchProcurement("GET", "/api/procurement/fg-stos/lane-transit", undefined, params);
+}
+
+export function createFgSto(data) {
+  return fetchProcurement("POST", "/api/procurement/fg-stos", data);
+}
+
 export function createSTO(data) {
   return fetchProcurement("POST", "/api/procurement/stos", data);
 }

@@ -12,6 +12,7 @@ import type { ContextResolution } from "../../_pipeline/context.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
 import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
@@ -976,9 +977,17 @@ export async function createSTOHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
+  return await createStoFromBody(req, ctx, null);
+}
+
+async function createStoFromBody(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+  presetBody: JsonRecord | null,
+): Promise<Response> {
   try {
     assertProcurementReadRole(ctx);
-    const body = await parseBody(req);
+    const body = presetBody ?? await parseBody(req);
     const isOpeningSto = body.is_opening_sto === true;
     const stoType = toUpperTrimmedString(body.sto_type);
     const sendingCompanyId = await getCompanyScope(ctx, toTrimmedString(body.sending_company_id));
@@ -1339,6 +1348,69 @@ export async function getStoLaneTransitHandler(
     return okResponse({ transit_days: transitDays }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "STO_LANE_LEAD_TIME_LOOKUP_FAILED";
+    return stoErrorResponse(req, ctx, code, 500, code);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// FG STO (SO01 "Create FG STO" tab). Same STO document, same create flow, but: INTER_PLANT only,
+// every line an MTS FG SKU of the sending company (erp_planning.mts_company_skus -- the SKU list the
+// MTS planning/production pages use), never an opening STO. Permission is SO01's (PROC_SO_CREATE).
+// MTO / HPS / MTEST FG (batch-wise) are a later phase.
+// ---------------------------------------------------------------------------
+async function loadMtsFgSkuIds(companyId: string): Promise<Set<string>> {
+  const { data, error } = await serviceRoleClient.schema("erp_planning").rpc("mts_company_skus", { p_company_id: companyId });
+  if (error) throw new Error("FG_STO_SKU_LOOKUP_FAILED");
+  return new Set(((data ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.sku_material_id)).filter(Boolean));
+}
+
+export async function listFgStoMaterialsHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const sendingCompanyId = await getCompanyScope(ctx, url.searchParams.get("sending_company_id") ?? undefined);
+    if (!sendingCompanyId) {
+      return stoErrorResponse(req, ctx, "FG_STO_SENDING_COMPANY_REQUIRED", 400, "sending_company_id is required.");
+    }
+    const skuIds = [...await loadMtsFgSkuIds(sendingCompanyId)];
+    const rows = skuIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(skuIds, (chunk) =>
+      serviceRoleClient.schema("erp_master").from("material_master")
+        .select("id, pace_code, material_name, document_name, base_uom_code, material_type")
+        .in("id", chunk).eq("material_type", "FG"));
+    rows.sort((a, b) => toTrimmedString(a.material_name).localeCompare(toTrimmedString(b.material_name)));
+    return okResponse({ data: rows }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "FG_STO_MATERIAL_LIST_FAILED";
+    return stoErrorResponse(req, ctx, code, 500, code);
+  }
+}
+
+export async function createFgStoHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const body = await parseBody(req);
+    const sendingCompanyId = await getCompanyScope(ctx, toTrimmedString(body.sending_company_id));
+    const lines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
+    if (!sendingCompanyId || lines.length === 0) {
+      return stoErrorResponse(req, ctx, "STO_CREATE_INVALID", 400, "sending_company_id and lines are required.");
+    }
+    const allowed = await loadMtsFgSkuIds(sendingCompanyId);
+    const bad = lines.findIndex((line) => !allowed.has(toTrimmedString(line.material_id)));
+    if (bad >= 0) {
+      return stoErrorResponse(
+        req, ctx, "FG_STO_MATERIAL_NOT_MTS_FG", 422,
+        `Line ${bad + 1}: only MTS finished-goods SKUs of the sending company can go on an FG STO.`,
+      );
+    }
+    return await createStoFromBody(req, ctx, { ...body, sto_type: "INTER_PLANT", is_opening_sto: false, sending_company_id: sendingCompanyId });
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "FG_STO_CREATE_FAILED";
     return stoErrorResponse(req, ctx, code, 500, code);
   }
 }
