@@ -128,6 +128,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     const vendorByPo = new Map(pos.map((p) => [text(p.po_number), vendorName.get(text(p.vendor_id)) ?? null]));
     const vendorByCsn = new Map(csnRows.map((c) => [text(c.id), vendorName.get(text(c.vendor_id)) ?? null]));
     const groupLabel = new Map(groupRows.map((g) => [text(g.id), text(g.group_name) || text(g.group_code) || "—"]));
+    const groupFullLabel = new Map(groupRows.map((g) => [text(g.id), [text(g.group_code), text(g.group_name)].filter(Boolean).join(" — ") || "—"]));
     const portToPlant = new Map<string, number>();
     for (const id of materialIds) {
       const gaps = historyCsns.filter((c) => text(c.material_id) === id)
@@ -496,44 +497,69 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       moves_advised: arrivals.filter((a) => a.engine_best_date).length,
     };
 
-    // Owner 2026-10-30: schedule check tabs. Every not-yet-shipped order is placed on its advised date; for each day something lands, every level's Min / Max / cover
-    // and the pool left are listed, so the advised dates can be verified against the method (CHECK = per order x level, LEVELS = the whole plan by date).
-    const checkRows: Array<Record<string, unknown>> = [];
+    // Owner 2026-10-30: schedule check (two simple tabs per company).
+    // Tab 1 (date_rows): every not-yet-shipped consignment — recorded ETA, engine ETA, the group that decided the date and that group's Min / Max days on both dates.
+    // Tab 2 (level_rows): every Exclusive and every group by itself — each lot that feeds it, what the level keeps, Min / Max days on the recorded ETA and on the engine ETA, and the excess left.
+    // Min days = days the level's own reserve lasts; Max days = days that reserve PLUS the shared excess would last, up to the level's Max target.
+    const dateRows: Array<Record<string, unknown>> = [];
     const levelRows: Array<Record<string, unknown>> = [];
     const whole = (n: number | null | undefined) => (n === null || n === undefined ? null : Math.round(n));
+    const bindingOf = new Map<string, { level_kind: string; level_id: string }>();
+    for (const a of plan.reschedulable_arrivals) if (a.binding) bindingOf.set(`${a.reference}|${a.material_id}`, { level_kind: a.binding.level_kind, level_id: a.binding.level_id });
     for (const fam of plan.schedule_checks ?? []) {
       const members = fam.member_ids.filter((m) => !bulkRm.has(m));
       if (members.length === 0) continue;
       const lead = members[0];
-      const groupNames = [...new Set(fam.days.flatMap((d) => d.levels.filter((l) => l.level_kind === "GROUP").map((l) => groupLabel.get(l.level_id) ?? "")).filter(Boolean))];
-      const familyName = groupNames.length ? groupNames.join(" / ") : members.map(nameOf).join(" / ");
       const uom = uomOf(lead);
       const q = (n: number) => dq(lead, n) ?? 0;
-      const levelLabel = (kind: string, id: string) => (kind === "OWN" ? `Exclusive — ${nameOf(id)}` : groupLabel.get(id) ?? "Group");
-      const dayMap = new Map(fam.days.map((d) => [d.day, d]));
-      const prevOf = (d: string) => addDaysIso2(d, -1);
-      const events: Array<{ day: string; label: string; qty: number; type: string; recorded: string | null; shift: number | null }> = [
-        ...fam.arrivals.filter((a) => a.advised && a.advised >= calendar.asOf).map((a) => ({
-          day: a.advised as string, label: `${a.reference} · ${nameOf(a.material_id)}`, qty: q(a.qty_base),
-          type: a.movable ? "Not shipped (engine date)" : "Shipped / in transit (fixed)", recorded: a.recorded,
-          shift: a.movable && a.recorded && a.advised ? Math.round((Date.parse(`${a.advised}T00:00:00Z`) - Date.parse(`${a.recorded}T00:00:00Z`)) / 86_400_000) : null,
-        })),
-        ...fam.engine_lots.map((l) => ({ day: l.day, label: `NEW (engine) · ${nameOf(l.material_id)}`, qty: q(l.qty_base), type: "New engine order", recorded: null as string | null, shift: null as number | null })),
-      ].sort((a, b) => a.day.localeCompare(b.day) || a.label.localeCompare(b.label));
-      for (const ev of events) {
-        const after = dayMap.get(ev.day);
-        const before = dayMap.get(prevOf(ev.day));
-        if (!after) continue;
-        for (const lv of after.levels) {
-          const bf = before?.levels.find((x) => x.level_kind === lv.level_kind && x.level_id === lv.level_id);
-          const cover = lv.cover_days;
-          const verdict = cover === null || lv.min_days === null ? "" : cover + 1e-9 < lv.min_days ? `BELOW Min by ${Math.max(1, Math.round(lv.min_days - cover))} d` : lv.max_days !== null && cover > lv.max_days + 1e-9 ? "Above Max" : "OK: at or above Min";
-          const base = { family: familyName, level: levelLabel(lv.level_kind, lv.level_id), uom };
-          levelRows.push({ ...base, date: ev.day, event: ev.label, qty: ev.qty, min_days: whole(lv.min_days), max_days: whole(lv.max_days), cover_days: whole(cover), reserve: q(lv.reserve_qty), excess_after: q(after.pool_qty), verdict });
-          if (ev.type === "Not shipped (engine date)") {
-            checkRows.push({ ...base, order: ev.label, qty: ev.qty, recorded: ev.recorded, advised: ev.day, shift_days: ev.shift, min_days: whole(lv.min_days), max_days: whole(lv.max_days),
-              cover_before: whole(bf?.cover_days ?? null), cover_after: whole(cover), reserve: q(lv.reserve_qty), excess_after: q(after.pool_qty), verdict });
-          }
+      const lastDay = fam.days[0]?.levels ?? [];
+      const labelBase = (l: { level_kind: string; level_id: string }) => (l.level_kind === "OWN" ? `Exclusive — ${nameOf(l.level_id)}` : groupFullLabel.get(l.level_id) ?? "Group");
+      // Distinct levels, narrow first: Exclusive, then groups with the fewest eligible members.
+      const levelMap = new Map<string, { level_kind: string; level_id: string; level_key: string; members: readonly string[] }>();
+      for (const d of fam.days) for (const l of d.levels) if (!levelMap.has(l.level_key)) levelMap.set(l.level_key, l);
+      void lastDay;
+      const levels = [...levelMap.values()].sort((a, b) => (a.level_kind === b.level_kind ? a.members.length - b.members.length || a.level_key.localeCompare(b.level_key) : a.level_kind === "OWN" ? -1 : 1));
+      const dupLabel = new Map<string, number>();
+      for (const l of levels) dupLabel.set(labelBase(l), (dupLabel.get(labelBase(l)) ?? 0) + 1);
+      const labelOf = (l: { level_kind: string; level_id: string; members: readonly string[] }) => (dupLabel.get(labelBase(l)) ?? 0) > 1 ? `${labelBase(l)} (allowed: ${l.members.map(nameOf).join(", ")})` : labelBase(l);
+      const at = (days: typeof fam.days, key: string, date: string | null) => {
+        if (!date) return null;
+        const d = days.find((x) => x.day === date);
+        const l = d?.levels.find((x) => x.level_key === key);
+        return d && l ? { min: whole(l.cover_days), max: whole(l.max_cover_days !== null && l.max_days !== null ? Math.min(l.max_cover_days, l.max_days) : l.max_cover_days), reserve: q(l.reserve_qty), excess: q(d.pool_qty) } : null;
+      };
+      const levelsServedBy = (materialId: string) => levels.filter((l) => l.members.includes(materialId));
+      const familyName = [...new Set(levels.filter((l) => l.level_kind === "GROUP").map((l) => groupFullLabel.get(l.level_id) ?? ""))].filter(Boolean).join(" / ") || members.map(nameOf).join(" / ");
+      // Tab 1
+      for (const a of fam.arrivals.filter((x) => x.movable && x.advised && x.advised >= calendar.asOf)) {
+        const bind = bindingOf.get(`${a.reference}|${a.material_id}`);
+        const served = levelsServedBy(a.material_id);
+        const lv = (bind ? served.find((l) => l.level_kind === bind.level_kind && l.level_id === bind.level_id) : null) ?? served[served.length - 1] ?? null;
+        const eng = lv ? at(fam.days, lv.level_key, a.advised) : null;
+        const rec = lv ? at(fam.days_recorded, lv.level_key, a.recorded) : null;
+        dateRows.push({
+          family: familyName, order: `${a.reference} · ${nameOf(a.material_id)}`, qty: q(a.qty_base), uom, recorded: a.recorded, engine: a.advised,
+          shift_days: a.recorded && a.advised ? Math.round((Date.parse(`${a.advised}T00:00:00Z`) - Date.parse(`${a.recorded}T00:00:00Z`)) / 86_400_000) : null,
+          group: lv ? labelOf(lv) : "—", decided_by: bind ? "group that decided the date" : "no deciding group (not needed / kept)",
+          min_recorded: rec?.min ?? null, max_recorded: rec?.max ?? null, min_engine: eng?.min ?? null, max_engine: eng?.max ?? null, excess_engine: eng?.excess ?? null,
+        });
+      }
+      // Tab 2
+      for (const lv of levels) {
+        const lots = [
+          ...fam.arrivals.filter((a) => lv.members.includes(a.material_id) && a.advised && a.advised >= calendar.asOf).map((a) => ({
+            kind: a.movable ? "Not shipped" : "Shipped / in transit", ref: a.reference, material: a.material_id, qty: a.qty_base, recorded: a.recorded, engine: a.advised as string,
+          })),
+          ...fam.engine_lots.filter((l) => lv.members.includes(l.material_id)).map((l) => ({ kind: "NEW (engine)", ref: "NEW (engine)", material: l.material_id, qty: l.qty_base, recorded: l.day as string | null, engine: l.day })),
+        ].sort((a, b) => a.engine.localeCompare(b.engine) || a.ref.localeCompare(b.ref));
+        for (const lot of lots) {
+          const rec = at(fam.days_recorded, lv.level_key, lot.recorded);
+          const eng = at(fam.days, lv.level_key, lot.engine);
+          levelRows.push({
+            family: familyName, level: labelOf(lv), kind: lot.kind, order: lot.ref, material: nameOf(lot.material), qty: q(lot.qty), uom,
+            kept: eng?.reserve ?? null, recorded: lot.recorded, engine: lot.engine,
+            min_recorded: rec?.min ?? null, max_recorded: rec?.max ?? null, min_engine: eng?.min ?? null, max_engine: eng?.max ?? null, excess_engine: eng?.excess ?? null,
+          });
         }
       }
     }
@@ -544,7 +570,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       demand_label: plan.demand_version.label,
       bulk_rm_excluded: bulkRm.size,
       summary, blocks, requirement, buys, store, arrivals, explain,
-      schedule_check: { check_rows: checkRows, level_rows: levelRows },
+      schedule_check: { date_rows: dateRows, level_rows: levelRows },
       // Owner 2026-10-28: R003 -> R001 / R002 and R001 <-> R002, how much and by when.
       // Owner 2026-10-28: Store plan for the whole horizon, month by month (group items; only ACTUAL stock may be issued).
       store_plan: {
