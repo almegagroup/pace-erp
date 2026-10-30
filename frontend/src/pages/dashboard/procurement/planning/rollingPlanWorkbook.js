@@ -158,6 +158,13 @@ const minGapText = (g) => {
   const crit = g.critical_days !== null && g.critical_days !== undefined ? `, Critical ${g.critical_days} d` : "";
   return `Min cannot be saved: below Min for ${g.days_below_min} day(s) (${g.from} to ${g.to}), cover down to ${Math.floor(g.lowest_cover_days)} d (Min ${g.min_days} d${crit}). ${g.critical_broken ? "Critical is ALSO broken." : "Critical holds."}`;
 };
+/** Owner 2026-10-30: the lot is timed at the ITEM's own (lower) Min, so when it lands the level it serves is still below ITS Min (the pool covers the gap): say how many days, and how far above Critical it stays. */
+const minDipText = (d) => {
+  if (!d) return "";
+  const crit = d.critical_days !== null && d.critical_days !== undefined ? `, Critical ${d.critical_days} d` : "";
+  const above = d.days_above_critical !== null && d.days_above_critical !== undefined ? ` ${Math.floor(d.days_above_critical)} d ${d.days_above_critical >= 0 ? "above" : "BELOW"} Critical.` : "";
+  return `When this lot lands, ${d.level_label} sits below its Min for ${d.days_below_min} day(s) (${d.from} to ${d.to}); the pool covers the gap. Cover down to ${Math.floor(d.lowest_cover_days)} d (Min ${d.min_days} d${crit}).${above}`;
+};
 /** Owner 2026-10-30: the same need through the other route (import <-> local): ETD / Port / Plant, only what can still connect from today. */
 const alternativesText = (list) => (Array.isArray(list) ? list : [])
   .map((a) => `${a.route === "IMPORT" ? "IMPORT" : "LOCAL"} · ${a.material} · ${a.vendor}: ETD ${a.etd}${a.port ? ` · Port ${a.port}` : ""} · Plant ${a.plant}${a.moq ? ` · MOQ ${new Intl.NumberFormat("en-IN").format(a.moq)}` : ""}`).join("\n");
@@ -234,7 +241,7 @@ function writeBlocks(sheet, companies, kind) {
       for (const x of b.prediction) {
         const row = sheet.addRow([
           x.source === "YOU" ? "Planner" : "Engine", day(x.import_etd), day(x.port_eta), day(x.date), num(x.qty), coverCell(x.max_days, x.max_days_est, 0, b.plan_end), coverCell(x.min_days, x.min_days_est, 0, b.plan_end), x.material, x.supplier ?? "", day(x.po_by),
-          x.uom ?? "", days(x.trigger_cover_days), days(x.trigger_min_days), triggeredBy(x), minGapText(x.min_gap), "", "", "", alternativesText(x.alternatives),
+          x.uom ?? "", days(x.trigger_cover_days), days(x.trigger_min_days), triggeredBy(x), [minGapText(x.min_gap), minDipText(x.min_dip)].filter(Boolean).join("\n"), "", "", "", alternativesText(x.alternatives),
         ]);
         row.eachCell((cell, i) => { cell.border = BORDER; if (i >= 5 && i <= 7) cell.numFmt = NUM; });
         row.getCell(14).alignment = { wrapText: true, vertical: "top" };

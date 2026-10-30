@@ -302,7 +302,9 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         return {
           ...p, max_days: p.date ? gridByDay.get(p.date)?.max_days ?? null : null, min_days: p.date ? gridByDay.get(p.date)?.min_days ?? null : null,
           max_days_est: p.date ? gridByDay.get(p.date)?.max_days_est ?? null : null, min_days_est: p.date ? gridByDay.get(p.date)?.min_days_est ?? null : null,
-          trigger_cover_days: buy?.trigger_cover_days ?? null, trigger_min_days: buy?.trigger_min_days ?? null, trigger_kind: buy?.need_kind ?? null, min_gap: buy?.min_gap ?? null, alternatives: p.source === "ENGINE" ? alternativesFor(buy, p.date) : [],
+          trigger_cover_days: buy?.trigger_cover_days ?? null, trigger_min_days: buy?.trigger_min_days ?? null, trigger_kind: buy?.need_kind ?? null, min_gap: buy?.min_gap ?? null,
+          min_dip: buy?.min_dip ? { ...buy.min_dip, level_label: buy.min_dip.level_kind === "GROUP" ? groupLabel.get(buy.min_dip.level_label_id) ?? "group" : nameOf(buy.min_dip.level_label_id) } : null,
+          alternatives: p.source === "ENGINE" ? alternativesFor(buy, p.date) : [],
           trigger_group: buy?.trigger_group_id ? groupLabel.get(buy.trigger_group_id) ?? null : null,
           // Every group this one physical lot also feeds (same arrival date), so the sheet can name them all.
           trigger_also_groups: (buy?.covers ?? []).filter((c: string) => c !== "OWN" && c !== "MEMBER_GUARD" && c !== buy?.trigger_group_id).map((c: string) => groupLabel.get(c) ?? "—"),

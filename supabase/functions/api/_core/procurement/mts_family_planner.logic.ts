@@ -174,6 +174,11 @@ export type FamilyBuy = OptimizerAdvisoryBuy & {
    * level sits below its Min until the earliest possible lot lands, how low its cover goes, and whether even the Critical is broken.
    */
   min_gap?: { days_below_min: number; from: string; to: string; lowest_cover_days: number; min_days: number; critical_days: number | null; critical_broken: boolean } | null;
+  /**
+   * Owner 2026-10-30: a lot timed at the ITEM's own (lower) Min lands while a level it serves is still below ITS Min (the pool covers the gap).
+   * How many days that level sits below its Min before this lot lands, how low its cover goes, and how many days that stays above its Critical.
+   */
+  min_dip?: { level_label_id: string; level_kind: "OWN" | "GROUP"; days_below_min: number; from: string; to: string; lowest_cover_days: number; min_days: number; critical_days: number | null; days_above_critical: number | null } | null;
 };
 
 export type FamilyResult = Omit<OptimizerProjectionResult, "advisory_buys"> & {
@@ -1694,6 +1699,27 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
     group_pool_risks: groupPoolRisks,
     arrival_flags: arrivalFlags.sort((a, b) => a.source_key.localeCompare(b.source_key)),
     advisory_buys: buys.map((b) => {
+      if (b.status !== "ADVISORY_LATE" && b.estimated_plant_eta) {
+        const landIdx = allDays.indexOf(b.estimated_plant_eta);
+        if (landIdx > 0) {
+          const levels: Array<{ kind: "OWN" | "GROUP"; idx: number; id: string }> = [];
+          if (b.need_kind === "OWN") levels.push({ kind: "OWN", idx: ids.indexOf(b.material_id), id: b.material_id });
+          for (const c of b.covers) { const gi = pools.findIndex((pl) => pl.group_id === c); if (gi >= 0) levels.push({ kind: "GROUP", idx: gi, id: c }); }
+          let best: NonNullable<FamilyBuy["min_dip"]> | null = null;
+          for (const lv of levels) {
+            if (lv.idx < 0) continue;
+            const rd = new Set(sim.risk.filter((r) => r.kind === lv.kind && r.level === lv.idx).map((r) => r.day));
+            if (!rd.has(landIdx - 1)) continue;
+            let start = landIdx - 1;
+            while (rd.has(start - 1)) start -= 1;
+            const run = sim.risk.filter((r) => r.kind === lv.kind && r.level === lv.idx && r.day >= start && r.day < landIdx);
+            const low = run.reduce((a, c) => (c.cover < a.cover ? c : a));
+            const dip = { level_label_id: lv.id, level_kind: lv.kind, days_below_min: landIdx - start, from: allDays[start], to: allDays[landIdx - 1], lowest_cover_days: low.cover, min_days: low.min, critical_days: low.critical, days_above_critical: low.critical === null ? null : low.cover - low.critical };
+            if (!best || dip.days_below_min > best.days_below_min) best = dip;
+          }
+          if (best) return { ...b, min_dip: best };
+        }
+      }
       if (b.status !== "ADVISORY_LATE" || !b.need_date || !b.estimated_plant_eta) return b;
       const from = allDays.indexOf(b.need_date);
       const to = allDays.indexOf(b.estimated_plant_eta);
