@@ -728,15 +728,24 @@ export async function computePlanning(p: PlanningParams) {
     const cacheKey = movable.map((a) => a.source_key).join("§");
     const hit = jointCache.get(cacheKey);
     if (hit) return hit;
-    const alone = new Map(movable.map((a) => [a.source_key, optimizeFamilyArrival(input, a.source_key)] as const));
     const currentOf = new Map(movable.map((a) => [a.source_key, String(a.eta_to_plant)] as const));
+    // Owner 2026-10-30: orders that serve the same need are SEQUENCED, not judged all alone (alone, interchangeable orders all got the same date: when one
+    // lands the next can come later). In recorded-date order each order is judged with the earlier ones already on their assigned dates.
+    const ordered = [...movable].sort((x, y) => String(x.eta_to_plant).localeCompare(String(y.eta_to_plant)) || x.source_key.localeCompare(y.source_key));
+    const alone = new Map<string, ReturnType<typeof optimizeFamilyArrival>>();
     const moves = new Map<string, string>();
-    for (const a of movable) {
-      const alt = alone.get(a.source_key);
+    let working = input;
+    for (const a of ordered) {
+      const alt = optimizeFamilyArrival(working, a.source_key);
+      alone.set(a.source_key, alt);
       if (!alt) continue;
       const alone0 = alt.not_needed_in_plan ? (alt.plan_end ?? alt.best.eta) : alt.best.eta;
       // A shared shipment is not postponed (it would move the other companies' shares too); a prepone is still advised.
-      moves.set(a.source_key, sharedSourceKeys.has(a.source_key) && alone0 > String(a.eta_to_plant) ? String(a.eta_to_plant) : alone0);
+      const assigned = sharedSourceKeys.has(a.source_key) && alone0 > String(a.eta_to_plant) ? String(a.eta_to_plant) : alone0;
+      moves.set(a.source_key, assigned);
+      if (assigned !== String(a.eta_to_plant)) {
+        working = { ...working, confirmed_arrivals: working.confirmed_arrivals.map((x) => (x.source_key === a.source_key ? { ...x, eta_to_plant: assigned } : x)) };
+      }
     }
     let together = optimizeFamilyTogether(input, moves);
     const dayDiff = (x: string, y: string) => Math.round((Date.parse(`${x}T00:00:00Z`) - Date.parse(`${y}T00:00:00Z`)) / 86_400_000);
@@ -1029,12 +1038,14 @@ export async function computePlanning(p: PlanningParams) {
         .sort((a, b) => String(a.eta_to_plant).localeCompare(String(b.eta_to_plant)) || a.source_key.localeCompare(b.source_key));
       const refOfKey = (key: string) => key.split("|").slice(3).join("|");
       const keyOf = new Map(row.inbound_events.map((event, index) => [event, `A|${row.material_id}|${index}|${event.reference}`]));
-      const optimum = new Map(pieces.map((event) => [event.reschedule_key as string, optimizeFamilyArrival(input, keyOf.get(event)!)]));
+      // Several not-yet-shipped orders in one family are SEQUENCED (see jointFor); a single order is judged alone.
+      const jointFamAll = movableInFamily.length > 1 ? jointFor(input, movableInFamily) : null;
+      const optimum = jointFamAll ? null : new Map(pieces.map((event) => [event.reschedule_key as string, optimizeFamilyArrival(input, keyOf.get(event)!)]));
       return pieces.map((event) => {
         const facts = rescheduleContext.factsOf(event);
-        const bestAlone = optimum.get(event.reschedule_key as string) ?? null;
         const ownKeyJ = keyOf.get(event)!;
-        const jointFam = movableInFamily.length > 1 ? jointFor(input, movableInFamily) : null;
+        const jointFam = jointFamAll;
+        const bestAlone = (jointFam ? jointFam.alone.get(ownKeyJ) : optimum?.get(event.reschedule_key as string)) ?? null;
         const currentEtaJ = event.original_date !== undefined ? event.original_date : event.date;
         let jointNote: string | null = null;
         let best = bestAlone;
