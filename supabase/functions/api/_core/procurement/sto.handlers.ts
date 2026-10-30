@@ -757,12 +757,28 @@ function buildCsnForInterPlantStoLine(input: {
   };
 }
 
+// An FG STO (every line is an FG material) takes its CSN numbers from the separate FG_STO_CSN series
+// (31xxxxxxxx); PO and RM/PM/INT STO CSNs keep the global CSN series (30xxxxxxxx).
+async function isFgStoLines(lines: StoLineRow[]): Promise<boolean> {
+  const materialIds = [...new Set(lines.map((line) => toTrimmedString(line.material_id)).filter(Boolean))];
+  if (materialIds.length === 0) return false;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_master")
+    .select("id, material_type")
+    .in("id", materialIds);
+  if (error) throw new Error("STO_MATERIAL_TYPE_LOOKUP_FAILED");
+  const rows = (data ?? []) as JsonRecord[];
+  return rows.length === materialIds.length && rows.every((row) => toUpperTrimmedString(row.material_type) === "FG");
+}
+
 async function prepareCsnsForSto(sto: StoRow, lines: StoLineRow[], actor: string): Promise<JsonRecord[]> {
   if (sto.sto_type !== "INTER_PLANT") return [];
   const company = await getCompanyRow(toTrimmedString(sto.sending_company_id));
   const terms = await getPaymentTermRowsByIds(lines.map((line) => toTrimmedString(line.payment_term_id)));
+  const csnDocType = (await isFgStoLines(lines)) ? "FG_STO_CSN" : "CSN";
   return await Promise.all(lines.map(async (line) => buildCsnForInterPlantStoLine({
-    sto, line, actionedBy: actor, csnNumber: await generateProcurementDocNumber("CSN"),
+    sto, line, actionedBy: actor, csnNumber: await generateProcurementDocNumber(csnDocType),
     deliveryType: toUpperTrimmedString(sto.delivery_type) || "STANDARD",
     sendingCompanyHasGst: Boolean(toTrimmedString(company?.gst_number)),
     lcRequired: toUpperTrimmedString(terms.get(toTrimmedString(line.payment_term_id))?.payment_method) === "LC",
