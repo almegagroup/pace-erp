@@ -178,7 +178,7 @@ export type FamilyBuy = OptimizerAdvisoryBuy & {
    * Owner 2026-10-30: a lot timed at the ITEM's own (lower) Min lands while a level it serves is still below ITS Min (the pool covers the gap).
    * How many days that level sits below its Min before this lot lands, how low its cover goes, and how many days that stays above its Critical.
    */
-  min_dip?: { level_label_id: string; level_kind: "OWN" | "GROUP"; days_below_min: number; from: string; to: string; lowest_cover_days: number; min_days: number; critical_days: number | null; days_above_critical: number | null } | null;
+  min_dip?: { level_label_id: string; level_kind: "OWN" | "GROUP"; days_below_min: number; from: string; to: string; lowest_cover_days: number; min_days: number; critical_days: number | null; days_above_critical: number | null; ask_day: string | null; ask_wanted_qty: number | null; ask_got_qty: number | null; pool_qty_at_ask: number | null } | null;
 };
 
 export type FamilyResult = Omit<OptimizerProjectionResult, "advisory_buys"> & {
@@ -1714,7 +1714,10 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
             while (rd.has(start - 1)) start -= 1;
             const run = sim.risk.filter((r) => r.kind === lv.kind && r.level === lv.idx && r.day >= start && r.day < landIdx);
             const low = run.reduce((a, c) => (c.cover < a.cover ? c : a));
-            const dip = { level_label_id: lv.id, level_kind: lv.kind, days_below_min: landIdx - start, from: allDays[start], to: allDays[landIdx - 1], lowest_cover_days: low.cover, min_days: low.min, critical_days: low.critical, days_above_critical: low.critical === null ? null : low.cover - low.critical };
+            // The last time this level asked the pool (at or before the first short day): what it wanted, what it got and what the pool held.
+            const ask = sim.levelEvents.filter((e) => e.level_kind === lv.kind && e.level === lv.idx && e.day <= start + 1 && e.shortfall > EPSILON).sort((a, c) => c.day - a.day)[0]
+              ?? sim.levelEvents.filter((e) => e.level_kind === lv.kind && e.level === lv.idx && e.day >= start && e.day < landIdx && e.shortfall > EPSILON)[0];
+            const dip = { ask_day: ask ? allDays[ask.day] : null, ask_wanted_qty: ask ? ask.wanted : null, ask_got_qty: ask ? ask.qty : null, pool_qty_at_ask: ask ? ask.pool_before : null, level_label_id: lv.id, level_kind: lv.kind, days_below_min: landIdx - start, from: allDays[start], to: allDays[landIdx - 1], lowest_cover_days: low.cover, min_days: low.min, critical_days: low.critical, days_above_critical: low.critical === null ? null : low.cover - low.critical };
             if (!best || dip.days_below_min > best.days_below_min) best = dip;
           }
           if (best) return { ...b, min_dip: best };

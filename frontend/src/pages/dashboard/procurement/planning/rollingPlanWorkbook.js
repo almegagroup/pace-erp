@@ -163,7 +163,10 @@ const minDipText = (d) => {
   if (!d) return "";
   const crit = d.critical_days !== null && d.critical_days !== undefined ? `, Critical ${d.critical_days} d` : "";
   const above = d.days_above_critical !== null && d.days_above_critical !== undefined ? ` ${Math.floor(d.days_above_critical)} d ${d.days_above_critical >= 0 ? "above" : "BELOW"} Critical.` : "";
-  return `When this lot lands, ${d.level_label} sits below its Min for ${d.days_below_min} day(s) (${d.from} to ${d.to}); the pool covers the gap. Cover down to ${Math.floor(d.lowest_cover_days)} d (Min ${d.min_days} d${crit}).${above}`;
+  const fmt = (n) => new Intl.NumberFormat("en-IN").format(Math.round(n));
+  const ask = d.ask_day && d.pool_qty_at_ask !== null && d.pool_qty_at_ask !== undefined
+    ? ` On ${d.ask_day} it asked the pool for ${fmt(d.ask_wanted_qty)} KG, got ${fmt(d.ask_got_qty)} KG (pool held ${fmt(d.pool_qty_at_ask)} KG).` : "";
+  return `When this lot lands, ${d.level_label} sits below its Min for ${d.days_below_min} day(s) (${d.from} to ${d.to}): the pool could not refill it.${ask} Cover down to ${Math.floor(d.lowest_cover_days)} d (Min ${d.min_days} d${crit}).${above}`;
 };
 /** Owner 2026-10-30: the same need through the other route (import <-> local): ETD / Port / Plant, only what can still connect from today. */
 const alternativesText = (list) => (Array.isArray(list) ? list : [])
