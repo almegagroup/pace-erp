@@ -1709,7 +1709,7 @@ function PlanningTab({ companyId, planMonth, asOf, demandAt, access }) {
         </button>
       ) : "—"),
     },
-    { key: "total_lead_time_days", label: "Lead (booking + route)", width: "140px", render: (b) => (b.total_lead_time_days === null ? "—" : `${b.total_lead_time_days} d${b.booking_time_days ? ` (incl. ${b.booking_time_days} booking)` : ""}`), copyValue: (b) => b.total_lead_time_days ?? "" },
+    { key: "total_lead_time_days", label: "Lead time (route) · booking", width: "170px", render: (b) => (b.total_lead_time_days === null ? "—" : `${b.total_lead_time_days} d${b.booking_time_days ? ` · booking ${b.booking_time_days} d` : ""}`), copyValue: (b) => b.total_lead_time_days ?? "" },
     { key: "reason", label: "Why", width: "360px" },
   ];
   const flagColumns = [

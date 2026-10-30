@@ -1462,6 +1462,8 @@ export type InboundEvent = {
   reschedule_key?: string;
   /** Source date before a planning reschedule replaced `date`. */
   original_date?: string | null;
+  /** Owner 2026-10-30: a Sub-CSN share moves together with the other shares of its Mother CSN (one vessel); names the other companies' shares. */
+  shared_note?: string;
 };
 
 /**
@@ -1688,9 +1690,9 @@ function percentile(sorted: number[], fraction: number): number | null {
 }
 
 /**
- * Effective lead time used for coverage, in this precedence (owner decision D2/D6,
- * 2026-10-19):
- *   1. configured vendor lead time = Booking Time (blank = 0) + route master
+ * Effective lead time used for coverage, in this precedence (owner decision D2,
+ * 2026-10-19; D6 replaced 2026-10-29: Booking Time is NOT part of the lead time):
+ *   1. configured vendor lead time = the route master days only
  *      (largest across this material's vendors/routes);
  *   2. fallback: observed history max + 4 days (the legacy sheet rule);
  *   3. UNKNOWN (never zero).

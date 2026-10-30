@@ -575,6 +575,23 @@ async function loadSubCsnTransfers(companyId: string, materials: Map<string, Mat
     .or(`company_id.eq.${companyId},consignee_company_id.eq.${companyId},vendor_id.eq.${companyId}`).order("id"), "MTS_REQ_SUB_CSN_LOAD_FAILED");
   const relevant = subs.filter((s) => universe.has(text(s.material_id)));
   if (relevant.length === 0) return result;
+  // Owner 2026-10-30: the other shares of the same Mother CSN (other companies) — they sail on the same vessel, so a date move reaches them too.
+  const motherIds = unique(relevant.map((s) => text(s.mother_csn_id)).filter(Boolean));
+  const siblingRows = motherIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(motherIds, (chunk) => serviceRoleClient.schema("erp_procurement")
+    .from("consignment_note").select("id, csn_number, mother_csn_id, consignee_company_id, dispatch_qty, po_uom_code").in("mother_csn_id", chunk));
+  const mothers = motherIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(motherIds, (chunk) => serviceRoleClient.schema("erp_procurement")
+    .from("consignment_note").select("id, csn_number").in("id", chunk));
+  const companyIds = unique(siblingRows.map((s) => text(s.consignee_company_id)).filter(Boolean));
+  const companyRows = companyIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(companyIds, (chunk) => serviceRoleClient.schema("erp_master")
+    .from("companies").select("id, company_code").in("id", chunk));
+  const companyCode = new Map(companyRows.map((c) => [text(c.id), text(c.company_code)]));
+  const motherNumber = new Map(mothers.map((m) => [text(m.id), text(m.csn_number)]));
+  const sharedNoteOf = (sub: JsonRecord): string | undefined => {
+    const others = siblingRows.filter((s) => text(s.mother_csn_id) === text(sub.mother_csn_id) && text(s.id) !== text(sub.id));
+    if (others.length === 0) return undefined;
+    const list = others.map((s) => `${companyCode.get(text(s.consignee_company_id)) || "another company"} ${new Intl.NumberFormat("en-IN").format(Number(s.dispatch_qty ?? 0))} ${text(s.po_uom_code)}`.trim()).join(", ");
+    return `Mother CSN ${motherNumber.get(text(sub.mother_csn_id)) || "?"} also feeds ${list}`;
+  };
   const stoIds = unique(relevant.map((s) => text(s.sto_id)).filter(Boolean));
   const stoLineIds = unique(relevant.map((s) => text(s.sto_line_id)).filter(Boolean));
   const poLineIds = unique(relevant.map((s) => text(s.po_line_id)).filter(Boolean));
@@ -635,7 +652,9 @@ async function loadSubCsnTransfers(companyId: string, materials: Map<string, Mat
       continue;
     }
     if (receiver === companyId && sender !== companyId) {
-      result.events.push({ material_id: materialId, qty: qtyBase, date, kind: "SUB_CSN_PLANNED", date_source: date ? "SUB_CSN_ETA" : "NONE", reference: `${ref} (planned transfer from another company)` });
+      result.events.push({ material_id: materialId, qty: qtyBase, date, kind: "SUB_CSN_PLANNED", date_source: date ? "SUB_CSN_ETA" : "NONE", reference: `${ref} (planned transfer from another company)`,
+        // Owner 2026-10-30: the user (not the system) distributes the shipment; each receiving company's plan judges its own share like any lot.
+        csn_id: text(sub.id), reschedule_key: `SUB_CSN|${text(sub.id)}`, ...(sharedNoteOf(sub) ? { shared_note: sharedNoteOf(sub) } : {}) });
     } else if (sender === companyId && receiver !== companyId) {
       const key = text(sub.po_line_id) || `stock:${text(sub.id)}`;
       const entry = committedPerLine.get(key) ?? { materialId, qty: 0 };
@@ -883,16 +902,17 @@ async function loadLeadTimes(companyId: string, asOf: string, universe: string[]
     for (const vendorId of vendorsByMaterial.get(materialId) ?? []) {
       const label = vendorLabel.get(vendorId) ?? "—";
       const booking = bookingDays.get(`${vendorId}|${materialId}`) ?? 0;
-      const bookingText = booking > 0 ? `booking ${booking} + ` : "";
+      // Owner 2026-10-29: lead time = route days only; booking is the advance notice before dispatch (PO-by = ETD - booking).
+      const bookingNote = booking > 0 ? ` (booking ${booking} d before dispatch, not part of the lead time)` : "";
       for (const row of domesticRows.filter((r) => text(r.vendor_id) === vendorId && effectiveOn(r))) {
-        configured.push({ vendor_id: vendorId, vendor_label: label, route: "DOMESTIC", days: booking + Number(row.transit_days ?? 0), route_days: Number(row.transit_days ?? 0), detail: `${bookingText}transit ${Number(row.transit_days ?? 0)}` });
+        configured.push({ vendor_id: vendorId, vendor_label: label, route: "DOMESTIC", days: Number(row.transit_days ?? 0), route_days: Number(row.transit_days ?? 0), detail: `transit ${Number(row.transit_days ?? 0)}${bookingNote}` });
       }
       for (const row of importRows.filter((r) => text(r.vendor_id) === vendorId && effectiveOn(r))) {
         const sail = Number(row.sail_time_days ?? 0);
         const clearance = Number(row.clearance_days ?? 0);
         const inlandDays = inland.get(text(row.port_of_discharge_id));
-        const days = booking + sail + clearance + (inlandDays ?? 0);
-        configured.push({ vendor_id: vendorId, vendor_label: label, route: "IMPORT", days, route_days: sail + clearance + (inlandDays ?? 0), ...(inlandDays !== undefined ? { inland_days: inlandDays } : {}), detail: `${bookingText}sail ${sail} + clearance ${clearance} + inland ${inlandDays ?? "not configured"}` });
+        const days = sail + clearance + (inlandDays ?? 0);
+        configured.push({ vendor_id: vendorId, vendor_label: label, route: "IMPORT", days, route_days: sail + clearance + (inlandDays ?? 0), ...(inlandDays !== undefined ? { inland_days: inlandDays } : {}), detail: `sail ${sail} + clearance ${clearance} + inland ${inlandDays ?? "not configured"}${bookingNote}` });
       }
     }
     // Suggested safety days: how late received shipments arrived against their route time.

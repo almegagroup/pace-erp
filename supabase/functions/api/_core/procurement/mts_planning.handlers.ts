@@ -30,7 +30,7 @@ import {
 import { familyClosure } from "./mts_item_plan.logic.ts";
 import { loadGroupCoveragePolicyVersions } from "./mts_group_policy.handlers.ts";
 import { bulkOnlyGroupIds, loadBulkMaterialIds } from "./mts_bulk_materials.ts";
-import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, optimizeFamilyArrival, optimizeFamilyTogether, planFamily } from "./mts_family_planner.logic.ts";
+import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, familyMoveCost, optimizeFamilyArrival, optimizeFamilyTogether, planFamily } from "./mts_family_planner.logic.ts";
 import { assemblePlanningInput, familyArrivalEta, priceUnitCode, familyArrivalRisk, isFamilyAllocatableArrival, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
@@ -175,7 +175,7 @@ async function loadVendorTerms(companyId: string, universe: string[], routesByMa
     // Only a GRN writes the price in the PO unit; a price typed in MM03 (no GRN yet) is per base unit.
     const priceUnit = priceUnitCode({ supply_uom_code: supplyUom, last_grn_date: text(row.last_grn_date), latest_po_uom: poUomByVmi.get(text(row.id))?.uom, base_uom_code: material?.base_uom_code });
     const booking = num(row.booking_time_days);
-    const routeDays = (routesByMaterial.get(materialId) ?? []).filter((r) => r.vendor_id === vendorId).map((r) => r.days - (booking ?? 0));
+    const routeDays = (routesByMaterial.get(materialId) ?? []).filter((r) => r.vendor_id === vendorId).map((r) => r.days); // route days only (owner 2026-10-29)
     result.set(materialId, [...(result.get(materialId) ?? []), {
       vendor_id: vendorId, vendor_label: label.get(vendorId) ?? "—", material_id: materialId,
       moq_base: toBase(row.moq_qty), multiple_base: toBase(row.order_multiple_qty), lot_base: toBase(row.delivery_lot_qty),
@@ -439,7 +439,7 @@ export async function computePlanning(p: PlanningParams) {
   const bulkMaterials = await loadBulkMaterialIds(p.companyId);
   const planningStarted = Date.now();
   const universe = unique(req.output.rows.map((r) => r.material_id));
-  const routesByMaterial = new Map(req.output.rows.map((r) => [r.material_id, (r.lead_time?.configured_routes ?? []).map((route) => ({ vendor_id: route.vendor_id, days: route.days }))]));
+  const routesByMaterial = new Map(req.output.rows.map((r) => [r.material_id, (r.lead_time?.configured_routes ?? []).map((route) => ({ vendor_id: route.vendor_id, days: route.route_days ?? route.days }))]));
   const reuse = p.reuseLoads === true;
   const [vendorTerms, selections] = await Promise.all([
     cachedLoad(`${p.companyId}|vendorTerms|${calendar.asOf}|${hashIds(universe)}`, () => loadVendorTerms(p.companyId, universe, routesByMaterial, req.materials, p.today), reuse),
@@ -728,7 +728,7 @@ export async function computePlanning(p: PlanningParams) {
     }
     let together = optimizeFamilyTogether(input, moves);
     const dayDiff = (x: string, y: string) => Math.round((Date.parse(`${x}T00:00:00Z`) - Date.parse(`${y}T00:00:00Z`)) / 86_400_000);
-    for (let guard = 0; guard < movable.length && movable.length > 1 && together.critical_days_moved > together.critical_days_now; guard += 1) {
+    for (let guard = 0; guard < movable.length && movable.length > 1 && together.below_min_days_moved > together.below_min_days_now; guard += 1) {
       const latest = [...moves.entries()].map(([k, d]) => ({ k, shift: dayDiff(d, currentOf.get(k)!) })).filter((x) => x.shift > 0).sort((x, y) => y.shift - x.shift)[0];
       if (!latest) break;
       moves.set(latest.k, currentOf.get(latest.k)!);
@@ -1032,8 +1032,8 @@ export async function computePlanning(p: PlanningParams) {
           if (jointEta && ((bestAlone.not_needed_in_plan && jointEta === currentEtaJ) || (!bestAlone.not_needed_in_plan && jointEta !== aloneEta))) {
             const shiftJ = Math.round((Date.parse(`${jointEta}T00:00:00Z`) - Date.parse(`${currentEtaJ}T00:00:00Z`)) / 86_400_000);
             jointNote = bestAlone.not_needed_in_plan
-              ? "Alone this order is not needed inside the plan, but together with the other not-yet-shipped orders at their advised dates a level would fall below Critical, so keep the current date."
-              : `Alone it could wait until ${aloneEta}; together with the other not-yet-shipped orders a level would fall below Critical, so the safe date is ${jointEta}.`;
+              ? "Alone this order is not needed inside the plan, but together with the other not-yet-shipped orders at their advised dates a level would fall below its Min, so keep the current date."
+              : `Alone it could wait until ${aloneEta}; together with the other not-yet-shipped orders a level would fall below its Min, so the safe date is ${jointEta}.`;
             best = { ...bestAlone, not_needed_in_plan: false, plan_cover: null, shift_days: shiftJ, best: { ...bestAlone.best, eta: jointEta }, reason: jointNote };
           }
         }
@@ -1064,14 +1064,20 @@ export async function computePlanning(p: PlanningParams) {
           };
         }) : [];
         const together = jointFam ? jointFam.together : null;
+        // Owner 2026-10-30: against Target (Min): how many more days the level sits below its Min, and how low its cover goes, at the advised date.
+        const critEta = best && !best.not_needed_in_plan ? best.critical_latest_eta : null;
+        const moveCost = critEta && currentEta && critEta > best!.best.eta && critEta > currentEta
+          ? familyMoveCost(input, ownKey, critEta, best!.binding ? { level_kind: best!.binding.level_kind, level_id: best!.binding.level_id } : null) : null;
         return {
+          move_cost: moveCost,
+          critical_latest_eta: critEta,
           if_absent: ifAbsent, together, joint_note: jointNote,
           best_port_eta: bestPortEta,
           best_etd: bestEtd,
           route: facts.route,
           binding: best?.binding ? { ...best.binding, level_label: best.binding.level_kind === "OWN" ? `Exclusive — ${nameOf(best.binding.level_id)}` : groupLabel.get(best.binding.level_id) ?? "Group" } : null,
           material_id: row.material_id, material_name: nameOf(row.material_id), material_code: codeOf(row.material_id), uom: uom(row.material_id),
-          reference: event.reference, qty: event.qty, kind: event.kind, reschedule_key: event.reschedule_key as string,
+          reference: event.reference, qty: event.qty, kind: event.kind, reschedule_key: event.reschedule_key as string, shared_note: event.shared_note ?? null,
           eta_plant: currentEta,
           rescheduled_eta: event.original_date !== undefined ? event.date : null,
           optimum: best,

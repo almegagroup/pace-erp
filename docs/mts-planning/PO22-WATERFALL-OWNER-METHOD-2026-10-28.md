@@ -706,3 +706,35 @@ production procurement files. Lesson: local runs under Deno cannot show Node-onl
   Now DOLTEX lead = 5 d, first new lots land 3 / 4 Nov, stock-out days 0 (PROD snapshot run).
 - CMP003 PROD snapshot: runs-out 3 → 2, late orders 20 → 12, new orders 176 → 178.
 - Not changed: the PO22 Requirement tab's own "Lead (booking + route)" display (separate engine).
+
+## 39. Cost against Target (Min) of the advised date (owner 2026-10-30)
+
+The advised latest date only protects **Critical**. Owner asked how far the Target (Min) is given up. "Why this date" now adds one sentence
+when the advised date is later than the recorded one: how many more days the level sits below its Min than on the recorded date
+(counted only up to the landing day; days that are below Min even if the lot landed today are not blamed on the lot), and the lowest cover it
+sinks to (Min and Critical named). Example (PROD snapshot): Gabrosa lot recorded 8 Dec → advised 8 Jan: Exclusive below Min 9 more days (0 → 9),
+cover sinks to 21 d (Min 30, Critical 20). Not shown for overdue lots.
+
+## 40. The advised date now protects the MIN (owner 2026-10-30, replaces the Critical-only rule of §30)
+
+Owner: the Target (Min) must be protected, not only Critical. The advised latest date is now the day before a level would first go below its **Min**
+without this lot (stock-out and unserved group demand still count). The old, looser date is kept as information:
+"Absolute latest (Critical limit): <date>", with what it would cost against the Min (extra days below Min, lowest cover). The jointly-safe check
+also compares days below Min (not Critical). `optimizeFamilyArrival(input, key, protect)` defaults to `"MIN"`; `"CRITICAL"` restores the old rule.
+Effect on the CMP003 PROD snapshot: advised dates move earlier (e.g. CABLE TIE: 6 Dec → 21 Nov), "moves advised" 5 → 3.
+
+## 41. A new order that is too late to save the Min (owner 2026-10-30)
+
+When no lot can land before a level reaches its Min (lead time too long), the engine now says so on that order (Prediction → "Min / Critical status"):
+how many days the level sits below its Min until the earliest possible lot lands, how low its cover goes, and whether even the Critical holds,
+next to the order's own Import ETD / Port ETA / Plant date (today + lead time). PROD snapshot CMP003: 9 engine orders carry this note
+(e.g. DOLTEX 30/80: 5 days below Min, cover down to 6 d, Critical broken).
+
+## 42. Sub-CSN shares: each company judges its own share; no postponing on one company's date (owner 2026-10-30)
+
+The system never distributes a shipment: the user orders for all companies and splits it with CSN / Sub-CSN. Each receiving company's plan
+therefore gives its own latest date for its own Sub-CSN share (like any not-yet-shipped lot). But all shares of one Mother CSN sail on one vessel:
+moving one share moves every share equally, so a "can wait / postpone" advice from one company could push another company below its Min.
+For a Sub-CSN piece the sheet says "Latest for THIS company … take the EARLIEST of all the companies' dates; never postpone on this company's
+date alone" and names the other shares ("Mother CSN … also feeds CMP011 9,000 KG"). No postpone / talk-to-vendor wording is shown for it.
+Not verified on PROD data for CMP005 / CMP011 (offline snapshot for those companies could not be rebuilt in this session); unit tests only.

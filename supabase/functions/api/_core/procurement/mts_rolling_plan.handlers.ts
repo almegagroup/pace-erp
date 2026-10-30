@@ -150,9 +150,9 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       ? Math.round((Date.parse(`${calendar.asOf}T00:00:00Z`) - Date.parse(`${eta}T00:00:00Z`)) / 86_400_000) : null);
     const bestText = (key: string | null | undefined, currentEta: string | null, unit: { base_per_unit: number; uom_code?: string } | null = null, uom = "KG"): string => {
       const o = key ? optimumByKey.get(key) : null;
-      if (!o || (o.shift_days === 0 && !o.not_needed_in_plan)) return o ? bestDateText({ current_eta: currentEta, best_eta: o.best.eta, shift_days: 0, not_needed_in_plan: false, plan_end: o.plan_end, best_port_eta: portByKey.get(key as string) ?? null, talk_to_vendor: false, overdue_days: overdueOf(currentEta) }) : "";
+      if (!o || (o.shift_days === 0 && !o.not_needed_in_plan)) return o ? bestDateText({ current_eta: currentEta, best_eta: o.best.eta, shift_days: 0, not_needed_in_plan: false, plan_end: o.plan_end, best_port_eta: portByKey.get(key as string) ?? null, talk_to_vendor: false, overdue_days: overdueOf(currentEta), shared_note: arrivalByKey.get(key as string)?.shared_note ?? null }) : "";
       const w = key ? windowByKey.get(key) : null;
-      return bestDateText({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, not_needed_in_plan: o.not_needed_in_plan, plan_end: o.plan_end, best_port_eta: portByKey.get(key as string) ?? null, talk_to_vendor: w?.state === "TALK_TO_VENDOR", overdue_days: overdueOf(currentEta),
+      return bestDateText({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, not_needed_in_plan: o.not_needed_in_plan, plan_end: o.plan_end, best_port_eta: portByKey.get(key as string) ?? null, talk_to_vendor: w?.state === "TALK_TO_VENDOR", overdue_days: overdueOf(currentEta), shared_note: arrivalByKey.get(key as string)?.shared_note ?? null,
         cover: o.plan_cover ? { plan_days: o.plan_cover.plan_days, left_with: inUnit(unit, o.plan_cover.stock_at_plan_end_with) ?? 0, left_without: o.plan_cover.stock_at_plan_end_without === null ? null : inUnit(unit, o.plan_cover.stock_at_plan_end_without), avg_daily_use: inUnit(unit, o.plan_cover.avg_daily_use) ?? 0, uom } : null });
     };
     const arrivalByKey = new Map(plan.reschedulable_arrivals.map((a) => [a.reschedule_key, a]));
@@ -168,7 +168,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const binding = a.binding ? { ...a.binding, topup: a.binding.topup ? { ...a.binding.topup, wanted: q(a.binding.topup.wanted), shortfall: q(a.binding.topup.shortfall), pool_before: q(a.binding.topup.pool_before) } : null } : null;
       return {
         absent, etd: a.best_etd ?? "", port: a.best_port_eta ?? "", plant: o.best.eta,
-        why: bestDateWhy({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, binding, uom, vendor_message: w?.state === "TALK_TO_VENDOR" ? w.message : null, joint_note: a.joint_note ?? null, overdue_days: overdueOf(currentEta) }),
+        why: bestDateWhy({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, binding, uom, vendor_message: w?.state === "TALK_TO_VENDOR" ? w.message : null, joint_note: a.joint_note ?? null, overdue_days: overdueOf(currentEta), critical_latest_eta: a.critical_latest_eta ?? null, shared_note: a.shared_note ?? null,
+          move_cost: a.move_cost ? { ...a.move_cost, level_label: a.binding?.level_label ?? null } : null }),
       };
     };
     const advisory = plan.buys.filter((b) => b.status === "ADVISORY" || b.status === "ADVISORY_LATE");
@@ -269,7 +270,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         return {
           ...p, max_days: p.date ? gridByDay.get(p.date)?.max_days ?? null : null, min_days: p.date ? gridByDay.get(p.date)?.min_days ?? null : null,
           max_days_est: p.date ? gridByDay.get(p.date)?.max_days_est ?? null : null, min_days_est: p.date ? gridByDay.get(p.date)?.min_days_est ?? null : null,
-          trigger_cover_days: buy?.trigger_cover_days ?? null, trigger_min_days: buy?.trigger_min_days ?? null, trigger_kind: buy?.need_kind ?? null,
+          trigger_cover_days: buy?.trigger_cover_days ?? null, trigger_min_days: buy?.trigger_min_days ?? null, trigger_kind: buy?.need_kind ?? null, min_gap: buy?.min_gap ?? null,
           trigger_group: buy?.trigger_group_id ? groupLabel.get(buy.trigger_group_id) ?? null : null,
           // Every group this one physical lot also feeds (same arrival date), so the sheet can name them all.
           trigger_also_groups: (buy?.covers ?? []).filter((c: string) => c !== "OWN" && c !== "MEMBER_GUARD" && c !== buy?.trigger_group_id).map((c: string) => groupLabel.get(c) ?? "—"),

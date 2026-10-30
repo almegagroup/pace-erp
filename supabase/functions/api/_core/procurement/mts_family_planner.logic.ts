@@ -169,6 +169,11 @@ export type FamilyBuy = OptimizerAdvisoryBuy & {
   /** Owner 2026-10-29: the group whose free stock triggered this lot (null for an own-use trigger). */
   trigger_group_id?: string | null;
   trigger_min_days?: number | null;
+  /**
+   * Owner 2026-10-30: only for a LATE new order (no lot can land before the level reaches its Min). The Min cannot be saved: how many days the
+   * level sits below its Min until the earliest possible lot lands, how low its cover goes, and whether even the Critical is broken.
+   */
+  min_gap?: { days_below_min: number; from: string; to: string; lowest_cover_days: number; min_days: number; critical_days: number | null; critical_broken: boolean } | null;
 };
 
 export type FamilyResult = Omit<OptimizerProjectionResult, "advisory_buys"> & {
@@ -1688,7 +1693,20 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
     risks: risks.sort((a, b) => a.material_id.localeCompare(b.material_id)),
     group_pool_risks: groupPoolRisks,
     arrival_flags: arrivalFlags.sort((a, b) => a.source_key.localeCompare(b.source_key)),
-    advisory_buys: buys.sort((a, b) => a.material_id.localeCompare(b.material_id) || a.sequence - b.sequence),
+    advisory_buys: buys.map((b) => {
+      if (b.status !== "ADVISORY_LATE" || !b.need_date || !b.estimated_plant_eta) return b;
+      const from = allDays.indexOf(b.need_date);
+      const to = allDays.indexOf(b.estimated_plant_eta);
+      const levelIdx = b.need_kind === "OWN" ? ids.indexOf(b.material_id) : pools.findIndex((p) => p.group_id === b.trigger_group_id);
+      if (from < 0 || to < 0 || levelIdx < 0) return b;
+      const dip = sim.risk.filter((r) => r.kind === b.need_kind && r.level === levelIdx && r.day >= from && r.day < to);
+      if (dip.length === 0) return b;
+      const low = dip.reduce((a, c) => (c.cover < a.cover ? c : a));
+      return { ...b, min_gap: {
+        days_below_min: dip.length, from: allDays[dip[0].day], to: allDays[dip[dip.length - 1].day], lowest_cover_days: low.cover, min_days: low.min, critical_days: low.critical,
+        critical_broken: low.critical !== null && low.cover + 1e-9 < low.critical,
+      } };
+    }).sort((a, b) => a.material_id.localeCompare(b.material_id) || a.sequence - b.sequence),
     group_unmet: groupUnmet,
     level_events: sim.levelEvents.map((event) => ({
       day: allDays[event.day], kind: event.kind, level_kind: event.level_kind,
@@ -1833,13 +1851,18 @@ export type FamilyArrivalOptimum = {
    * fill one day after the advised date; for a prepone it is the one the current date leaves unfilled. Null when no date is advised.
    */
   binding: { day: string; min_day: string; level_kind: "OWN" | "GROUP"; level_id: string; cover_days: number; min_days: number; critical_days: number | null; desired_days: number | null; topup: { day: string; wanted: number; shortfall: number; pool_before: number } | null } | null;
+  /** Owner 2026-10-30: what the date protects ("MIN" = every level stays at or above its Min; "CRITICAL" = only above Critical). */
+  protect: "MIN" | "CRITICAL";
+  /** Owner 2026-10-30: the absolute latest plant date that still keeps every level above its CRITICAL (null when none is needed / no later date). */
+  critical_latest_eta: string | null;
 } | null;
 
 /**
- * Owner 2026-10-29, the PDF's rule: a level may sit below its Min (it keeps asking the pool) but must stay above its Critical.
- * A piece is "needed" when, without it, a level goes below Critical (or stock runs out / group demand is unserved) inside the plan.
+ * Owner 2026-10-30: the advised date PROTECTS THE MIN (default). A piece is "needed" when, without it, a level goes below its Min (or stock
+ * runs out / group demand is unserved) inside the plan. `protect = "CRITICAL"` is the older, looser rule (only Critical is guarded); the
+ * absolute latest date under that looser rule is always returned as `critical_latest_eta`.
  */
-export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: string): FamilyArrivalOptimum {
+export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: string, protect: "MIN" | "CRITICAL" = "MIN"): FamilyArrivalOptimum {
   const piece = input.confirmed_arrivals.find((a) => a.source_key === pieceKey);
   if (!piece || !piece.eta_to_plant || !ISO_DAY.test(piece.eta_to_plant)) return null;
   const currentEta = piece.eta_to_plant;
@@ -1867,11 +1890,18 @@ export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: strin
   const withoutRisk = riskDays(without);
   const earlyRisk = riskDays(earliest);
   const isCritical = (x: { critical_days: number | null; cover_days: number }) => x.critical_days !== null && x.cover_days + 1e-9 < x.critical_days;
-  const prevented = [
+  const preventedFor = (onlyCritical: boolean) => [
     ...without.rows.filter((row) => inPlan(row.day) && row.closing_qty_base < -EPSILON && !earlyRisk.has(`STOCK|${row.day}`)).map((row) => ({ day: row.day, level: null as null | { level_kind: "OWN" | "GROUP"; level_id: string } })),
     ...without.group_unmet.filter((u) => inPlan(u.day) && !earlyRisk.has(`UNMET|${u.group_id}|${u.day}`)).map((u) => ({ day: u.day, level: { level_kind: "GROUP" as const, level_id: u.group_id } })),
-    ...without.level_risk.filter((x) => inPlan(x.day) && isCritical(x) && !earlyRisk.has(`${x.level_kind}|${x.level_id}|${x.day}`)).map((x) => ({ day: x.day, level: { level_kind: x.level_kind, level_id: x.level_id } })),
+    ...without.level_risk.filter((x) => inPlan(x.day) && (!onlyCritical || isCritical(x)) && !earlyRisk.has(`${x.level_kind}|${x.level_id}|${x.day}`)).map((x) => ({ day: x.day, level: { level_kind: x.level_kind, level_id: x.level_id } })),
   ].sort((a, b) => a.day.localeCompare(b.day));
+  const prevented = preventedFor(protect === "CRITICAL");
+  const preventedCritical = preventedFor(true);
+  let criticalLatest: string | null = null;
+  if (preventedCritical.length > 0) {
+    criticalLatest = addDays(preventedCritical[0].day, -1);
+    if (criticalLatest < input.as_of) criticalLatest = input.as_of;
+  }
   const needed = prevented.length > 0;
   const firstDay = prevented[0]?.day ?? null;
   let bestEta = currentEta;
@@ -1887,13 +1917,14 @@ export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: strin
     const sc = familyScore(r);
     return { eta, ...familyDays(r, eta), shortage_days: sc[0], days_below_critical: sc[1], days_below_target: sc[2], first_below_target_day: null };
   };
+  const limit = protect === "MIN" ? "Min" : "Critical";
   const reason = notNeededInPlan
-    ? `Not needed inside the PO21 plan (it ends ${planEndDay}): without this lot no level goes below its Critical before the plan ends.`
+    ? `Not needed inside the PO21 plan (it ends ${planEndDay}): without this lot no level goes below its ${limit} before the plan ends.`
     : shift === 0
-      ? `Current date is right: without this lot a level first goes below its Critical on ${firstDay ?? "—"}.`
+      ? `Current date is right: without this lot a level first goes below its ${limit} on ${firstDay ?? "—"}.`
       : shift > 0
-        ? `Can wait: without this lot a level first goes below its Critical on ${firstDay}.`
-        : `Too late: without this lot a level first goes below its Critical on ${firstDay}.`;
+        ? `Can wait: without this lot a level first goes below its ${limit} on ${firstDay}.`
+        : `Too late: without this lot a level first goes below its ${limit} on ${firstDay}.`;
   // Why this piece is needed: the level that first depends on it, in the run without the piece.
   let binding: NonNullable<FamilyArrivalOptimum>["binding"] = null;
   const first = prevented[0];
@@ -1922,7 +1953,36 @@ export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: strin
       avg_daily_use: roundQty(use / tail.length),
     };
   }
-  return { current: view(currentEta, cur), best: view(bestEta, best), shift_days: shift, reason, not_needed_in_plan: notNeededInPlan, plan_end: planEndDay, plan_cover: planCover, binding };
+  return { current: view(currentEta, cur), best: view(bestEta, best), shift_days: shift, reason, not_needed_in_plan: notNeededInPlan, plan_end: planEndDay, plan_cover: planCover, binding, protect, critical_latest_eta: criticalLatest };
+}
+
+/**
+ * Owner 2026-10-30: what a move costs against the TARGET (Min), not only against Critical. The advised date only guarantees Critical; moving the
+ * piece to `eta` leaves the level below its Min for more days and lets its cover sink to a lowest value. This measures exactly that, for the
+ * level the date was decided on (or every level when none is named), comparing the piece on its recorded date with the piece on `eta`.
+ */
+export type FamilyMoveCost = { below_min_days_now: number; below_min_days_moved: number; lowest_cover_days_moved: number | null; min_days: number | null; critical_days: number | null } | null;
+export function familyMoveCost(input: FamilyPlannerInput, pieceKey: string, eta: string, level: { level_kind: "OWN" | "GROUP"; level_id: string } | null): FamilyMoveCost {
+  const piece = input.confirmed_arrivals.find((a) => a.source_key === pieceKey);
+  if (!piece || !piece.eta_to_plant || !ISO_DAY.test(piece.eta_to_plant) || !ISO_DAY.test(eta)) return null;
+  const base = { ...input, plan_buys: false, trace: false };
+  const run = (when: string) => planFamily({ ...base, confirmed_arrivals: input.confirmed_arrivals.map((a) => (a.source_key === pieceKey ? { ...a, eta_to_plant: when } : a)) });
+  const now = run(piece.eta_to_plant);
+  const moved = eta === piece.eta_to_plant ? now : run(eta);
+  const planEnd = lastFamilyDemandDay(now);
+  // Only the days up to the landing day depend on this piece's date; later days are decided by the next lots (not in this run), so they are not counted.
+  const cutoff = eta > piece.eta_to_plant ? eta : piece.eta_to_plant;
+  // A day that is below Min even when the piece lands today is not caused by this piece's date, so it is left out of the cost.
+  const early = new Set(run(input.as_of).level_risk.map((x) => `${x.level_kind}|${x.level_id}|${x.day}`));
+  const pick = (r: FamilyResult) => r.level_risk.filter((x) => (planEnd === null || x.day <= planEnd) && x.day <= cutoff && !early.has(`${x.level_kind}|${x.level_id}|${x.day}`)
+    && (!level || (x.level_kind === level.level_kind && x.level_id === level.level_id)));
+  const nowRisk = pick(now);
+  const movedRisk = pick(moved);
+  const lowest = movedRisk.length ? movedRisk.reduce((a, b) => (b.cover_days < a.cover_days ? b : a)) : null;
+  return {
+    below_min_days_now: nowRisk.length, below_min_days_moved: movedRisk.length,
+    lowest_cover_days_moved: lowest ? lowest.cover_days : null, min_days: lowest ? lowest.min_days : null, critical_days: lowest ? lowest.critical_days : null,
+  };
 }
 
 /**

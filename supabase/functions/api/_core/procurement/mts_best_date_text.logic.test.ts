@@ -49,3 +49,29 @@ Deno.test("together: extra buying and level-days when everything moves at once",
     "If ALL not-yet-shipped orders move together to their advised dates: 10,000 KG more has to be bought, no level goes below Critical, level-days below Min 1 → 7. Each date is judged alone; moving several at once costs this.",
   );
 });
+
+import { moveCostText } from "./mts_best_date_text.logic.ts";
+Deno.test("the advised date protects the Min; the Critical limit and its cost against the Min are named (owner 2026-10-30)", () => {
+  assertEquals(
+    moveCostText({ below_min_days_now: 0, below_min_days_moved: 9, lowest_cover_days_moved: 21.4, min_days: 30, critical_days: 20, level_label: "Exclusive — GABROSA M700" }, "2027-01-08"),
+    "Absolute latest (Critical limit): 2027-01-08. Landing that late leaves Exclusive — GABROSA M700 below its Min for 9 more day(s) than now (0 → 9 days), with its cover down to 21 d (Min 30 d, Critical 20 d).",
+  );
+  assertEquals(moveCostText({ below_min_days_now: 5, below_min_days_moved: 5, lowest_cover_days_moved: null, min_days: null, critical_days: null }, "2027-01-08"), "Absolute latest (Critical limit): 2027-01-08; it adds no day below the Min.");
+  const w = bestDateWhy({
+    current_eta: "2026-12-08", best_eta: "2026-12-30", shift_days: 22, uom: "KG", vendor_message: null, critical_latest_eta: "2027-01-08",
+    binding: { day: "2026-12-31", min_day: "2026-12-31", level_label: "Exclusive — GABROSA M700", cover_days: 29.6, min_days: 30, critical_days: 20, desired_days: 60, topup: null },
+    move_cost: { below_min_days_now: 0, below_min_days_moved: 9, lowest_cover_days_moved: 21, min_days: 30, critical_days: 20, level_label: "Exclusive — GABROSA M700" },
+  });
+  assertEquals(w.includes("falls below its Min on 2026-12-31") && w.includes("Absolute latest (Critical limit): 2027-01-08"), true);
+});
+
+Deno.test("Sub-CSN share: this company's latest date only, never 'can wait' / postpone, take the earliest of all companies (owner 2026-10-30)", () => {
+  const note = "Mother CSN 3000000330 also feeds CMP011 9,000 KG";
+  const t = bestDateText({ current_eta: "2026-11-17", best_eta: "2026-12-12", shift_days: 25, not_needed_in_plan: false, plan_end: null, best_port_eta: "2026-12-08", talk_to_vendor: true, shared_note: note });
+  assertEquals(t.startsWith("Latest for THIS company: plant by 2026-12-12 · at port by 2026-12-08."), true);
+  assertEquals(t.includes("can wait") || t.includes("Talk to the vendor"), false);
+  assertEquals(t.includes("EARLIEST of all the companies"), true);
+  const w = bestDateWhy({ current_eta: "2026-11-17", best_eta: "2026-12-12", shift_days: 25, uom: "KG", binding: null, shared_note: note, vendor_message: "Cannot be scheduled: Talk to the vendor to see whether postpone by 25 day(s) is possible." });
+  assertEquals(w.includes("whether postpone") || w.includes("Can wait"), false);
+  assertEquals(w.includes("do not postpone on this one alone"), true);
+});
