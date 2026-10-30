@@ -34,7 +34,7 @@ function validDispatchDate(lrDate: string, dispatchDate: string) {
   if (!validIsoDate(lrDate) || !validIsoDate(dispatchDate)) return false;
   const today = todayIsoInKolkata();
   if (dispatchDate < lrDate || dispatchDate > today) return false;
-  if (today >= "2026-11-15") {
+  if (today >= "2026-11-16") {
     const floor = new Date(`${today}T00:00:00Z`); floor.setUTCDate(floor.getUTCDate() - 2);
     return dispatchDate >= floor.toISOString().slice(0, 10);
   }
