@@ -15,7 +15,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse } from "../response.ts";
 import { arrivalStatus, dayRange, familyClosure, familyDayGrid, poNumberOfReference } from "./mts_item_plan.logic.ts";
 import type { OptimizerManualLot } from "./mts_optimizer_phase3d.types.ts";
-import { computePlanning, readParams } from "./mts_planning.handlers.ts";
+import { computePlanning, PLANNING_EXTRA_MONTHS, readParams } from "./mts_planning.handlers.ts";
 import { groupCoveredBy, isTransferFed } from "./mts_requirement.logic.ts";
 import { loadBulkMaterialIds } from "./mts_bulk_materials.ts";
 import { memberMattersForGaps } from "./mts_planning.logic.ts";
@@ -36,7 +36,7 @@ const addDaysIso = (day: string | null, n: number | null) => (day && n !== null 
  * Rolling plan horizon = CM + NM + 4 months = six calendar months (owner 2026-10-28: "planning from today for 6 months,
  * demand as far as the PO21 plan goes"). A month without a PO21 plan has zero demand. Same as the Item Plan.
  */
-const ROLLING_EXTRA_MONTHS = 4;
+const ROLLING_EXTRA_MONTHS = PLANNING_EXTRA_MONTHS;
 
 /** Every user lot of every item of the company (current plan versions). */
 async function loadAllCurrentLots(companyId: string): Promise<OptimizerManualLot[]> {

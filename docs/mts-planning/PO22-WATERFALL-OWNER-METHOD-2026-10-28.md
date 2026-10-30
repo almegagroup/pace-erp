@@ -738,3 +738,10 @@ moving one share moves every share equally, so a "can wait / postpone" advice fr
 For a Sub-CSN piece the sheet says "Latest for THIS company … take the EARLIEST of all the companies' dates; never postpone on this company's
 date alone" and names the other shares ("Mother CSN … also feeds CMP011 9,000 KG"). No postpone / talk-to-vendor wording is shown for it.
 Not verified on PROD data for CMP005 / CMP011 (offline snapshot for those companies could not be rebuilt in this session); unit tests only.
+
+## 43. The Action / Planning view uses the same six-month horizon (owner 2026-10-30)
+
+The Action tab (GET /planning) looked only to the end of next month (CM + NM) while the rolling plan and the Item Plan look six months ahead, so any
+confirmed receipt after next month was called "after this planning horizon — shown as future evidence, not counted as current Family stock".
+`computePlanning` for GET /planning, the saved run and the AI review now use `PLANNING_EXTRA_MONTHS = 4` (CM + NM + 4 = six months), the same as the
+rolling plan. The Planning header shows the real horizon end. CMP003 PROD snapshot: receipts flagged "after horizon" 0.

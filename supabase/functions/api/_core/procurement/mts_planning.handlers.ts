@@ -426,6 +426,12 @@ function costOptionsFor(
 }
 
 /** Full planning payload (labels resolved, R-01: no raw ids shown). */
+/**
+ * Owner 2026-10-30: the Planning / Action view looks as far ahead as the rolling plan and the Item Plan: CM + NM + 4 months (six months).
+ * A confirmed receipt that lands inside that window is counted; before this the Action tab called everything after next month "after the planning horizon".
+ */
+export const PLANNING_EXTRA_MONTHS = 4;
+
 export async function computePlanning(p: PlanningParams) {
   const calendar = buildCalendar(p.planMonth, p.asOf, p.extraMonths ?? 0);
   if (!calendar) throw new Error("MTS_REQ_AS_OF_OUTSIDE_MONTH");
@@ -884,7 +890,7 @@ export async function computePlanning(p: PlanningParams) {
   const activeMaterials = new Set(projection.rows.filter((r) => r.demand_qty_base > 0 || r.confirmed_arrival_qty_base > 0 || r.planned_lot_qty_base > 0).map((r) => r.material_id));
   const payload = {
     company_id: p.companyId,
-    calendar: { as_of: calendar.asOf, cm_start: calendar.cmStart, cm_end: calendar.cmEnd, nm_start: calendar.nmStart, nm_end: calendar.nmEnd },
+    calendar: { as_of: calendar.asOf, cm_start: calendar.cmStart, cm_end: calendar.cmEnd, nm_start: calendar.nmStart, nm_end: calendar.nmEnd, horizon_end: calendar.horizonEnd },
     demand_version: { demand_at: p.demandAt, label: p.demandAt ? `Plan as at ${p.demandAt}` : "Current effective plan" },
     source_fingerprint: req.fingerprint,
     calculated_at: new Date().toISOString(),
@@ -1168,7 +1174,7 @@ export async function getMtsPlanningHandler(req: Request, ctx: ReqHandlerContext
     if (denied) return denied;
     const parsed = readParams(url, todayInIndia());
     if (parsed.error) return fail(req, ctx, parsed.error[0], 400, parsed.error[1]);
-    return okResponse(await computePlanning({ companyId, ...parsed.params! }), ctx.request_id, req);
+    return okResponse(await computePlanning({ companyId, extraMonths: PLANNING_EXTRA_MONTHS, ...parsed.params! }), ctx.request_id, req);
   } catch (error) {
     if (error instanceof Error && error.message === "MTS_REQ_AS_OF_OUTSIDE_MONTH") return fail(req, ctx, error.message, 400, "As-of date must lie inside the selected plan month.");
     return handleError(req, ctx, error, "MTS_PLANNING_FAILED", "Could not calculate the planning.");
@@ -1186,7 +1192,7 @@ export async function saveMtsPlanningRunHandler(req: Request, ctx: ReqHandlerCon
     const parsed = readParams(body, todayInIndia());
     if (parsed.error) return fail(req, ctx, parsed.error[0], 400, parsed.error[1]);
     // Never trust a client payload: the saved run is recalculated here.
-    const result = await computePlanning({ companyId, ...parsed.params! });
+    const result = await computePlanning({ companyId, extraMonths: PLANNING_EXTRA_MONTHS, ...parsed.params! });
     const { data, error } = await serviceRoleClient.schema("erp_planning").from("mts_planning_run").insert({
       company_id: companyId, plan_month: parsed.params!.planMonth, as_of: parsed.params!.asOf, demand_at: parsed.params!.demandAt,
       source_fingerprint: result.source_fingerprint, run_label: text(body.run_label).slice(0, 200) || null, result, created_by: ctx.auth_user_id,
@@ -1254,7 +1260,7 @@ export async function explainMtsPlanningHandler(req: Request, ctx: ReqHandlerCon
     if (process.env.AI_CORE_ENABLED !== "true") return fail(req, ctx, "AI_NOT_ENABLED", 403, "AI explanations are switched off for this environment.");
     const parsed = readParams(body, todayInIndia());
     if (parsed.error) return fail(req, ctx, parsed.error[0], 400, parsed.error[1]);
-    const plan = await computePlanning({ companyId, ...parsed.params! });
+    const plan = await computePlanning({ companyId, extraMonths: PLANNING_EXTRA_MONTHS, ...parsed.params! });
     const prompt = buildPlanningAiPrompt(plan, text(body.material_name) || null, text(body.question) || null);
     const cap = Math.max(1, Number(process.env.PO22_AI_MONTHLY_TOKEN_CAP ?? 1_000_000) || 1_000_000);
     const reserve = Math.ceil(prompt.length / 3) + AI_MAX_OUTPUT_TOKENS;
