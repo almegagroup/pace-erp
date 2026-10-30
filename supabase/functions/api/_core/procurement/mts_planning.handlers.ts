@@ -719,6 +719,9 @@ export async function computePlanning(p: PlanningParams) {
   // Owner 2026-10-29: each not-yet-shipped order is first judged alone (every other order as planned). Moving them all at once can leave a level below Critical,
   // so the family's orders are then moved together to their advised dates and the latest-moving order is pulled back to its current date until no extra
   // level-day falls below Critical: the advised dates shown are jointly safe.
+  // Owner 2026-10-30: management wants ONE coherent schedule per family. A Sub-CSN share is never postponed on its own company's date (every share sails
+  // on one vessel), and the dates are accepted together only when applying them all needs no extra buying and adds no day below Min.
+  const sharedSourceKeys = new Set(req.output.rows.flatMap((r) => r.inbound_events.map((event, index) => (event.shared_note ? `A|${r.material_id}|${index}|${event.reference}` : null)).filter((k): k is string => k !== null)));
   type JointFamily = { moves: Map<string, string>; together: ReturnType<typeof optimizeFamilyTogether>; alone: Map<string, ReturnType<typeof optimizeFamilyArrival>> };
   const jointCache = new Map<string, JointFamily>();
   const jointFor = (input: FamilyPlannerInput, movable: ReadonlyArray<{ source_key: string; eta_to_plant: string | null }>): JointFamily => {
@@ -730,11 +733,14 @@ export async function computePlanning(p: PlanningParams) {
     const moves = new Map<string, string>();
     for (const a of movable) {
       const alt = alone.get(a.source_key);
-      if (alt) moves.set(a.source_key, alt.not_needed_in_plan ? (alt.plan_end ?? alt.best.eta) : alt.best.eta);
+      if (!alt) continue;
+      const alone0 = alt.not_needed_in_plan ? (alt.plan_end ?? alt.best.eta) : alt.best.eta;
+      // A shared shipment is not postponed (it would move the other companies' shares too); a prepone is still advised.
+      moves.set(a.source_key, sharedSourceKeys.has(a.source_key) && alone0 > String(a.eta_to_plant) ? String(a.eta_to_plant) : alone0);
     }
     let together = optimizeFamilyTogether(input, moves);
     const dayDiff = (x: string, y: string) => Math.round((Date.parse(`${x}T00:00:00Z`) - Date.parse(`${y}T00:00:00Z`)) / 86_400_000);
-    for (let guard = 0; guard < movable.length && movable.length > 1 && together.below_min_days_moved > together.below_min_days_now; guard += 1) {
+    for (let guard = 0; guard < movable.length && movable.length > 1 && (together.below_min_days_moved > together.below_min_days_now || together.extra_buy_qty_base > 0.5); guard += 1) {
       const latest = [...moves.entries()].map(([k, d]) => ({ k, shift: dayDiff(d, currentOf.get(k)!) })).filter((x) => x.shift > 0).sort((x, y) => y.shift - x.shift)[0];
       if (!latest) break;
       moves.set(latest.k, currentOf.get(latest.k)!);
@@ -1037,9 +1043,11 @@ export async function computePlanning(p: PlanningParams) {
           const aloneEta = bestAlone.not_needed_in_plan ? null : bestAlone.best.eta;
           if (jointEta && ((bestAlone.not_needed_in_plan && jointEta === currentEtaJ) || (!bestAlone.not_needed_in_plan && jointEta !== aloneEta))) {
             const shiftJ = Math.round((Date.parse(`${jointEta}T00:00:00Z`) - Date.parse(`${currentEtaJ}T00:00:00Z`)) / 86_400_000);
-            jointNote = bestAlone.not_needed_in_plan
-              ? "Alone this order is not needed inside the plan, but together with the other not-yet-shipped orders at their advised dates a level would fall below its Min, so keep the current date."
-              : `Alone it could wait until ${aloneEta}; together with the other not-yet-shipped orders a level would fall below its Min, so the safe date is ${jointEta}.`;
+            jointNote = sharedSourceKeys.has(ownKeyJ)
+              ? "Shared shipment: kept on its recorded date, because moving it would move the other companies' shares as well."
+              : bestAlone.not_needed_in_plan
+                ? "Alone this order is not needed inside the plan, but moving all the not-yet-shipped orders together would need extra buying or leave a level below its Min for more days, so keep the current date."
+                : `Alone it could wait until ${aloneEta}; but moving all the not-yet-shipped orders together would need extra buying or leave a level below its Min for more days, so the recommended date is ${jointEta}.`;
             best = { ...bestAlone, not_needed_in_plan: false, plan_cover: null, shift_days: shiftJ, best: { ...bestAlone.best, eta: jointEta }, reason: jointNote };
           }
         }

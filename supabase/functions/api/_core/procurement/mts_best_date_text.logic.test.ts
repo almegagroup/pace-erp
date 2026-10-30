@@ -46,7 +46,7 @@ Deno.test("overdue piece: never 'can wait' / 'postpone' - says overdue and no sh
 Deno.test("together: extra buying and level-days when everything moves at once", () => {
   assertEquals(
     togetherText({ extra_buy_qty: 10000, below_min_days_now: 1, below_min_days_moved: 7, critical_days_now: 0, critical_days_moved: 0, uom: "KG" }),
-    "If ALL not-yet-shipped orders move together to their advised dates: 10,000 KG more has to be bought, no level goes below Critical, level-days below Min 1 → 7. Each date is judged alone; moving several at once costs this.",
+    "RECOMMENDED SCHEDULE for this family = the \"What to do\" date of each order together (an order is moved to its date, or kept). Applying ALL of them: 10,000 KG more has to be bought, 6 more level-days below Min.",
   );
 });
 

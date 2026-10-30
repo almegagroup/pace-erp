@@ -130,12 +130,15 @@ export function ifAbsentText(list: readonly IfAbsentInput[], currentEta: string 
 
 export type TogetherInput = { extra_buy_qty: number; below_min_days_now: number; below_min_days_moved: number; critical_days_now: number; critical_days_moved: number; uom: string };
 
-/** One line for the family: every not-yet-shipped order moved to its own advised date at once. */
+/**
+ * One line for the family (owner 2026-10-30): the recommended schedule is the set of dates in "What to do" (an order is either moved to its date or kept).
+ * This says what applying ALL of them together costs.
+ */
 export function togetherText(t: TogetherInput): string {
   const buy = t.extra_buy_qty > 0.5 ? `${fmt(t.extra_buy_qty)} ${t.uom} more has to be bought` : t.extra_buy_qty < -0.5 ? `${fmt(-t.extra_buy_qty)} ${t.uom} less has to be bought` : "no extra buying";
-  const critical = t.critical_days_moved > t.critical_days_now ? `, ${t.critical_days_moved - t.critical_days_now} more level-days below Critical` : ", no level goes below Critical";
-  const min = t.below_min_days_moved !== t.below_min_days_now ? `, level-days below Min ${t.below_min_days_now} → ${t.below_min_days_moved}` : "";
-  return `If ALL not-yet-shipped orders move together to their advised dates: ${buy}${critical}${min}. Each date is judged alone; moving several at once costs this.`;
+  const min = t.below_min_days_moved > t.below_min_days_now ? `${t.below_min_days_moved - t.below_min_days_now} more level-days below Min` : t.below_min_days_moved < t.below_min_days_now ? `${t.below_min_days_now - t.below_min_days_moved} fewer level-days below Min` : "no extra day below Min";
+  const critical = t.critical_days_moved > t.critical_days_now ? `, ${t.critical_days_moved - t.critical_days_now} more level-days below Critical` : "";
+  return `RECOMMENDED SCHEDULE for this family = the "What to do" date of each order together (an order is moved to its date, or kept). Applying ALL of them: ${buy}, ${min}${critical}.`;
 }
 
 export type ActionInput = {
