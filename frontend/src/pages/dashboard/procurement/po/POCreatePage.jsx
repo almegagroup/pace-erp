@@ -63,7 +63,7 @@ const CUSTOMS_MOVEMENT_TYPE_OPTIONS = [
   { value: "ICD", label: "ICD — Inland Container Depot" },
 ];
 
-function createEmptyLine(defaultPaymentTermId = "") {
+function createEmptyLine(defaultPaymentTermId = "", defaultCurrencyCode = "INR") {
   return {
     material_id: "",
     quantity: "",
@@ -71,7 +71,7 @@ function createEmptyLine(defaultPaymentTermId = "") {
     uomOptions: [],
     paymentTermOptions: [],
     rate: "",
-    currency_code: "INR",
+    currency_code: defaultCurrencyCode,
     delivery_date: "",
     payment_term_id: defaultPaymentTermId,
     freight_term: "FOR",
@@ -367,6 +367,17 @@ export default function POCreatePage() {
   const defaultPaymentTermId = paymentTerms[0]?.id || "";
 
   const selectedVendor = useMemo(() => vendorDetailCacheRef.current.get(form.vendor_id) ?? null, [form.vendor_id]);
+  // The line Curr select used to default to INR for every vendor, so an import PO
+  // to a USD vendor printed "(INR)" whenever the operator did not switch it by hand
+  // (prod CMP006 ACPLP2627-0205, 2026-10-30). Default to the vendor master's currency.
+  const vendorCurrency = ["INR", "USD"].includes(String(selectedVendor?.currency_code || "").toUpperCase())
+    ? String(selectedVendor.currency_code).toUpperCase()
+    : "INR";
+  useEffect(() => {
+    setLines((current) => current.map((line) => (
+      line.currencyTouched || line.currency_code === vendorCurrency ? line : { ...line, currency_code: vendorCurrency }
+    )));
+  }, [vendorCurrency, form.vendor_id]);
   // High Sea Sale: a DOMESTIC vendor's PO can be an import PO too (see PoHssFields.jsx).
   const { vendorIsImport, isImportPo: showIncoterm, isHss } = resolveHssState(selectedVendor, form);
   const hssMotherOptions = useMemo(
@@ -444,7 +455,7 @@ export default function POCreatePage() {
   }
 
   function addLine() {
-    setLines((current) => [...current, createEmptyLine(defaultPaymentTermId)]);
+    setLines((current) => [...current, createEmptyLine(defaultPaymentTermId, vendorCurrency)]);
   }
 
   function removeLine(index) {
@@ -757,7 +768,7 @@ export default function POCreatePage() {
       render: (_row, index) => (
         <select
           value={lines[index].currency_code || "INR"}
-          onChange={(event) => updateLine(index, { currency_code: event.target.value })}
+          onChange={(event) => updateLine(index, { currency_code: event.target.value, currencyTouched: true })}
           className="h-8 w-full border border-slate-300 bg-white px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
         >
           {CURRENCY_OPTIONS.map((option) => (

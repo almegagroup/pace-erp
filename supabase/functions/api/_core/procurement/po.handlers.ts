@@ -1878,7 +1878,7 @@ export async function getPoFilterOptionsHandler(
     if (companyIds !== null && companyIds.length > 0) companyQuery = companyQuery.in("id", companyIds);
 
     let vendorQuery = serviceRoleClient.schema("erp_master").from("vendor_master")
-      .select("id, vendor_code, vendor_name, vendor_type, indent_number_required, gst_number, reg_address_state, default_hss_mother_vendor_id")
+      .select("id, vendor_code, vendor_name, vendor_type, currency_code, indent_number_required, gst_number, reg_address_state, default_hss_mother_vendor_id")
       .eq("status", "ACTIVE")
       .order("vendor_name", { ascending: true });
     if (vendorIds !== null && vendorIds.length > 0) vendorQuery = vendorQuery.in("id", vendorIds);
