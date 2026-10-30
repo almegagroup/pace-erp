@@ -523,13 +523,18 @@ async function buildPackingPreview(session: SessionHeader, rawRows: unknown, sto
       balances = group.storage_location_id ? await fetchLocationNetAvailability(session.companyId, group.storage_location_id, candidates) : new Map();
       remainingByLocation.set(group.storage_location_id, balances);
     }
+    // Net availability of EVERY member before this group allocates, so the page can
+    // re-check whichever member the operator swaps to (not just the derived row).
+    const candidateAvailability = Object.fromEntries(
+      (group.group_member_ids as string[]).map((id) => [id, Number((balances!.get(id) ?? 0).toFixed(6))]),
+    );
     const derived = computeMtsAutoDeriveRowsForGroup({
       formulationMaterialId: group.material_id, dosagePct: null, standardQty: group.standard_qty,
       alternateMaterialIds: group.group_member_ids.filter((id) => id !== group.material_id), bucketBalances: balances,
       usageOrder: group.has_alternate && group.material_group_id ? usageOrders.get(group.material_group_id) ?? null : null,
     });
     for (const row of derived.rows) if (row.actual_qty > EPSILON) balances.set(row.actual_material_id, Number(((balances.get(row.actual_material_id) ?? 0) - row.actual_qty).toFixed(6)));
-    derivedGroups.push({ ...group, auto_derive_applicable: true, rows: derived.rows, short: derived.short, shortfall_qty: derived.shortfallQty });
+    derivedGroups.push({ ...group, auto_derive_applicable: true, rows: derived.rows, short: derived.short, shortfall_qty: derived.shortfallQty, candidate_availability: candidateAvailability });
   }
   const materialIds = new Set<string>(); const locationIds = new Set<string>();
   for (const group of derivedGroups) {

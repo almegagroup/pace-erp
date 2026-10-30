@@ -83,6 +83,7 @@ function isProductionDateWithinWindow(value) {
 }
 const KG_UOM_CODES = new Set(["KG", "KGS", "KILOGRAM", "KILOGRAMS"]);
 const LITRE_UOM_CODES = new Set(["L", "LT", "LTR", "LITRE", "LITRES"]);
+const KILOLITRE_UOM_CODES = new Set(["KL", "KLTR", "KILOLITRE", "KILOLITRES", "KILOLITER", "KILOLITERS"]);
 const MACHINE_CAPACITY_TOLERANCE = 1.1;
 
 const EMPTY_PROCESS = {
@@ -449,7 +450,12 @@ export default function ProductionPOCreatePage() {
     }
     let capacityKg = null;
     if (KG_UOM_CODES.has(uom)) capacityKg = capacity;
-    if (LITRE_UOM_CODES.has(uom) && literToKgFactor) capacityKg = capacity * literToKgFactor;
+    // Machine capacity litre->KG uses the Stroke's own factor for EVERY po_type
+    // (same as the backend's resolveMachineCapacityKg), not only MTS-IWC.
+    const strokeKgPerLitre = Number(strokeDetailQ.data?.conversion_factor);
+    const kgPerLitre = Number.isFinite(strokeKgPerLitre) && strokeKgPerLitre > 0 ? strokeKgPerLitre : null;
+    if (LITRE_UOM_CODES.has(uom) && kgPerLitre) capacityKg = capacity * kgPerLitre;
+    if (KILOLITRE_UOM_CODES.has(uom) && kgPerLitre) capacityKg = capacity * 1000 * kgPerLitre;
     if (!capacityKg) {
       return { blocked: true, message: "Machine capacity UOM must be KG, or Litre with a valid Stroke conversion factor." };
     }
@@ -459,7 +465,7 @@ export default function ProductionPOCreatePage() {
       return { blocked: true, message: `Batch Size ${formatPreciseNumber(plannedKg, "0.###")} KG exceeds the allowed maximum ${formatPreciseNumber(maximumKg, "0.###")} KG (Machine Capacity ${capacity} ${uom} + 10%).` };
     }
     return { blocked: false, message: `Maximum allowed: ${formatPreciseNumber(maximumKg, "0.###")} KG (Machine Capacity ${capacity} ${uom} + 10%).` };
-  }, [literToKgFactor, machineRequired, processForm.machine_id, processForm.planned_qty_kg, selectedMachine]);
+  }, [strokeDetailQ.data?.conversion_factor, machineRequired, processForm.machine_id, processForm.planned_qty_kg, selectedMachine]);
 
   // MTS Page 3 "Shift" — company-wise, inline-create-as-you-go (2026-09-17 lock).
   const [shiftCreateName, setShiftCreateName] = useState("");
@@ -2465,7 +2471,22 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
     setOverrides((current) => ({ ...current, [group.stroke_line_id]: rows }));
   }
 
-  const shortGroups = groups.filter((g) => g.short);
+  // The server's group-level `short` is only true when the formulation AND every
+  // alternate are individually short, so it never blocks an operator who picks
+  // one specific material that cannot cover the Standard Qty (found live
+  // 2026-10-29, prod CMP005: Page 4 passed, create then failed
+  // PROD_MTS_INSUFFICIENT_STOCK). Also check what is actually going to be issued.
+  function selectionIsShort(g) {
+    if (g.auto_derive_applicable) {
+      return g.rows.some((r) => Number(r.actual_qty) > EPSILON_FRONTEND
+        && Number(r.actual_qty) > Number(r.available_qty ?? 0) + EPSILON_FRONTEND);
+    }
+    const pick = g.manual_material_selection_required === false ? g.stroke_line_material_id : manualPicks[g.stroke_line_id];
+    if (!pick) return false;
+    const row = g.rows.find((r) => r.actual_material_id === pick);
+    return row ? Number(row.available_qty ?? 0) < Number(g.standard_qty) - EPSILON_FRONTEND : false;
+  }
+  const shortGroups = groups.filter((g) => g.short || selectionIsShort(g));
   const manualPickMissing = groups.some((g) => !g.auto_derive_applicable
     && g.manual_material_selection_required !== false
     && !manualPicks[g.stroke_line_id]
@@ -2599,7 +2620,7 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
 
       {shortGroups.length > 0 && (
         <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-          Insufficient stock (formulation + alternates combined) for: {shortGroups.map((g) => materialLabel(g.stroke_line_material_id)).join(", ")}.
+          Insufficient stock for the selected material(s) of: {shortGroups.map((g) => materialLabel(g.stroke_line_material_id)).join(", ")}. Pick another material or arrange stock.
         </div>
       )}
 
@@ -2649,7 +2670,7 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
                   }));
                   const isFirstRow = rowIndex === 0;
                   return (
-                    <tr key={rowKey} className={group.short ? "bg-rose-50" : "border-b border-slate-100"}>
+                    <tr key={rowKey} className={shortGroups.includes(group) ? "bg-rose-50" : "border-b border-slate-100"}>
                       <td className="border-b border-slate-100 px-3 py-2">{isFirstRow ? groupIndex + 1 : ""}</td>
                       <td className="border-b border-slate-100 px-3 py-2">RM</td>
                       <td className="border-b border-slate-100 px-3 py-2">{isFirstRow ? materialLabel(group.stroke_line_material_id) : ""}</td>
@@ -2692,7 +2713,7 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
                       <td className="border-b border-slate-100 px-3 py-2">Yes</td>
                       <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(displayedActualQty, "0.###")}</td>
                       <td className="border-b border-slate-100 px-3 py-2">
-                        {group.short ? <span className="text-rose-600">Short</span> : ""}
+                        {shortGroups.includes(group) ? <span className="text-rose-600">Short</span> : ""}
                         {group.auto_derive_applicable && isEditable && rows.length > 1 && (
                           <button
                             type="button"
@@ -3229,7 +3250,16 @@ function MtsPackingCombineStep({ session, onBack, onDone }) {
   // `short` is calculated for the initial Pack-BOM location. Once the user
   // chooses a different location, the old result must not block Save; the
   // backend re-checks the selected location using fresh balances.
-  const shortGroups = groups.filter((g) => g.short && storageLocationForGroup(g) === g.storage_location_id);
+  // Group-level `short` only fires when every member is short. Also flag a group
+  // whose CURRENTLY SELECTED member(s) cannot cover their qty, using the server's
+  // per-member availability (candidate_availability, valid for the initial
+  // location only -- a changed location is re-checked by the backend, see above).
+  function selectionIsShort(g) {
+    if (storageLocationForGroup(g) !== g.storage_location_id || !g.candidate_availability) return false;
+    return rowsForGroup(g).some((r) => Number(r.actual_qty) > EPSILON_FRONTEND
+      && Number(r.actual_qty) > Number(g.candidate_availability[r.actual_material_id] ?? 0) + EPSILON_FRONTEND);
+  }
+  const shortGroups = groups.filter((g) => (g.short && storageLocationForGroup(g) === g.storage_location_id) || selectionIsShort(g));
 
   // §138 deviation-confirm (2026-09-21): same symmetric over/under rule as
   // Page 4 -- a PM group's total departing from the combined Standard Qty is
@@ -3402,7 +3432,7 @@ function MtsPackingCombineStep({ session, onBack, onDone }) {
                   }));
                   const isFirstRow = rowIndex === 0;
                   return (
-                    <tr key={rowKey} className={group.short && groupStorageLocationId === group.storage_location_id ? "bg-rose-50" : "border-b border-slate-100"}>
+                    <tr key={rowKey} className={shortGroups.includes(group) ? "bg-rose-50" : "border-b border-slate-100"}>
                       <td className="border-b border-slate-100 px-3 py-2">{isFirstRow ? groupIndex + 1 : ""}</td>
                       <td className="border-b border-slate-100 px-3 py-2">{isFirstRow ? materialLabel(group.material_id) : ""}</td>
                       <td className="border-b border-slate-100 px-3 py-2">
@@ -3432,12 +3462,12 @@ function MtsPackingCombineStep({ session, onBack, onDone }) {
                           onChange={(event) => handleQtyChange(group, rowIndex, event.target.value)}
                         />
                       </td>
-                      <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(row.available_qty, "0.###")}</td>
+                      <td className="border-b border-slate-100 px-3 py-2 text-right font-mono">{formatPreciseNumber(groupStorageLocationId === group.storage_location_id ? (group.candidate_availability?.[row.actual_material_id] ?? row.available_qty) : row.available_qty, "0.###")}</td>
                       <td className="border-b border-slate-100 px-3 py-2 text-xs text-slate-500">
                         {isFirstRow ? group.contributing.map((c) => c.pack_size_label).join(", ") : ""}
                       </td>
                       <td className="border-b border-slate-100 px-3 py-2">
-                        {group.short ? <span className="text-rose-600">Short</span> : ""}
+                        {shortGroups.includes(group) ? <span className="text-rose-600">Short</span> : ""}
                         {rows.length > 1 && (
                           <button
                             type="button"
