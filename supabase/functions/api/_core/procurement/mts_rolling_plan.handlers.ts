@@ -8,7 +8,7 @@
  * every block is derived from that run, so the file shows exactly what the screens show.
  * Read-only: never creates a PO, CSN, transfer or stock posting.
  */
-import { bestDateText, bestDateWhy, ifAbsentText, togetherText } from "./mts_best_date_text.logic.ts";
+import { actionText, bestDateText, bestDateWhy, ifAbsentText, togetherText } from "./mts_best_date_text.logic.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
@@ -160,13 +160,14 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     const bestCells = (key: string | null | undefined, currentEta: string | null, unit: { base_per_unit: number } | null, uom: string) => {
       const o = key ? optimumByKey.get(key) : null;
       const a = key ? arrivalByKey.get(key) : null;
-      if (!o || !a) return { etd: "", port: "", plant: "", why: "", absent: "" };
+      if (!o || !a) return { etd: "", port: "", plant: "", why: "", absent: "", action: "" };
       const absent = ifAbsentText(a.if_absent ?? [], currentEta, overdueOf(currentEta));
-      if (o.not_needed_in_plan) return { etd: "", port: "", plant: "", why: bestText(key, currentEta, unit, uom), absent };
+      if (o.not_needed_in_plan) return { etd: "", port: "", plant: "", why: bestText(key, currentEta, unit, uom), absent, action: actionText({ not_needed_in_plan: true, best_eta: o.best.eta, current_eta: currentEta, shift_days: o.shift_days }) };
       const w = key ? windowByKey.get(key) : null;
       const q = (n: number) => inUnit(unit, n) ?? 0;
       const binding = a.binding ? { ...a.binding, topup: a.binding.topup ? { ...a.binding.topup, wanted: q(a.binding.topup.wanted), shortfall: q(a.binding.topup.shortfall), pool_before: q(a.binding.topup.pool_before) } : null } : null;
       return {
+        action: actionText({ not_needed_in_plan: false, best_eta: o.best.eta, current_eta: currentEta, shift_days: o.shift_days, overdue_days: overdueOf(currentEta), etd_passed_days: w && w.days_to_current_etd !== null && w.days_to_current_etd < 0 ? -w.days_to_current_etd : null, shared_note: a.shared_note ?? null }),
         absent, etd: a.best_etd ?? "", port: a.best_port_eta ?? "", plant: o.best.eta,
         why: bestDateWhy({ current_eta: currentEta, best_eta: o.best.eta, shift_days: o.shift_days, binding, uom, vendor_message: w?.state === "TALK_TO_VENDOR" ? w.message : null, joint_note: a.joint_note ?? null, overdue_days: overdueOf(currentEta), critical_latest_eta: a.critical_latest_eta ?? null, shared_note: a.shared_note ?? null,
           move_cost: a.move_cost ? { ...a.move_cost, level_label: a.binding?.level_label ?? null } : null }),

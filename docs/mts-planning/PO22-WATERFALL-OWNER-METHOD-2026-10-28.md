@@ -745,3 +745,11 @@ The Action tab (GET /planning) looked only to the end of next month (CM + NM) wh
 confirmed receipt after next month was called "after this planning horizon — shown as future evidence, not counted as current Family stock".
 `computePlanning` for GET /planning, the saved run and the AI review now use `PLANNING_EXTRA_MONTHS = 4` (CM + NM + 4 = six months), the same as the
 rolling plan. The Planning header shows the real horizon end. CMP003 PROD snapshot: receipts flagged "after horizon" 0.
+
+## 44. One plain instruction per order (owner 2026-10-30)
+
+Management could not tell, per order, what to do and by when: several dates (advised, "if another order does not come", Absolute latest) and
+two bases (Min and Critical) sat side by side, and the "if another order does not come" sentence still said Critical while its date was Min-based.
+Now: (a) that sentence says Min; (b) a new column **"What to do (engine)"** right after ST gives ONE instruction —
+NOT NEEDED / ON TIME / CAN WAIT until <date> (room N d) / TOO LATE: must be at plant by <date> / OVERDUE … CHASE THE VENDOR / NOT SHIPPED: ETD passed …
+CHASE THE VENDOR / SHARED SHIPMENT … use the earliest of all companies' dates. The long "Why this date" stays as the detail.

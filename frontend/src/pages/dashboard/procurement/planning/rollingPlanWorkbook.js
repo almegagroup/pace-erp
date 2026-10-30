@@ -144,7 +144,7 @@ function writePlan(sheet, companies) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Planning blocks: one per family / item per company — today + arrival rows, then Prediction.
 // ─────────────────────────────────────────────────────────────────────────────
-const BLOCK_HEAD = ["Date", "Opening", "ETA to Plant", "Quantity to Dispatch", "Pro-rata", "Closing", "Excess (not needed yet)", "Max Days", "Min Stk", "Min Days", "PO / CSN", "Qty", "Supplier", "ST", "ETD (engine)", "ETA to Port (engine)", "ETA to Plant (engine)", "Why this date — Min / Max by group", "If another order does not come"];
+const BLOCK_HEAD = ["Date", "Opening", "ETA to Plant", "Quantity to Dispatch", "Pro-rata", "Closing", "Excess (not needed yet)", "Max Days", "Min Stk", "Min Days", "PO / CSN", "Qty", "Supplier", "ST", "What to do (engine)", "ETD (engine)", "ETA to Port (engine)", "ETA to Plant (engine)", "Why this date — Min / Max by group", "If another order does not come"];
 /** Owner 2026-10-29: name the group(s) whose free stock triggered the order, not just "Group free stock". */
 const triggeredBy = (x) => {
   const also = Array.isArray(x.trigger_also_groups) && x.trigger_also_groups.length ? ` (same lot also feeds: ${x.trigger_also_groups.join(", ")})` : "";
@@ -176,7 +176,7 @@ function coverCell(value, estimate, stock, planEnd) {
 function bestColumns(r) {
   const cells = r.best_cells ?? [];
   const join = (key) => cells.map((c) => c?.[key] ?? "").filter(Boolean).join("\n");
-  return [join("etd"), join("port"), join("plant"), join("why") || (r.best_dates ?? []).filter(Boolean).join("\n"), join("absent")];
+  return [join("action"), join("etd"), join("port"), join("plant"), join("why") || (r.best_dates ?? []).filter(Boolean).join("\n"), join("absent")];
 }
 
 function writeBlocks(sheet, companies, kind) {
@@ -240,7 +240,7 @@ function writeBlocks(sheet, companies, kind) {
     }
     sheet.addRow([]);
   }
-  widths(sheet, [12, 12, 12, 14, 11, 12, 14, 9, 12, 9, 34, 11, 30, 16, 12, 12, 12, 70, 50]);
+  widths(sheet, [12, 12, 12, 14, 11, 12, 14, 9, 12, 9, 34, 11, 30, 16, 40, 12, 12, 12, 70, 50]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

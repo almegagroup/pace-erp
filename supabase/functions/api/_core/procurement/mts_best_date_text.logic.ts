@@ -123,7 +123,7 @@ export function ifAbsentText(list: readonly IfAbsentInput[], currentEta: string 
     if (!x.best_eta) return `If ${other} does not come: no date can be advised.`;
     if (x.shift_days === 0) return `If ${other} does not come: this order must land at plant by its recorded date ${rec}${alone}.${overdue}`;
     return x.shift_days > 0
-      ? `If ${other} does not come: this order must land at plant by ${x.best_eta} at the latest, else a level falls below Critical (${x.shift_days} d after its recorded date ${rec})${alone}.${overdue}`
+      ? `If ${other} does not come: this order must land at plant by ${x.best_eta} at the latest, else a level falls below its Min (${x.shift_days} d after its recorded date ${rec})${alone}.${overdue}`
       : `If ${other} does not come: this order must land at plant by ${x.best_eta} (${-x.shift_days} d before its recorded date ${rec})${alone}.${overdue}`;
   }).join("\n");
 }
@@ -136,4 +136,34 @@ export function togetherText(t: TogetherInput): string {
   const critical = t.critical_days_moved > t.critical_days_now ? `, ${t.critical_days_moved - t.critical_days_now} more level-days below Critical` : ", no level goes below Critical";
   const min = t.below_min_days_moved !== t.below_min_days_now ? `, level-days below Min ${t.below_min_days_now} → ${t.below_min_days_moved}` : "";
   return `If ALL not-yet-shipped orders move together to their advised dates: ${buy}${critical}${min}. Each date is judged alone; moving several at once costs this.`;
+}
+
+export type ActionInput = {
+  not_needed_in_plan: boolean;
+  best_eta: string;
+  current_eta: string | null;
+  shift_days: number;
+  overdue_days?: number | null;
+  /** Days since the recorded ETD passed with no shipment recorded (null = ETD not passed or unknown). */
+  etd_passed_days?: number | null;
+  shared_note?: string | null;
+};
+
+/**
+ * Owner 2026-10-30: ONE plain instruction per not-yet-shipped order for management: what to do now and by when.
+ * Everything else (levels, Min / Critical, the other order's effect) stays in the detail columns.
+ */
+export function actionText(i: ActionInput): string {
+  if (i.not_needed_in_plan) return "NOT NEEDED inside the plan. No date.";
+  const rec = i.current_eta ?? "?";
+  const chase = i.overdue_days && i.overdue_days > 0
+    ? `OVERDUE ${i.overdue_days} d (recorded ${rec}, no shipment recorded). CHASE THE VENDOR.`
+    : i.etd_passed_days && i.etd_passed_days > 0
+      ? `NOT SHIPPED: the ETD passed ${i.etd_passed_days} d ago. CHASE THE VENDOR.`
+      : null;
+  if (i.shared_note) return `${chase ? `${chase} ` : ""}SHARED SHIPMENT: needed at plant by ${i.best_eta} for THIS company; ${i.shared_note}. Use the EARLIEST of all the companies' dates.`;
+  if (chase) return `${chase} Needed at plant by ${i.best_eta}.`;
+  if (i.shift_days < 0) return `TOO LATE: must be at plant by ${i.best_eta} (${-i.shift_days} d before recorded ${rec}).`;
+  if (i.shift_days === 0) return `ON TIME: keep ${rec}.`;
+  return `CAN WAIT until ${i.best_eta} (room of ${i.shift_days} d after recorded ${rec}). Needed by ${i.best_eta}.`;
 }

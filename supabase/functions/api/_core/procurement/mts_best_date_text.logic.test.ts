@@ -34,7 +34,7 @@ Deno.test("if-absent: one line per neighbouring order, a DEADLINE for this order
     { reference: "PO TS-0133", other_eta: "2026-12-24", best_eta: "2027-01-08", shift_days: 31, not_needed_in_plan: false, binding_day: "2027-01-09" },
     { reference: "PO G-0124", other_eta: "2026-12-08", best_eta: null, shift_days: 0, not_needed_in_plan: true, binding_day: null },
   ], "2026-12-08");
-  assertEquals(t, "If PO TS-0133 (2026-12-24) does not come: this order must land at plant by 2027-01-08 at the latest, else a level falls below Critical (31 d after its recorded date 2026-12-08) (judged alone, other orders on their recorded dates).\nIf PO G-0124 (2026-12-08) does not come: this order is still not needed inside the plan (judged alone, other orders on their recorded dates).");
+  assertEquals(t, "If PO TS-0133 (2026-12-24) does not come: this order must land at plant by 2027-01-08 at the latest, else a level falls below its Min (31 d after its recorded date 2026-12-08) (judged alone, other orders on their recorded dates).\nIf PO G-0124 (2026-12-08) does not come: this order is still not needed inside the plan (judged alone, other orders on their recorded dates).");
 });
 Deno.test("overdue piece: never 'can wait' / 'postpone' - says overdue and no shipment recorded", () => {
   const b2 = { current_eta: "2026-10-24", best_eta: "2026-10-29", shift_days: 5, not_needed_in_plan: false, plan_end: null, best_port_eta: "2026-10-25", talk_to_vendor: true, overdue_days: 5 };
@@ -74,4 +74,15 @@ Deno.test("Sub-CSN share: this company's latest date only, never 'can wait' / po
   const w = bestDateWhy({ current_eta: "2026-11-17", best_eta: "2026-12-12", shift_days: 25, uom: "KG", binding: null, shared_note: note, vendor_message: "Cannot be scheduled: Talk to the vendor to see whether postpone by 25 day(s) is possible." });
   assertEquals(w.includes("whether postpone") || w.includes("Can wait"), false);
   assertEquals(w.includes("do not postpone on this one alone"), true);
+});
+
+import { actionText } from "./mts_best_date_text.logic.ts";
+Deno.test("action: one plain instruction per order for management (owner 2026-10-30)", () => {
+  assertEquals(actionText({ not_needed_in_plan: true, best_eta: "x", current_eta: "2026-11-02", shift_days: 0 }), "NOT NEEDED inside the plan. No date.");
+  assertEquals(actionText({ not_needed_in_plan: false, best_eta: "2027-02-08", current_eta: "2026-11-02", shift_days: 98 }), "CAN WAIT until 2027-02-08 (room of 98 d after recorded 2026-11-02). Needed by 2027-02-08.");
+  assertEquals(actionText({ not_needed_in_plan: false, best_eta: "2026-11-20", current_eta: "2026-12-08", shift_days: -18 }), "TOO LATE: must be at plant by 2026-11-20 (18 d before recorded 2026-12-08).");
+  assertEquals(actionText({ not_needed_in_plan: false, best_eta: "2026-12-08", current_eta: "2026-12-08", shift_days: 0 }), "ON TIME: keep 2026-12-08.");
+  assertEquals(actionText({ not_needed_in_plan: false, best_eta: "2026-10-29", current_eta: "2026-10-24", shift_days: 5, overdue_days: 5 }), "OVERDUE 5 d (recorded 2026-10-24, no shipment recorded). CHASE THE VENDOR. Needed at plant by 2026-10-29.");
+  assertEquals(actionText({ not_needed_in_plan: false, best_eta: "2027-02-08", current_eta: "2026-11-02", shift_days: 98, etd_passed_days: 6 }), "NOT SHIPPED: the ETD passed 6 d ago. CHASE THE VENDOR. Needed at plant by 2027-02-08.");
+  assertEquals(actionText({ not_needed_in_plan: false, best_eta: "2026-12-07", current_eta: "2026-11-17", shift_days: 20, shared_note: "Mother CSN 3000000330 also feeds CMP011 9,000 KG" }), "SHARED SHIPMENT: needed at plant by 2026-12-07 for THIS company; Mother CSN 3000000330 also feeds CMP011 9,000 KG. Use the EARLIEST of all the companies' dates.");
 });
