@@ -682,6 +682,10 @@ export function getLastStoPaymentTerm(params) {
   return fetchProcurement("GET", "/api/procurement/stos/last-payment-term", undefined, params);
 }
 
+export function getStoLaneTransit(params) {
+  return fetchProcurement("GET", "/api/procurement/stos/lane-transit", undefined, params);
+}
+
 export function createSTO(data) {
   return fetchProcurement("POST", "/api/procurement/stos", data);
 }

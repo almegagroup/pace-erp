@@ -17,6 +17,7 @@ import {
   confirmSTO,
   createSTO,
   getLastStoPaymentTerm,
+  getStoLaneTransit,
   listAvailableSubCsnsForSto,
 } from "../procurementApi.js";
 
@@ -35,7 +36,14 @@ const REBATE_BASIS_OPTIONS = [
   { value: "PO_UOM", label: "PO UOM" },
 ];
 
-function createEmptyLine(defaultPaymentTermId = "") {
+function addDaysIso(isoDate, days) {
+  if (!isoDate || !Number.isFinite(days)) return "";
+  const date = new Date(`${isoDate}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
+function createEmptyLine(defaultPaymentTermId = "", defaultExpectedDeliveryDate = "") {
   return {
     material_id: "",
     source_csn_id: "",
@@ -50,7 +58,7 @@ function createEmptyLine(defaultPaymentTermId = "") {
     rebate_rate: "",
     rebate_rate_uom_basis: "BASE_UOM",
     rebate_remarks: "",
-    expected_delivery_date: "",
+    expected_delivery_date: defaultExpectedDeliveryDate,
   };
 }
 
@@ -224,6 +232,30 @@ export default function StoCreateFormPage({ openingMode = false }) {
     enabled: Boolean(form.sending_company_id && form.receiving_company_id),
   });
 
+  // Company-to-company lead time lane (Lead Time Masters > Company to Company). Every non-opening
+  // STO needs one: the CSN's ETA to plant = LR date + these transit days.
+  const laneQuery = useQuery({
+    queryKey: ["procurement", "sto-lane-transit", form.sending_company_id, form.receiving_company_id, form.sto_date],
+    queryFn: () =>
+      getStoLaneTransit({
+        sending_company_id: form.sending_company_id,
+        receiving_company_id: form.receiving_company_id,
+        date: form.sto_date || undefined,
+      }),
+    enabled: !openingMode && Boolean(form.sending_company_id && form.receiving_company_id),
+  });
+  const laneChecked = !openingMode && laneQuery.isSuccess;
+  const laneTransitDays = laneChecked && laneQuery.data?.transit_days != null ? Number(laneQuery.data.transit_days) : null;
+  const laneMissing = laneChecked && laneTransitDays === null;
+
+  // Prefill blank Expected Delivery Dates with STO date + transit days (user can still change them).
+  useEffect(() => {
+    if (laneTransitDays === null) return;
+    const prefill = addDaysIso(form.sto_date, laneTransitDays);
+    if (!prefill) return;
+    setLines((current) => current.map((line) => (line.expected_delivery_date ? line : { ...line, expected_delivery_date: prefill })));
+  }, [laneTransitDays, form.sto_date]);
+
   const materials = materialQuery.materials;
   const paymentTerms = paymentTermQuery.paymentTerms;
   const sendingCostCenters = useMemo(
@@ -386,7 +418,7 @@ export default function StoCreateFormPage({ openingMode = false }) {
   }
 
   function addLine() {
-    setLines((current) => [...current, createEmptyLine(defaultPaymentTermId)]);
+    setLines((current) => [...current, createEmptyLine(defaultPaymentTermId, laneTransitDays === null ? "" : addDaysIso(form.sto_date, laneTransitDays))]);
   }
 
   function removeLine(index) {
@@ -426,6 +458,10 @@ export default function StoCreateFormPage({ openingMode = false }) {
     }
     if (!form.sending_cost_center_id || !form.receiving_cost_center_id) {
       setError("Sending and receiving cost centers are required.");
+      return;
+    }
+    if (laneMissing) {
+      setError("No company-to-company lead time exists for this sending/receiving pair. Add it in Lead Time Masters > Company to Company first.");
       return;
     }
     if (openingMode && !form.sto_number.trim()) {
@@ -697,10 +733,12 @@ export default function StoCreateFormPage({ openingMode = false }) {
                 : "Create STO",
             tone: "primary",
             onClick: () => void handleSubmit(),
-            disabled: saving || loading,
+            disabled: saving || loading || laneMissing,
           },
         ]}
         notices={[
+          ...(laneMissing ? [{ key: "sto-lane-missing", tone: "error", message: "No company-to-company lead time for this sending/receiving pair. Add it in Lead Time Masters > Company to Company; the STO cannot be created until then." }] : []),
+          ...(laneTransitDays !== null ? [{ key: "sto-lane-days", tone: "success", message: `Company lead time: ${laneTransitDays} day${laneTransitDays === 1 ? "" : "s"} (used for the CSN ETA to plant; blank Expected Delivery Dates default to STO date + ${laneTransitDays}).` }] : []),
           ...(error ? [{ key: "sto-create-error", tone: "error", message: error }] : []),
           ...(notice ? [{ key: "sto-create-notice", tone: "success", message: notice }] : []),
         ]}

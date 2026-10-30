@@ -864,6 +864,10 @@ async function buildConsignmentStoFromSubCsns(input: {
   let nextLineNumber = 1;
   const payloads: JsonRecord[] = [];
   if (new Set(input.csnIds).size !== input.csnIds.length) throw new Error("CSN_SELECTION_DUPLICATE");
+  // Same lane rule as createSTOHandler (this builder is also reached from the Sub-CSN transform).
+  if (!input.openingNumber && await resolveStoLaneTransitDays(input.sendingCompanyId, input.receivingCompanyId, input.stoDate) == null) {
+    throw new Error("STO_LANE_LEAD_TIME_MISSING");
+  }
 
   // DEPENDENT: this transform incrementally creates one STO header and line ordering from prior CSN-linked state, so iteration order is significant.
   for (const csnId of input.csnIds) {
@@ -989,6 +993,17 @@ export async function createSTOHandler(
     }
 
     if (sendingCompanyId === receivingCompanyId) throw new Error("STO_COMPANIES_MUST_DIFFER");
+    // Every non-opening STO (both types) needs a company-to-company lead time lane; without it
+    // the CSN's ETA to plant would silently be the LR date. Opening (historical) STOs are exempt.
+    if (!isOpeningSto) {
+      const laneDays = await resolveStoLaneTransitDays(sendingCompanyId, receivingCompanyId, stoDate);
+      if (laneDays == null) {
+        return stoErrorResponse(
+          req, ctx, "STO_LANE_LEAD_TIME_MISSING", 422,
+          "No company-to-company lead time exists for this sending/receiving pair. Add it in Lead Time Masters > Company to Company, then create the STO.",
+        );
+      }
+    }
     const openingStoNumber = toTrimmedString(body.sto_number);
     if (isOpeningSto && !openingStoNumber) throw new Error("PROCUREMENT_OPENING_STO_NUMBER_REQUIRED");
 
@@ -1265,6 +1280,50 @@ export async function getSTOHandler(
     const code = error instanceof Error ? error.message : "STO_FETCH_FAILED";
     const status = code === "STO_NOT_FOUND" ? 404 : code === "STO_SCOPE_VIOLATION" ? 403 : 500;
     return stoErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// Company-to-company lead time lane (erp_master.lead_time_master_company): one row per
+// unordered company pair, valid both ways. Every non-opening STO needs one -- its CSN
+// ETA to plant is LR date + these transit days.
+async function resolveStoLaneTransitDays(companyId1: string, companyId2: string, onDate: string): Promise<number | null> {
+  if (!companyId1 || !companyId2) return null;
+  const [companyAId, companyBId] = companyId1 < companyId2 ? [companyId1, companyId2] : [companyId2, companyId1];
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("lead_time_master_company")
+    .select("transit_days")
+    .eq("company_a_id", companyAId)
+    .eq("company_b_id", companyBId)
+    .eq("active", true)
+    .lte("effective_from", onDate)
+    .or(`effective_to.is.null,effective_to.gte.${onDate}`)
+    .order("effective_from", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error("STO_LANE_LEAD_TIME_LOOKUP_FAILED");
+  const days = (data as JsonRecord | null)?.transit_days;
+  return days == null ? null : Number(days);
+}
+
+export async function getStoLaneTransitHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const sendingCompanyId = await getCompanyScope(ctx, url.searchParams.get("sending_company_id") ?? undefined);
+    const receivingCompanyId = toTrimmedString(url.searchParams.get("receiving_company_id"));
+    if (!sendingCompanyId || !receivingCompanyId) {
+      return stoErrorResponse(req, ctx, "STO_LANE_FILTERS_REQUIRED", 400, "sending_company_id and receiving_company_id are required.");
+    }
+    const onDate = toTrimmedString(url.searchParams.get("date")) || todayIsoDate();
+    const transitDays = await resolveStoLaneTransitDays(sendingCompanyId, receivingCompanyId, onDate);
+    return okResponse({ transit_days: transitDays }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "STO_LANE_LEAD_TIME_LOOKUP_FAILED";
+    return stoErrorResponse(req, ctx, code, 500, code);
   }
 }
 
@@ -1823,8 +1882,10 @@ export async function transformSubCSNToSTOHandler(
     return okResponse(await hydrateSto(String(sto.id), ctx), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "STO_TRANSFORM_FAILED";
-    const status = code === "CSN_NOT_FOUND" ? 404 : 500;
-    return stoErrorResponse(req, ctx, code, status, code);
+    const status = code === "CSN_NOT_FOUND" ? 404 : code === "STO_LANE_LEAD_TIME_MISSING" ? 422 : 500;
+    return stoErrorResponse(req, ctx, code, status, code === "STO_LANE_LEAD_TIME_MISSING"
+      ? "No company-to-company lead time exists for this sending/receiving pair. Add it in Lead Time Masters > Company to Company first."
+      : code);
   }
 }
 
