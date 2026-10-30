@@ -1169,7 +1169,19 @@ export async function postLocationTransferHandler(
     // machine. Non-MTS targets skip this entirely, same table stays untouched.
     const mtsLocationIds = await getMtsMachineStorageLocationIds(companyId);
     const machineStockLogRows: JsonRecord[] = [];
+    // A P311 leaving an MTS machine-tracked location must also leave its
+    // Unassigned bucket, else the bucket keeps phantom stock that IN11's
+    // Distribute to Machine can later hand to a machine (found live 2026-10-29,
+    // prod CMP003 GABROSA M700 @ S001). Capped at what is actually Unassigned --
+    // stock already distributed to a machine is left untouched, as before.
+    const unassignedLeft = new Map<string, number>(
+      (await fetchUnassignedBuckets(companyId, [...mtsLocationIds])).map((row) => [
+        `${row.storage_location_id}::${row.material_id}::${row.batch_number ?? ""}`,
+        row.qty,
+      ]),
+    );
 
+    // DEPENDENT: each line draws down the shared unassignedLeft balance, so order matters
     for (const entry of postingLines) {
       const line = lineMap.get(entry.request_line_id);
       if (!line) throw new Error("LTR_LINE_NOT_FOUND");
@@ -1242,6 +1254,29 @@ export async function postLocationTransferHandler(
         out_line_ref: outLineRef,
         in_line_ref: inLineRef,
       });
+
+      const sourceStorageLocationId = toTrimmedString(line.source_storage_location_id);
+      if (mtsLocationIds.has(sourceStorageLocationId)) {
+        const bucketKey = `${sourceStorageLocationId}::${toTrimmedString(line.material_id)}::${toTrimmedString(line.batch_number)}`;
+        const left = Math.max(0, unassignedLeft.get(bucketKey) ?? 0);
+        const deduct = Number(Math.min(entry.quantity, left).toFixed(6));
+        if (deduct > EPSILON) {
+          unassignedLeft.set(bucketKey, left - deduct);
+          machineStockLogRows.push({
+            company_id: companyId,
+            storage_location_id: sourceStorageLocationId,
+            material_id: toTrimmedString(line.material_id),
+            machine_id: null,
+            batch_number: toTrimmedString(line.batch_number) || null,
+            qty: deduct,
+            direction: "OUT",
+            source_type: "TRANSFER",
+            reference_document_type: "LTR",
+            reference_document_id: requestId,
+            created_by: ctx.auth_user_id,
+          });
+        }
+      }
 
       const targetStorageLocationId = toTrimmedString(line.target_storage_location_id);
       if (mtsLocationIds.has(targetStorageLocationId)) {
@@ -1542,6 +1577,7 @@ export async function postMachineDistributionHandler(
       ((machineRows ?? []) as JsonRecord[]).map((row) => [toTrimmedString(row.id), toTrimmedString(row.storage_location_id)]),
     );
 
+    const distributionMaterialInfo = await getMaterialInfo(distributions.map((entry) => entry.material_id));
     // Validate every distribution + split before writing anything -- all-or-nothing.
     const insertRows: JsonRecord[] = [];
     for (const distribution of distributions) {
@@ -1560,6 +1596,19 @@ export async function postMachineDistributionHandler(
       const available = bucketByKey.get(key) ?? 0;
       const requestedTotal = distribution.splits.reduce((sum, split) => sum + split.qty, 0);
       if (requestedTotal > available + EPSILON) throw new Error("LTR_DISTRIBUTE_QTY_EXCEEDS_UNASSIGNED");
+      // The bucket is only a side-table; real stock lives in the ledger. Never
+      // hand a machine more than the location physically holds (a stale bucket
+      // once let a machine take 100.2 kg the ledger no longer had).
+      // INDEPENDENT-ish but tiny (one call per distributed item); kept sequential for clarity.
+      const ledgerBalance = await getLiveStockBalance({
+        companyId,
+        storageLocationId: distribution.storage_location_id,
+        materialId: distribution.material_id,
+        stockTypeCode: "UNRESTRICTED",
+        batchNumber: distribution.batch_number,
+        materialType: toUpperTrimmedString(distributionMaterialInfo.get(distribution.material_id)?.material_type),
+      });
+      if (requestedTotal > ledgerBalance.quantity + EPSILON) throw new Error("LTR_DISTRIBUTE_QTY_EXCEEDS_UNASSIGNED");
 
       for (const split of distribution.splits) {
         const commonFields = {
@@ -1928,6 +1977,54 @@ export async function reverseLocationTransferPostingHandler(
         ],
       },
     });
+
+    // Source side of the original posting: if it deducted the source's
+    // Unassigned bucket, give back that much (never more than what was deducted
+    // and not yet restored by an earlier partial reversal of the same request).
+    if (mtsLocationIdsForReversal.has(sourceStorageLocationId)) {
+      let sourceRows: JsonRecord[];
+      try {
+        sourceRows = await fetchAllRows<JsonRecord>((from, to) => serviceRoleClient
+          .schema("erp_production")
+          .from("machine_stock_log")
+          .select("qty, direction, batch_number")
+          .eq("company_id", companyId)
+          .eq("storage_location_id", sourceStorageLocationId)
+          .eq("material_id", materialId)
+          .is("machine_id", null)
+          .eq("source_type", "TRANSFER")
+          .eq("reference_document_id", toTrimmedString((posting as JsonRecord).request_id))
+          .range(from, to));
+      } catch {
+        throw new Error("LTR_REVERSE_MACHINE_LOG_FAILED");
+      }
+      const deductedNet = sourceRows
+        .filter((row) => (toTrimmedString(row.batch_number) || null) === batchNumber)
+        .reduce((sum, row) => sum + Number(parseNullableNumber(row.qty) ?? 0) * (toUpperTrimmedString(row.direction) === "OUT" ? 1 : -1), 0);
+      const restore = Number(Math.min(quantity, deductedNet).toFixed(6));
+      if (restore > EPSILON) {
+        const { error: restoreError } = await serviceRoleClient
+          .schema("erp_production")
+          .from("machine_stock_log")
+          .insert({
+            company_id: companyId,
+            storage_location_id: sourceStorageLocationId,
+            material_id: materialId,
+            machine_id: null,
+            batch_number: batchNumber,
+            qty: restore,
+            direction: "IN",
+            source_type: "TRANSFER",
+            reference_document_type: "LTR",
+            reference_document_id: toTrimmedString((posting as JsonRecord).request_id),
+            created_by: ctx.auth_user_id,
+          });
+        if (restoreError) {
+          console.error("[location_transfer.reverseLocationTransferPosting] source machine_stock_log restore failed:", JSON.stringify(restoreError));
+          throw new Error("LTR_REVERSE_MACHINE_LOG_FAILED");
+        }
+      }
+    }
 
     if (targetIsMtsTracked) {
       const { error: machineLogError } = await serviceRoleClient

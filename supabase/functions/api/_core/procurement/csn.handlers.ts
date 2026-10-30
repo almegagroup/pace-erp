@@ -553,6 +553,29 @@ async function getDomesticLeadTime(csn: CsnRow): Promise<Record<string, unknown>
     return null;
   }
 
+  // STO / FG STO CSN: its "vendor" is the SENDING COMPANY (company id stored in vendor_id),
+  // so lead_time_master_domestic (vendor x company) can never match. Use the symmetric
+  // company-to-company master instead; one row per unordered pair, valid both ways.
+  if (toTrimmedString(csn.sto_id)) {
+    const today = todayIsoInKolkata();
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("lead_time_master_company")
+      .select("transit_days")
+      .eq("company_a_id", vendorId < companyId ? vendorId : companyId)
+      .eq("company_b_id", vendorId < companyId ? companyId : vendorId)
+      .eq("active", true)
+      .lte("effective_from", today)
+      .or(`effective_to.is.null,effective_to.gte.${today}`)
+      .order("effective_from", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      throw new Error("PROCUREMENT_COMPANY_LEAD_TIME_LOOKUP_FAILED");
+    }
+    return (data as Record<string, unknown> | null) ?? null;
+  }
+
   const { data, error } = await serviceRoleClient
     .schema("erp_master")
     .from("lead_time_master_domestic")

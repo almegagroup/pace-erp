@@ -352,6 +352,10 @@ import {
   listCHAsHandler,
   listChaCompanyMapsHandler,
   listDomesticLeadTimesHandler,
+  listCompanyLeadTimesHandler,
+  upsertCompanyLeadTimeHandler,
+  updateCompanyLeadTimeHandler,
+  deleteCompanyLeadTimeHandler,
   listImportLeadTimesHandler,
   listMaterialCategoriesHandler,
   listPaymentTermsHandler,
@@ -626,6 +630,10 @@ export async function dispatchProcurementRoutes(
       return await listDomesticLeadTimesHandler(req, ctx);
     case "POST:/api/procurement/lead-times/domestic":
       return await upsertDomesticLeadTimeHandler(req, ctx);
+    case "GET:/api/procurement/lead-times/company":
+      return await listCompanyLeadTimesHandler(req, ctx);
+    case "POST:/api/procurement/lead-times/company":
+      return await upsertCompanyLeadTimeHandler(req, ctx);
     case "GET:/api/procurement/transporters":
       return await listTransportersHandler(req, ctx);
     case "POST:/api/procurement/transporters":
@@ -1473,6 +1481,14 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/lead-times\/import\/[^/]+$/.test(pathname) && req.method === "PATCH") {
     return await updateImportLeadTimeHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/lead-times\/company\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+    return await deleteCompanyLeadTimeHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/lead-times\/company\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+    return await updateCompanyLeadTimeHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/lead-times\/domestic\/[^/]+$/.test(pathname) && req.method === "DELETE") {
