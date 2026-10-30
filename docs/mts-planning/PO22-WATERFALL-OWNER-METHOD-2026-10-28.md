@@ -771,3 +771,13 @@ Allocations can force a vendor (e.g. Celanese import) where the plan has a local
 route, each with the ETD / ETA to Port (import only) / ETA to Plant that would land it on the SAME plant date (plant date − route days; port = plant − port-to-plant
 days). Only options that can still connect when ordered from today (the ETD is not in the past) are listed; one that would arrive after the need date is left out.
 CMP003 PROD snapshot: 35 of 178 engine rows carry at least one alternative.
+
+## 47. Orders that serve the same need are sequenced (owner 2026-10-30)
+
+CMP005 Gabrosa: three interchangeable orders (recorded 12 Dec, 28 Dec, 16 Jan) all said "CAN WAIT until 2027-01-29", because each was judged alone with the
+other two on their recorded dates and the break was the same 28 Jan top-up. Management's point: when one lands, the next can come later — the dates must
+not all be equal. Now, in recorded-date order, each order is judged with the earlier ones already on their assigned dates, so interchangeable orders
+get staggered dates; the family check (no extra buying, no extra day below Min) and the "shared Sub-CSN is kept" rule still apply afterwards.
+CMP003 PROD snapshot: MHEC family before: three orders "can wait" 20 / 13 / 6 d and the last one "too late 12 d" (not a set that works together);
+after: one order can wait 9 d, the others are on time, applying all costs no extra buying and no extra day below Min.
+Not verified on CMP005 live data.
