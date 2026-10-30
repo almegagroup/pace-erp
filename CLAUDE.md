@@ -554,6 +554,28 @@ Local files এ আমরা 000001, 000002 দিয়েছিলাম → `
 
 ## 6. Next Actions
 
+> ### 🟢 2026-10-30 — FG STO (MTS) + STO lane lead time: BUILT, LIVE CLICK-THROUGH PENDING
+>
+> **Flow:** SO01 "Create FG STO" (`PROC_SO_CREATE`, sender creates, MTS FG SKUs only via `erp_planning.mts_company_skus`,
+> INTER_PLANT only) → approval → CSN auto (FG STO CSNs from series `FG_STO_CSN` 3100000001; RM/PM STO keep `CSN` 30…) →
+> SO03 DO (CSN gets transporter/LR/vehicle + ETA = LR/DO date + lane days; cancel hands CSN back to ORD) →
+> SO02 PGI+Invoice (trigger `sync_sto_invoice_to_csn` copies **Tally** invoice no/date into the CSN, clears on cancel) →
+> receiver GE (INBOUND_STO) → GRN (FG STO goes straight to **Unrestricted**, no Inward QA doc; `grn.handlers.ts`) → AC01.
+> Item Type (material_type) column added to CSN tracker/drawer, GE, GRN.
+> **Valuation:** DO/invoice rate and the receiver's GRN rate = `transfer_price + stock_transfer_order_line.conversion_cost_per_unit`;
+> the conversion cost is resolved ONCE at FG STO create (AC04 `resolve_conversion_rate`: sender company, SKU's prodshade,
+> IWC if prodshade base UoM is a litre unit else POWDER, STO date); missing AC04 rate -> `FG_STO_CONVERSION_RATE_MISSING` (422).
+> **Lane lead time:** `erp_master.lead_time_master_company` (one row per unordered company pair, both directions;
+> Lead Time Masters > "Company to Company" tab). EVERY non-opening STO (both types, also Sub-CSN transform) needs a lane:
+> `STO_LANE_LEAD_TIME_MISSING` (422). Prod lanes: CMP003<->CMP005 7d, CMP003<->CMP011 7d, CMP003<->CMP006 8d (eff. 2026-08-01);
+> any other pair needs a row before an STO can be created. STO form shows the lane days and prefills Expected Delivery Date.
+> **Migrations (all already applied on dev + prod via MCP, history rows inserted):** 20261030120000 (vendor currency default INR),
+> 20261030140000 (lane table), 160000 (STO CSN transit snapshot + ETA), 170000 (DO->CSN transport + cancel), 180000
+> (invoice trigger), 190000 (FG_STO_CSN series), 200000 (conversion_cost_per_unit).
+> **NOT verified:** no HTTP/click-through of the TS paths (FG STO create page, DO FG pick, PGI/invoice for FG, FG GRN) —
+> prod has never run an FG STO (only 2 RM STOs). Do one dev click-through with an MTS FG SKU between two lane-covered
+> companies before relying on it. MTO/HPS/MTEST FG STO (batch-wise) is a later phase; STO qty is in KG (FG base UoM).
+
 > ### 🔴 2026-10-15 — DEFERRED BACKFILL: Inward QA valuation 1000× (business owner: "backfill pore korbo")
 >
 > **Bug (code fixed, commit `c0e1a47`):** `inward_qa.handlers.ts`-এর usage decision (P321/P344 ইত্যাদি)

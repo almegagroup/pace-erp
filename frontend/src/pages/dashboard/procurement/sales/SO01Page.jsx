@@ -4,14 +4,15 @@
  * Purpose: SO01's 3-tab landing shell (Create SO | SO Map | Create FG STO) —
  *          feasibility §133.7/§133.16. Wraps the already-built SO01CreatePage
  *          and SO01MapPage as tabs of one page rather than two disconnected
- *          screens; "Create FG STO" is a locked placeholder ("Coming Soon"),
- *          unchanged from §133.7 — FG Dispatch is a separate future module.
+ *          screens; "Create FG STO" is the STO create form in FG mode (MTS FG SKUs,
+ *          INTER_PLANT only, no distribution), created by the sending company.
  * Authority: Frontend
  */
 
 import { useState } from "react";
 import SO01CreatePage from "./SO01CreatePage.jsx";
 import SO01MapPage from "./SO01MapPage.jsx";
+import StoCreateFormPage from "../sto/StoCreateFormPage.jsx";
 
 const TABS = [
   { key: "create", label: "Create SO" },
@@ -43,11 +44,7 @@ export default function SO01Page({ initialTab = "create" }) {
 
       {tab === "create" ? <SO01CreatePage /> : null}
       {tab === "map" ? <SO01MapPage /> : null}
-      {tab === "fg_sto" ? (
-        <div className="border border-dashed border-slate-300 bg-slate-50 px-6 py-16 text-center text-sm text-slate-500">
-          Create FG STO — Coming Soon. FG Dispatch is a separate module, built in its own future session (§133.7).
-        </div>
-      ) : null}
+      {tab === "fg_sto" ? <StoCreateFormPage fgMode /> : null}
     </div>
   );
 }

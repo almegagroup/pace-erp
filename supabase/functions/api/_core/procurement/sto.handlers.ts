@@ -12,6 +12,7 @@ import type { ContextResolution } from "../../_pipeline/context.ts";
 import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope, isCompanyScopeAdminBypass } from "../../_shared/companyScope.ts";
 import { readAclSnapshotDecisionAny } from "../../_shared/acl_snapshot.ts";
@@ -53,6 +54,8 @@ type PreparedStoLine = {
   rebate_rate_uom_basis: string | null;
   rebate_remarks: string | null;
   expected_delivery_date: string | null;
+  // Server-resolved (FG STO only): AC04 conversion cost per base unit added to transfer_price.
+  conversion_cost_per_unit?: number | null;
   sending_storage_location_id?: string | null;
   receiving_storage_location_id?: string | null;
   source_csn_id?: string | null;
@@ -757,12 +760,28 @@ function buildCsnForInterPlantStoLine(input: {
   };
 }
 
+// An FG STO (every line is an FG material) takes its CSN numbers from the separate FG_STO_CSN series
+// (31xxxxxxxx); PO and RM/PM/INT STO CSNs keep the global CSN series (30xxxxxxxx).
+async function isFgStoLines(lines: StoLineRow[]): Promise<boolean> {
+  const materialIds = [...new Set(lines.map((line) => toTrimmedString(line.material_id)).filter(Boolean))];
+  if (materialIds.length === 0) return false;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("material_master")
+    .select("id, material_type")
+    .in("id", materialIds);
+  if (error) throw new Error("STO_MATERIAL_TYPE_LOOKUP_FAILED");
+  const rows = (data ?? []) as JsonRecord[];
+  return rows.length === materialIds.length && rows.every((row) => toUpperTrimmedString(row.material_type) === "FG");
+}
+
 async function prepareCsnsForSto(sto: StoRow, lines: StoLineRow[], actor: string): Promise<JsonRecord[]> {
   if (sto.sto_type !== "INTER_PLANT") return [];
   const company = await getCompanyRow(toTrimmedString(sto.sending_company_id));
   const terms = await getPaymentTermRowsByIds(lines.map((line) => toTrimmedString(line.payment_term_id)));
+  const csnDocType = (await isFgStoLines(lines)) ? "FG_STO_CSN" : "CSN";
   return await Promise.all(lines.map(async (line) => buildCsnForInterPlantStoLine({
-    sto, line, actionedBy: actor, csnNumber: await generateProcurementDocNumber("CSN"),
+    sto, line, actionedBy: actor, csnNumber: await generateProcurementDocNumber(csnDocType),
     deliveryType: toUpperTrimmedString(sto.delivery_type) || "STANDARD",
     sendingCompanyHasGst: Boolean(toTrimmedString(company?.gst_number)),
     lcRequired: toUpperTrimmedString(terms.get(toTrimmedString(line.payment_term_id))?.payment_method) === "LC",
@@ -864,6 +883,10 @@ async function buildConsignmentStoFromSubCsns(input: {
   let nextLineNumber = 1;
   const payloads: JsonRecord[] = [];
   if (new Set(input.csnIds).size !== input.csnIds.length) throw new Error("CSN_SELECTION_DUPLICATE");
+  // Same lane rule as createSTOHandler (this builder is also reached from the Sub-CSN transform).
+  if (!input.openingNumber && await resolveStoLaneTransitDays(input.sendingCompanyId, input.receivingCompanyId, input.stoDate) == null) {
+    throw new Error("STO_LANE_LEAD_TIME_MISSING");
+  }
 
   // DEPENDENT: this transform incrementally creates one STO header and line ordering from prior CSN-linked state, so iteration order is significant.
   for (const csnId of input.csnIds) {
@@ -956,9 +979,18 @@ export async function createSTOHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
 ): Promise<Response> {
+  return await createStoFromBody(req, ctx, null);
+}
+
+async function createStoFromBody(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+  presetBody: JsonRecord | null,
+  conversionCostByLine?: Array<number | null>,
+): Promise<Response> {
   try {
     assertProcurementReadRole(ctx);
-    const body = await parseBody(req);
+    const body = presetBody ?? await parseBody(req);
     const isOpeningSto = body.is_opening_sto === true;
     const stoType = toUpperTrimmedString(body.sto_type);
     const sendingCompanyId = await getCompanyScope(ctx, toTrimmedString(body.sending_company_id));
@@ -989,6 +1021,17 @@ export async function createSTOHandler(
     }
 
     if (sendingCompanyId === receivingCompanyId) throw new Error("STO_COMPANIES_MUST_DIFFER");
+    // Every non-opening STO (both types) needs a company-to-company lead time lane; without it
+    // the CSN's ETA to plant would silently be the LR date. Opening (historical) STOs are exempt.
+    if (!isOpeningSto) {
+      const laneDays = await resolveStoLaneTransitDays(sendingCompanyId, receivingCompanyId, stoDate);
+      if (laneDays == null) {
+        return stoErrorResponse(
+          req, ctx, "STO_LANE_LEAD_TIME_MISSING", 422,
+          "No company-to-company lead time exists for this sending/receiving pair. Add it in Lead Time Masters > Company to Company, then create the STO.",
+        );
+      }
+    }
     const openingStoNumber = toTrimmedString(body.sto_number);
     if (isOpeningSto && !openingStoNumber) throw new Error("PROCUREMENT_OPENING_STO_NUMBER_REQUIRED");
 
@@ -1001,6 +1044,11 @@ export async function createSTOHandler(
         const code = lineError instanceof Error ? lineError.message : "STO_LINE_INVALID";
         return stoErrorResponse(req, ctx, "STO_LINE_INVALID", 400, code);
       }
+    }
+    if (conversionCostByLine) {
+      preparedLines.forEach((preparedLine, index) => {
+        preparedLine.conversion_cost_per_unit = conversionCostByLine[index] ?? null;
+      });
     }
     // Freight is resolved at invoice-group level.  One STO must therefore
     // carry one unambiguous freight term; never silently take the first line.
@@ -1057,6 +1105,7 @@ export async function createSTOHandler(
         quantity: line.quantity,
         uom_code: line.uom_code,
         transfer_price: line.transfer_price,
+        conversion_cost_per_unit: line.conversion_cost_per_unit ?? null,
         transfer_price_currency: line.currency_code,
         currency_code: line.currency_code,
         payment_term_id: line.payment_term_id,
@@ -1265,6 +1314,164 @@ export async function getSTOHandler(
     const code = error instanceof Error ? error.message : "STO_FETCH_FAILED";
     const status = code === "STO_NOT_FOUND" ? 404 : code === "STO_SCOPE_VIOLATION" ? 403 : 500;
     return stoErrorResponse(req, ctx, code, status, code);
+  }
+}
+
+// Company-to-company lead time lane (erp_master.lead_time_master_company): one row per
+// unordered company pair, valid both ways. Every non-opening STO needs one -- its CSN
+// ETA to plant is LR date + these transit days.
+async function resolveStoLaneTransitDays(companyId1: string, companyId2: string, onDate: string): Promise<number | null> {
+  if (!companyId1 || !companyId2) return null;
+  const [companyAId, companyBId] = companyId1 < companyId2 ? [companyId1, companyId2] : [companyId2, companyId1];
+  const { data, error } = await serviceRoleClient
+    .schema("erp_master")
+    .from("lead_time_master_company")
+    .select("transit_days")
+    .eq("company_a_id", companyAId)
+    .eq("company_b_id", companyBId)
+    .eq("active", true)
+    .lte("effective_from", onDate)
+    .or(`effective_to.is.null,effective_to.gte.${onDate}`)
+    .order("effective_from", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error("STO_LANE_LEAD_TIME_LOOKUP_FAILED");
+  const days = (data as JsonRecord | null)?.transit_days;
+  return days == null ? null : Number(days);
+}
+
+export async function getStoLaneTransitHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const sendingCompanyId = await getCompanyScope(ctx, url.searchParams.get("sending_company_id") ?? undefined);
+    const receivingCompanyId = toTrimmedString(url.searchParams.get("receiving_company_id"));
+    if (!sendingCompanyId || !receivingCompanyId) {
+      return stoErrorResponse(req, ctx, "STO_LANE_FILTERS_REQUIRED", 400, "sending_company_id and receiving_company_id are required.");
+    }
+    const onDate = toTrimmedString(url.searchParams.get("date")) || todayIsoDate();
+    const transitDays = await resolveStoLaneTransitDays(sendingCompanyId, receivingCompanyId, onDate);
+    return okResponse({ transit_days: transitDays }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "STO_LANE_LEAD_TIME_LOOKUP_FAILED";
+    return stoErrorResponse(req, ctx, code, 500, code);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// FG STO (SO01 "Create FG STO" tab). Same STO document, same create flow, but: INTER_PLANT only,
+// every line an MTS FG SKU of the sending company (erp_planning.mts_company_skus -- the SKU list the
+// MTS planning/production pages use), never an opening STO. Permission is SO01's (PROC_SO_CREATE).
+// MTO / HPS / MTEST FG (batch-wise) are a later phase.
+// ---------------------------------------------------------------------------
+async function loadMtsFgSkuIds(companyId: string): Promise<Set<string>> {
+  const { data, error } = await serviceRoleClient.schema("erp_planning").rpc("mts_company_skus", { p_company_id: companyId });
+  if (error) throw new Error("FG_STO_SKU_LOOKUP_FAILED");
+  return new Set(((data ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.sku_material_id)).filter(Boolean));
+}
+
+export async function listFgStoMaterialsHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const sendingCompanyId = await getCompanyScope(ctx, url.searchParams.get("sending_company_id") ?? undefined);
+    if (!sendingCompanyId) {
+      return stoErrorResponse(req, ctx, "FG_STO_SENDING_COMPANY_REQUIRED", 400, "sending_company_id is required.");
+    }
+    const skuIds = [...await loadMtsFgSkuIds(sendingCompanyId)];
+    const rows = skuIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(skuIds, (chunk) =>
+      serviceRoleClient.schema("erp_master").from("material_master")
+        .select("id, pace_code, material_name, document_name, base_uom_code, material_type")
+        .in("id", chunk).eq("material_type", "FG"));
+    rows.sort((a, b) => toTrimmedString(a.material_name).localeCompare(toTrimmedString(b.material_name)));
+    return okResponse({ data: rows }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "FG_STO_MATERIAL_LIST_FAILED";
+    return stoErrorResponse(req, ctx, code, 500, code);
+  }
+}
+
+const FG_STO_LITRE_UOM_CODES = new Set(["L", "LT", "LTR", "LITRE", "LITRES"]);
+
+// AC04 conversion cost per KG for each FG SKU line: SKU -> prodshade (mts_company_skus) -> segment
+// (IWC when the prodshade's base UoM is a litre unit, else POWDER -- same rule the MTS Process PO page
+// uses) -> erp_production.resolve_conversion_rate(company, segment, prodshade, date).
+async function resolveFgConversionCosts(companyId: string, skuIds: string[], onDate: string): Promise<Array<number | null>> {
+  const { data: skuRows, error: skuError } = await serviceRoleClient.schema("erp_planning").rpc("mts_company_skus", { p_company_id: companyId });
+  if (skuError) throw new Error("FG_STO_SKU_LOOKUP_FAILED");
+  const prodshadeBySku = new Map<string, string>();
+  for (const row of (skuRows ?? []) as JsonRecord[]) {
+    prodshadeBySku.set(toTrimmedString(row.sku_material_id), toTrimmedString(row.prodshade_material_id));
+  }
+  const prodshadeIds = [...new Set(skuIds.map((id) => prodshadeBySku.get(id) ?? "").filter(Boolean))];
+  const uomByProdshade = new Map<string, string>();
+  if (prodshadeIds.length > 0) {
+    const { data, error } = await serviceRoleClient.schema("erp_master").from("material_master").select("id, base_uom_code").in("id", prodshadeIds);
+    if (error) throw new Error("FG_STO_PRODSHADE_LOOKUP_FAILED");
+    for (const row of (data ?? []) as JsonRecord[]) uomByProdshade.set(toTrimmedString(row.id), toUpperTrimmedString(row.base_uom_code));
+  }
+  const rateByKey = new Map<string, number | null>();
+  await Promise.all(prodshadeIds.map(async (prodshadeId) => {
+    const segment = FG_STO_LITRE_UOM_CODES.has(uomByProdshade.get(prodshadeId) ?? "") ? "IWC" : "POWDER";
+    const { data, error } = await serviceRoleClient.schema("erp_production").rpc("resolve_conversion_rate", {
+      p_company_id: companyId, p_segment_code: segment, p_prodshade_material_id: prodshadeId, p_posting_date: onDate,
+    });
+    if (error) throw new Error("FG_STO_CONVERSION_RATE_LOOKUP_FAILED");
+    rateByKey.set(prodshadeId, data == null ? null : Number(data));
+  }));
+  return skuIds.map((skuId) => {
+    const prodshadeId = prodshadeBySku.get(skuId) ?? "";
+    return prodshadeId && rateByKey.has(prodshadeId) ? rateByKey.get(prodshadeId) ?? null : null;
+  });
+}
+
+export async function createFgStoHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const body = await parseBody(req);
+    const sendingCompanyId = await getCompanyScope(ctx, toTrimmedString(body.sending_company_id));
+    const lines = Array.isArray(body.lines) ? (body.lines as JsonRecord[]) : [];
+    if (!sendingCompanyId || lines.length === 0) {
+      return stoErrorResponse(req, ctx, "STO_CREATE_INVALID", 400, "sending_company_id and lines are required.");
+    }
+    const allowed = await loadMtsFgSkuIds(sendingCompanyId);
+    const bad = lines.findIndex((line) => !allowed.has(toTrimmedString(line.material_id)));
+    if (bad >= 0) {
+      return stoErrorResponse(
+        req, ctx, "FG_STO_MATERIAL_NOT_MTS_FG", 422,
+        `Line ${bad + 1}: only MTS finished-goods SKUs of the sending company can go on an FG STO.`,
+      );
+    }
+    // AC04 conversion cost per KG for each SKU (sending company, SKU's prodshade + segment, STO date).
+    const conversionCostByLine = await resolveFgConversionCosts(
+      sendingCompanyId,
+      lines.map((line) => toTrimmedString(line.material_id)),
+      toTrimmedString(body.sto_date) || todayIsoDate(),
+    );
+    const missing = conversionCostByLine.findIndex((rate) => rate == null);
+    if (missing >= 0) {
+      return stoErrorResponse(
+        req, ctx, "FG_STO_CONVERSION_RATE_MISSING", 422,
+        `Line ${missing + 1}: no AC04 Conversion Cost is configured for this SKU's prodshade/segment at the sending company. Add it in Conversion Cost (AC04) first.`,
+      );
+    }
+    return await createStoFromBody(
+      req, ctx,
+      { ...body, sto_type: "INTER_PLANT", is_opening_sto: false, sending_company_id: sendingCompanyId },
+      conversionCostByLine,
+    );
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "FG_STO_CREATE_FAILED";
+    return stoErrorResponse(req, ctx, code, 500, code);
   }
 }
 
@@ -1823,8 +2030,10 @@ export async function transformSubCSNToSTOHandler(
     return okResponse(await hydrateSto(String(sto.id), ctx), ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "STO_TRANSFORM_FAILED";
-    const status = code === "CSN_NOT_FOUND" ? 404 : 500;
-    return stoErrorResponse(req, ctx, code, status, code);
+    const status = code === "CSN_NOT_FOUND" ? 404 : code === "STO_LANE_LEAD_TIME_MISSING" ? 422 : 500;
+    return stoErrorResponse(req, ctx, code, status, code === "STO_LANE_LEAD_TIME_MISSING"
+      ? "No company-to-company lead time exists for this sending/receiving pair. Add it in Lead Time Masters > Company to Company first."
+      : code);
   }
 }
 

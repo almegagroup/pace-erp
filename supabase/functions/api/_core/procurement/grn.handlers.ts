@@ -143,7 +143,7 @@ async function fetchMaterial(materialId: string): Promise<MaterialRow> {
   const { data, error } = await serviceRoleClient
     .schema("erp_master")
     .from("material_master")
-    .select("id, pace_code, material_name, external_sku, base_uom_code, qa_required_on_inward, batch_tracking_required, expiry_tracking_enabled")
+    .select("id, pace_code, material_name, material_type, external_sku, base_uom_code, qa_required_on_inward, batch_tracking_required, expiry_tracking_enabled")
     .eq("id", materialId)
     .single();
   if (error || !data) throw new Error("MATERIAL_NOT_FOUND");
@@ -369,7 +369,7 @@ async function hydrateGrn(grnId: string): Promise<JsonRecord> {
   let materialData: JsonRecord | null = null;
   if (isNewStyle && grn.material_id) {
     const { data } = await serviceRoleClient.schema("erp_master").from("material_master")
-      .select("id, pace_code, material_name, external_sku, batch_tracking_required, expiry_tracking_enabled, qa_required_on_inward")
+      .select("id, pace_code, material_name, material_type, external_sku, batch_tracking_required, expiry_tracking_enabled, qa_required_on_inward")
       .eq("id", String(grn.material_id)).maybeSingle();
     materialData = data;
   }
@@ -389,7 +389,7 @@ async function hydrateGrn(grnId: string): Promise<JsonRecord> {
     const [matResp, slocResp] = await Promise.all([
       matIds.length > 0
         ? serviceRoleClient.schema("erp_master").from("material_master")
-            .select("id, pace_code, material_name").in("id", matIds)
+            .select("id, pace_code, material_name, material_type").in("id", matIds)
         : { data: [], error: null },
       slocIds.length > 0
         ? serviceRoleClient.schema("erp_inventory").from("storage_location_master")
@@ -405,6 +405,7 @@ async function hydrateGrn(grnId: string): Promise<JsonRecord> {
         ...l,
         pace_code: mat?.pace_code ?? null,
         material_name: mat?.material_name ?? null,
+        material_type: (mat as JsonRecord | undefined)?.material_type ?? null,
         location_code: sloc?.code ?? null,
         location_name: sloc?.name ?? null,
       };
@@ -418,6 +419,7 @@ async function hydrateGrn(grnId: string): Promise<JsonRecord> {
     sto_number: stoNumber,
     pace_code: materialData?.pace_code ?? null,
     material_name: materialData?.material_name ?? null,
+    material_type: materialData?.material_type ?? null,
     external_sku: materialData?.external_sku ?? null,
     batch_tracking_required: materialData?.batch_tracking_required ?? false,
     expiry_tracking_enabled: materialData?.expiry_tracking_enabled ?? false,
@@ -471,7 +473,7 @@ export async function getGELinesForGRNHandler(
     const [matResp, poLineResp, existingGrnResp] = await Promise.all([
       matIds.length > 0
         ? serviceRoleClient.schema("erp_master").from("material_master")
-            .select("id, pace_code, material_name, external_sku, base_uom_code, qa_required_on_inward, batch_tracking_required, expiry_tracking_enabled, hsn_code")
+            .select("id, pace_code, material_name, material_type, external_sku, base_uom_code, qa_required_on_inward, batch_tracking_required, expiry_tracking_enabled, hsn_code")
             .in("id", matIds)
         : { data: [], error: null },
       poLineIds.length > 0
@@ -687,9 +689,13 @@ export async function getGELinesForGRNHandler(
       return {
         ...l,
         material_name: mat?.material_name ?? null,
+        material_type: (mat as JsonRecord | undefined)?.material_type ?? null,
         external_sku: mat?.external_sku ?? null,
         base_uom_code: baseUomCode,
-        qa_required_on_inward: mat?.qa_required_on_inward ?? false,
+        // FG STO receipts skip Inward QA (see the GRN post handler), so show no QA requirement for them.
+        qa_required_on_inward: stoLine && toUpperTrimmedString((mat as JsonRecord | undefined)?.material_type) === "FG"
+          ? false
+          : mat?.qa_required_on_inward ?? false,
         batch_tracking_required: mat?.batch_tracking_required ?? false,
         expiry_tracking_enabled: mat?.expiry_tracking_enabled ?? false,
         hsn_code: mat?.hsn_code ?? null,
@@ -962,7 +968,13 @@ export async function createAndPostGRNFromLineHandler(
       return procurementErrorResponse(req, ctx, "GRN_UOM_REQUIRED", 400, "Material base UOM is not configured.");
     }
 
-    const targetStockType: string = material.qa_required_on_inward ? "QUALITY_INSPECTION" : "UNRESTRICTED";
+    // FG STO receipt: the finished goods were already QA-released by the producing company, so the
+    // receiving company books them straight to Unrestricted and raises no Inward QA document,
+    // whatever qa_required_on_inward says on the SKU.
+    const isFgStoReceipt = Boolean(stoLineData) && toUpperTrimmedString(material.material_type) === "FG";
+    const targetStockType: string = isFgStoReceipt
+      ? "UNRESTRICTED"
+      : material.qa_required_on_inward ? "QUALITY_INSPECTION" : "UNRESTRICTED";
 
     // Storage location
     const storageLocationId = toTrimmedString(body.storage_location_id) || null;
@@ -978,7 +990,9 @@ export async function createAndPostGRNFromLineHandler(
 
     // Accounts
     const rateConfirmed = body.rate_confirmed === true;
-    const poRate = parseNullableNumber(body.po_rate) ?? parseNullableNumber(poLineData?.unit_rate) ?? parseNullableNumber(stoLineData?.transfer_price);
+    const poRate = parseNullableNumber(body.po_rate) ?? parseNullableNumber(poLineData?.unit_rate) ?? (stoLineData && parseNullableNumber(stoLineData.transfer_price) !== null
+      ? Number(((parseNullableNumber(stoLineData.transfer_price) ?? 0) + (parseNullableNumber(stoLineData.conversion_cost_per_unit) ?? 0)).toFixed(6))
+      : null);
     const invoiceRate = parseNullableNumber(body.invoice_rate);
     const gstPct = parseNullableNumber(body.gst_pct);
     if (!isBulkNoInvoice && gstPct === null) {
@@ -1250,7 +1264,7 @@ export async function createAndPostGRNFromLineHandler(
     }
 
     // QA document
-    if (targetStockType === "QUALITY_INSPECTION" || Boolean(material.qa_required_on_inward)) {
+    if (!isFgStoReceipt && (targetStockType === "QUALITY_INSPECTION" || Boolean(material.qa_required_on_inward))) {
       debugStep = "CREATE_QA_DOCUMENT";
       await createQaDocumentForGrn(
         ctx, grn as GrnRow,

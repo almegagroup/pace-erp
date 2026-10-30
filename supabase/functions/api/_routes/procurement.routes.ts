@@ -352,6 +352,10 @@ import {
   listCHAsHandler,
   listChaCompanyMapsHandler,
   listDomesticLeadTimesHandler,
+  listCompanyLeadTimesHandler,
+  upsertCompanyLeadTimeHandler,
+  updateCompanyLeadTimeHandler,
+  deleteCompanyLeadTimeHandler,
   listImportLeadTimesHandler,
   listMaterialCategoriesHandler,
   listPaymentTermsHandler,
@@ -548,6 +552,9 @@ import {
   knockOffSTOLineHandler,
   getSTOHandler,
   getLastStoPaymentTermHandler,
+  getStoLaneTransitHandler,
+  createFgStoHandler,
+  listFgStoMaterialsHandler,
   listSTOsHandler,
   rejectSTOHandler,
   transformSubCSNToSTOHandler,
@@ -626,6 +633,10 @@ export async function dispatchProcurementRoutes(
       return await listDomesticLeadTimesHandler(req, ctx);
     case "POST:/api/procurement/lead-times/domestic":
       return await upsertDomesticLeadTimeHandler(req, ctx);
+    case "GET:/api/procurement/lead-times/company":
+      return await listCompanyLeadTimesHandler(req, ctx);
+    case "POST:/api/procurement/lead-times/company":
+      return await upsertCompanyLeadTimeHandler(req, ctx);
     case "GET:/api/procurement/transporters":
       return await listTransportersHandler(req, ctx);
     case "POST:/api/procurement/transporters":
@@ -1177,6 +1188,14 @@ export async function dispatchProcurementRoutes(
       return await listSTOsHandler(req, ctx);
     case "GET:/api/procurement/stos/last-payment-term":
       return await getLastStoPaymentTermHandler(req, ctx);
+    case "GET:/api/procurement/stos/lane-transit":
+      return await getStoLaneTransitHandler(req, ctx);
+    case "GET:/api/procurement/fg-stos/lane-transit":
+      return await getStoLaneTransitHandler(req, ctx);
+    case "GET:/api/procurement/fg-stos/materials":
+      return await listFgStoMaterialsHandler(req, ctx);
+    case "POST:/api/procurement/fg-stos":
+      return await createFgStoHandler(req, ctx);
     case "POST:/api/procurement/purchase-orders":
       return await createPOHandler(req, ctx);
     case "GET:/api/procurement/purchase-orders":
@@ -1473,6 +1492,14 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/lead-times\/import\/[^/]+$/.test(pathname) && req.method === "PATCH") {
     return await updateImportLeadTimeHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/lead-times\/company\/[^/]+$/.test(pathname) && req.method === "DELETE") {
+    return await deleteCompanyLeadTimeHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/lead-times\/company\/[^/]+$/.test(pathname) && req.method === "PATCH") {
+    return await updateCompanyLeadTimeHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/lead-times\/domestic\/[^/]+$/.test(pathname) && req.method === "DELETE") {

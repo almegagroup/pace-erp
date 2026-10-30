@@ -193,6 +193,22 @@ export function updateDomesticLeadTime(id, payload) {
   return fetchProcurement("PATCH", `/api/procurement/lead-times/domestic/${encodeURIComponent(id)}`, payload);
 }
 
+export function listCompanyLeadTimes(params) {
+  return fetchProcurement("GET", "/api/procurement/lead-times/company", undefined, params);
+}
+
+export function upsertCompanyLeadTime(payload) {
+  return fetchProcurement("POST", "/api/procurement/lead-times/company", payload);
+}
+
+export function updateCompanyLeadTime(id, payload) {
+  return fetchProcurement("PATCH", `/api/procurement/lead-times/company/${encodeURIComponent(id)}`, payload);
+}
+
+export function deleteCompanyLeadTime(id) {
+  return fetchProcurement("DELETE", `/api/procurement/lead-times/company/${encodeURIComponent(id)}`);
+}
+
 export function listTransporters(params) {
   return fetchProcurement("GET", "/api/procurement/transporters", undefined, params);
 }
@@ -664,6 +680,22 @@ export function getSTO(id) {
 
 export function getLastStoPaymentTerm(params) {
   return fetchProcurement("GET", "/api/procurement/stos/last-payment-term", undefined, params);
+}
+
+export function getStoLaneTransit(params) {
+  return fetchProcurement("GET", "/api/procurement/stos/lane-transit", undefined, params);
+}
+
+export function listFgStoMaterials(params) {
+  return fetchProcurement("GET", "/api/procurement/fg-stos/materials", undefined, params);
+}
+
+export function getFgStoLaneTransit(params) {
+  return fetchProcurement("GET", "/api/procurement/fg-stos/lane-transit", undefined, params);
+}
+
+export function createFgSto(data) {
+  return fetchProcurement("POST", "/api/procurement/fg-stos", data);
 }
 
 export function createSTO(data) {

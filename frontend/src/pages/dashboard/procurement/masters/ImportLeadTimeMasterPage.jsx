@@ -15,6 +15,10 @@ import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import {
   deleteImportLeadTime,
   deleteDomesticLeadTime,
+  deleteCompanyLeadTime,
+  listCompanyLeadTimes,
+  updateCompanyLeadTime,
+  upsertCompanyLeadTime,
   listImportLeadTimes,
   listDomesticLeadTimes,
   listPorts,
@@ -27,6 +31,7 @@ import { useCompaniesQuery } from "../../../../hooks/queries/useProcurementMaste
 import { useVendorsQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 
 const EMPTY_IMPORT = { vendor_id: "", port_of_discharge_id: "", sail_time_days: "", clearance_days: "", effective_from: "", effective_to: "" };
+const EMPTY_COMPANY = { company_1_id: "", company_2_id: "", transit_days: "", effective_from: "", effective_to: "" };
 const EMPTY_DOMESTIC = { vendor_id: "", company_id: "", transit_days: "", effective_from: "", effective_to: "" };
 
 export default function ImportLeadTimeMasterPage() {
@@ -39,14 +44,16 @@ export default function ImportLeadTimeMasterPage() {
   const leadTimeQuery = useQuery({
     queryKey: ["procurement", "lead-time-masters"],
     queryFn: async () => {
-      const [imports, domestics, ports] = await Promise.all([
+      const [imports, domestics, companyLanes, ports] = await Promise.all([
         listImportLeadTimes({ is_active: "all" }),
         listDomesticLeadTimes({ is_active: "all" }),
+        listCompanyLeadTimes({ is_active: "all" }),
         listPorts({ is_active: "true", port_role: "DISCHARGE" }),
       ]);
       return {
         importRows: Array.isArray(imports) ? imports : [],
         domesticRows: Array.isArray(domestics) ? domestics : [],
+        companyRows: Array.isArray(companyLanes) ? companyLanes : [],
         dischargePorts: Array.isArray(ports) ? ports : [],
       };
     },
@@ -61,6 +68,9 @@ export default function ImportLeadTimeMasterPage() {
   const domesticRows = leadTimeQuery.data?.domesticRows ?? [];
   const [domesticForm, setDomesticForm] = useState(EMPTY_DOMESTIC);
   const [editingDomesticId, setEditingDomesticId] = useState(null);
+  const [companyForm, setCompanyForm] = useState(EMPTY_COMPANY);
+  const [editingCompanyId, setEditingCompanyId] = useState(null);
+  const companyRows = leadTimeQuery.data?.companyRows ?? [];
 
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
@@ -220,6 +230,65 @@ export default function ImportLeadTimeMasterPage() {
     } finally { setSaving(false); }
   }
 
+  // Company-to-company lanes (STO / FG STO). One row = one pair, valid in BOTH directions.
+  async function handleCompanySave() {
+    const editing = Boolean(editingCompanyId);
+    if ((!editing && (!companyForm.company_1_id || !companyForm.company_2_id)) || companyForm.transit_days === "" || !companyForm.effective_from) {
+      flash("Both companies, Transit Days and Effective From are required.", true); return;
+    }
+    if (!editing && companyForm.company_1_id === companyForm.company_2_id) {
+      flash("Choose two different companies.", true); return;
+    }
+    setSaving(true);
+    try {
+      const timing = {
+        transit_days: Number(companyForm.transit_days),
+        effective_from: companyForm.effective_from,
+        effective_to: companyForm.effective_to || null,
+      };
+      if (editing) {
+        await updateCompanyLeadTime(editingCompanyId, timing);
+        flash("Company lane updated (applies both ways).");
+      } else {
+        await upsertCompanyLeadTime({ company_1_id: companyForm.company_1_id, company_2_id: companyForm.company_2_id, ...timing });
+        flash("Company lane saved (applies both ways).");
+      }
+      setCompanyForm(EMPTY_COMPANY);
+      setEditingCompanyId(null);
+      await leadTimeQuery.refetch();
+    } catch (err) {
+      flash(err instanceof Error ? err.message : "PROCUREMENT_COMPANY_LEAD_TIME_CREATE_FAILED", true);
+    } finally { setSaving(false); }
+  }
+
+  function handleCompanyEdit(row) {
+    setEditingCompanyId(row.id);
+    setCompanyForm({
+      company_1_id: row.company_a_id ?? "",
+      company_2_id: row.company_b_id ?? "",
+      transit_days: String(row.transit_days ?? ""),
+      effective_from: row.effective_from ?? "",
+      effective_to: row.effective_to ?? "",
+    });
+  }
+
+  function handleCompanyCancelEdit() {
+    setEditingCompanyId(null);
+    setCompanyForm(EMPTY_COMPANY);
+  }
+
+  async function handleCompanyDelete(id) {
+    setSaving(true);
+    try {
+      await deleteCompanyLeadTime(id);
+      flash("Company lane deleted.");
+      if (editingCompanyId === id) handleCompanyCancelEdit();
+      await leadTimeQuery.refetch();
+    } catch (err) {
+      flash(err instanceof Error ? err.message : "PROCUREMENT_COMPANY_LEAD_TIME_DELETE_FAILED", true);
+    } finally { setSaving(false); }
+  }
+
   return (
     <ErpScreenScaffold
       eyebrow="Procurement Masters"
@@ -242,7 +311,7 @@ export default function ImportLeadTimeMasterPage() {
       }]}
     >
       <div className="flex gap-2 mb-4">
-        {["Import", "Domestic"].map((tab) => (
+        {["Import", "Domestic", "Company to Company"].map((tab) => (
           <button key={tab} type="button" onClick={() => setActiveTab(tab)}
             className={`border px-3 py-2 text-sm font-semibold ${activeTab === tab ? "border-sky-700 bg-sky-100 text-sky-950" : "border-slate-300 bg-white text-slate-700"}`}>
             {tab}
@@ -348,6 +417,90 @@ export default function ImportLeadTimeMasterPage() {
                   <button type="button" disabled={saving} onClick={handleImportCancelEdit} className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50">
                     Cancel
                   </button>
+                ) : null}
+              </div>
+            </div>
+          </ErpSectionCard>
+        </div>
+      ) : activeTab === "Company to Company" ? (
+        <div className="grid gap-4 xl:grid-cols-[minmax(0,1.2fr)_340px]">
+          <ErpSectionCard eyebrow="STO / FG STO" title="Company to company lead times">
+            <p className="mb-2 text-xs text-slate-500">One row covers both directions (e.g. CMP003 to CMP005 is the same lane as CMP005 to CMP003). Used for the ETA to plant of STO and FG STO CSNs.</p>
+            <div className="overflow-auto">
+              <table className="w-full border-collapse text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 bg-slate-50">
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Company</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Company</th>
+                    <th className="px-3 py-2 text-center text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Transit Days</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Eff. From</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Eff. To</th>
+                    <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-[0.07em] text-slate-500">Status</th>
+                    <th className="px-3 py-2"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {loading && <tr><td colSpan={7} className="px-3 py-6 text-center text-sm text-slate-400">Loading...</td></tr>}
+                  {!loading && companyRows.length === 0 && <tr><td colSpan={7} className="px-3 py-6 text-center text-sm text-slate-400">No company lanes found.</td></tr>}
+                  {companyRows.map((row) => (
+                    <tr key={row.id} className="border-b border-slate-100 hover:bg-slate-50">
+                      <td className="px-3 py-2 text-xs"><span className="font-mono font-semibold text-slate-800">{row.company_a?.company_code ?? "—"}</span><span className="ml-1 text-slate-500">{row.company_a?.company_name}</span></td>
+                      <td className="px-3 py-2 text-xs"><span className="font-mono font-semibold text-slate-800">{row.company_b?.company_code ?? "—"}</span><span className="ml-1 text-slate-500">{row.company_b?.company_name}</span></td>
+                      <td className="px-3 py-2 text-center font-semibold">{row.transit_days}</td>
+                      <td className="px-3 py-2 text-xs">{row.effective_from}</td>
+                      <td className="px-3 py-2 text-xs">{row.effective_to ?? "—"}</td>
+                      <td className="px-3 py-2">
+                        <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${row.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-600"}`}>
+                          {row.active ? "ACTIVE" : "INACTIVE"}
+                        </span>
+                      </td>
+                      <td className="px-3 py-2 flex gap-1">
+                        <button type="button" disabled={saving} onClick={() => handleCompanyEdit(row)} className="border border-sky-400 bg-white px-2 py-1 text-[11px] font-semibold text-sky-700 disabled:opacity-50">Edit</button>
+                        <button type="button" disabled={saving} onClick={() => void handleCompanyDelete(row.id)} className="border border-rose-400 bg-white px-2 py-1 text-[11px] font-semibold text-rose-700 disabled:opacity-50">Delete</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </ErpSectionCard>
+
+          <ErpSectionCard eyebrow={editingCompanyId ? "Edit" : "Add"} title={editingCompanyId ? "Edit company lane" : "New company lane"}>
+            <div className="grid gap-3">
+              {["company_1_id", "company_2_id"].map((fieldKey, index) => (
+                <label key={fieldKey} className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Company {index + 1} <span className="text-rose-500">*</span>
+                  <select
+                    value={companyForm[fieldKey]}
+                    disabled={Boolean(editingCompanyId)}
+                    onChange={(e) => setCompanyForm((f) => ({ ...f, [fieldKey]: e.target.value }))}
+                    className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500 disabled:bg-slate-100"
+                  >
+                    <option value="">— Select Company —</option>
+                    {companies.map((c) => <option key={c.id} value={c.id}>{c.company_code} — {c.company_name}</option>)}
+                  </select>
+                </label>
+              ))}
+              <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                Transit Days <span className="text-rose-500">*</span>
+                <input type="number" min="0" value={companyForm.transit_days} onChange={(e) => setCompanyForm((f) => ({ ...f, transit_days: e.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+              </label>
+              <div className="grid grid-cols-2 gap-2">
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Effective From <span className="text-rose-500">*</span>
+                  <input type="date" value={companyForm.effective_from} onChange={(e) => setCompanyForm((f) => ({ ...f, effective_from: e.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+                </label>
+                <label className="grid gap-1 text-xs font-semibold text-slate-700">
+                  Effective To
+                  <input type="date" value={companyForm.effective_to} onChange={(e) => setCompanyForm((f) => ({ ...f, effective_to: e.target.value }))} className="h-8 border border-slate-300 bg-[#fffef7] px-2 text-sm outline-none focus:border-sky-500" />
+                </label>
+              </div>
+              <div className="flex gap-2">
+                <button type="button" disabled={saving} onClick={() => void handleCompanySave()} className="border border-sky-700 bg-sky-100 px-3 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50">
+                  {saving ? "Saving..." : editingCompanyId ? "Update Company Lane" : "Save Company Lane"}
+                </button>
+                {editingCompanyId ? (
+                  <button type="button" disabled={saving} onClick={handleCompanyCancelEdit} className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-700 disabled:opacity-50">Cancel</button>
                 ) : null}
               </div>
             </div>

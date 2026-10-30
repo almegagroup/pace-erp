@@ -158,6 +158,16 @@ const minGapText = (g) => {
   const crit = g.critical_days !== null && g.critical_days !== undefined ? `, Critical ${g.critical_days} d` : "";
   return `Min cannot be saved: below Min for ${g.days_below_min} day(s) (${g.from} to ${g.to}), cover down to ${Math.floor(g.lowest_cover_days)} d (Min ${g.min_days} d${crit}). ${g.critical_broken ? "Critical is ALSO broken." : "Critical holds."}`;
 };
+/** Owner 2026-10-30: the lot is timed at the ITEM's own (lower) Min, so when it lands the level it serves is still below ITS Min (the pool covers the gap): say how many days, and how far above Critical it stays. */
+const minDipText = (d) => {
+  if (!d) return "";
+  const crit = d.critical_days !== null && d.critical_days !== undefined ? `, Critical ${d.critical_days} d` : "";
+  const above = d.days_above_critical !== null && d.days_above_critical !== undefined ? ` ${Math.floor(d.days_above_critical)} d ${d.days_above_critical >= 0 ? "above" : "BELOW"} Critical.` : "";
+  const fmt = (n) => new Intl.NumberFormat("en-IN").format(Math.round(n));
+  const ask = d.ask_day && d.pool_qty_at_ask !== null && d.pool_qty_at_ask !== undefined
+    ? ` On ${d.ask_day} it asked the pool for ${fmt(d.ask_wanted_qty)} KG, got ${fmt(d.ask_got_qty)} KG (pool held ${fmt(d.pool_qty_at_ask)} KG).` : "";
+  return `When this lot lands, ${d.level_label} sits below its Min for ${d.days_below_min} day(s) (${d.from} to ${d.to}): the pool could not refill it.${ask} Cover down to ${Math.floor(d.lowest_cover_days)} d (Min ${d.min_days} d${crit}).${above}`;
+};
 /** Owner 2026-10-30: the same need through the other route (import <-> local): ETD / Port / Plant, only what can still connect from today. */
 const alternativesText = (list) => (Array.isArray(list) ? list : [])
   .map((a) => `${a.route === "IMPORT" ? "IMPORT" : "LOCAL"} · ${a.material} · ${a.vendor}: ETD ${a.etd}${a.port ? ` · Port ${a.port}` : ""} · Plant ${a.plant}${a.moq ? ` · MOQ ${new Intl.NumberFormat("en-IN").format(a.moq)}` : ""}`).join("\n");
@@ -234,7 +244,7 @@ function writeBlocks(sheet, companies, kind) {
       for (const x of b.prediction) {
         const row = sheet.addRow([
           x.source === "YOU" ? "Planner" : "Engine", day(x.import_etd), day(x.port_eta), day(x.date), num(x.qty), coverCell(x.max_days, x.max_days_est, 0, b.plan_end), coverCell(x.min_days, x.min_days_est, 0, b.plan_end), x.material, x.supplier ?? "", day(x.po_by),
-          x.uom ?? "", days(x.trigger_cover_days), days(x.trigger_min_days), triggeredBy(x), minGapText(x.min_gap), "", "", "", alternativesText(x.alternatives),
+          x.uom ?? "", days(x.trigger_cover_days), days(x.trigger_min_days), triggeredBy(x), [minGapText(x.min_gap), minDipText(x.min_dip)].filter(Boolean).join("\n"), "", "", "", alternativesText(x.alternatives),
         ]);
         row.eachCell((cell, i) => { cell.border = BORDER; if (i >= 5 && i <= 7) cell.numFmt = NUM; });
         row.getCell(14).alignment = { wrapText: true, vertical: "top" };
@@ -395,6 +405,33 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
     { label: "Engine best date", value: (r) => day(r.engine_best_date) }, { label: "Vendor can move it?", key: "vendor_window" }, { label: "Why", key: "engine_reason" },
   ], companies.flatMap((c) => c.arrivals.map((a) => ({ ...a, company: companyLabel(c) }))), { color: (r) => (r.no_eta || r.overdue ? RED : null) });
   widths(arr, [26, 34, 44, 30, 18, 12, 7, 14, 14, 12, 16, 22, 60]);
+
+  // Owner 2026-10-30: schedule check — one pair of tabs per company. CHECK = every not-yet-shipped order on its advised date, level by level (Min / Max / cover / excess);
+  // LEVELS = the whole plan (existing consignments on their advised dates + the engine's new orders), level by level on each landing date.
+  for (const c of companies) {
+    const sc = c.schedule_check ?? { check_rows: [], level_rows: [] };
+    const tone = (r) => (String(r.verdict ?? "").startsWith("BELOW") ? RED : r.verdict === "Above Max" ? AMBER : null);
+    const check = wb.addWorksheet(sheetName(`${c.company_code ?? companyLabel(c)} CHECK`, used));
+    addTable(check, [
+      { label: "Family (groups)", key: "family" }, { label: "Order (not shipped)", key: "order" }, { label: "Qty", value: (r) => num(r.qty), num: true }, { label: "UoM", key: "uom" },
+      { label: "Recorded plant date", value: (r) => day(r.recorded) }, { label: "Engine advised date", value: (r) => day(r.advised) }, { label: "Moved by (days, + later)", value: (r) => num(r.shift_days), num: true },
+      { label: "Level (Exclusive / group)", key: "level" }, { label: "Level Min (d)", value: (r) => num(r.min_days), num: true }, { label: "Level Max (d)", value: (r) => num(r.max_days), num: true },
+      { label: "Cover day before landing (d)", value: (r) => num(r.cover_before), num: true }, { label: "Cover end of landing day (d)", value: (r) => num(r.cover_after), num: true },
+      { label: "Level reserve after (qty)", value: (r) => num(r.reserve), num: true }, { label: "Excess in pool after (qty)", value: (r) => num(r.excess_after), num: true },
+      { label: "Verdict vs Min", key: "verdict" },
+    ], sc.check_rows, { color: tone });
+    widths(check, [44, 50, 11, 7, 13, 13, 11, 34, 9, 9, 13, 13, 14, 14, 24]);
+    check.views = [{ state: "frozen", xSplit: 2, ySplit: 1 }];
+    const levels = wb.addWorksheet(sheetName(`${c.company_code ?? companyLabel(c)} LEVELS`, used));
+    addTable(levels, [
+      { label: "Family (groups)", key: "family" }, { label: "Date", value: (r) => day(r.date) }, { label: "What lands (existing / new)", key: "event" }, { label: "Qty", value: (r) => num(r.qty), num: true }, { label: "UoM", key: "uom" },
+      { label: "Level (Exclusive / group)", key: "level" }, { label: "Level Min (d)", value: (r) => num(r.min_days), num: true }, { label: "Level Max (d)", value: (r) => num(r.max_days), num: true },
+      { label: "Cover end of day (d)", value: (r) => num(r.cover_days), num: true }, { label: "Level reserve (qty)", value: (r) => num(r.reserve), num: true },
+      { label: "Excess in pool after (qty)", value: (r) => num(r.excess_after), num: true }, { label: "Verdict vs Min", key: "verdict" },
+    ], sc.level_rows, { color: tone });
+    widths(levels, [44, 12, 56, 11, 7, 34, 9, 9, 13, 14, 14, 24]);
+    levels.views = [{ state: "frozen", xSplit: 3, ySplit: 1 }];
+  }
 
   writeWaterfall(wb, companies, used);
   writeExplain(wb, companies, used);

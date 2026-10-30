@@ -73,7 +73,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       loadAllCurrentLots(companyId),
       serviceRoleClient.schema("erp_master").from("companies").select("company_code, company_name").eq("id", companyId).maybeSingle(),
     ]);
-    const plan = await computePlanning({ companyId, ...parsed.params!, extraMonths: ROLLING_EXTRA_MONTHS, manualLots: userLots });
+    const plan = await computePlanning({ companyId, ...parsed.params!, extraMonths: ROLLING_EXTRA_MONTHS, manualLots: userLots, scheduleChecks: true });
     const { req: reqData, projection, assembly, calendar, vendorOptions, selections } = plan._internal;
     const mattersForGaps = (m: string) => {
       const rowsOf = projection.rows.filter((r) => r.material_id === m);
@@ -302,7 +302,9 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         return {
           ...p, max_days: p.date ? gridByDay.get(p.date)?.max_days ?? null : null, min_days: p.date ? gridByDay.get(p.date)?.min_days ?? null : null,
           max_days_est: p.date ? gridByDay.get(p.date)?.max_days_est ?? null : null, min_days_est: p.date ? gridByDay.get(p.date)?.min_days_est ?? null : null,
-          trigger_cover_days: buy?.trigger_cover_days ?? null, trigger_min_days: buy?.trigger_min_days ?? null, trigger_kind: buy?.need_kind ?? null, min_gap: buy?.min_gap ?? null, alternatives: p.source === "ENGINE" ? alternativesFor(buy, p.date) : [],
+          trigger_cover_days: buy?.trigger_cover_days ?? null, trigger_min_days: buy?.trigger_min_days ?? null, trigger_kind: buy?.need_kind ?? null, min_gap: buy?.min_gap ?? null,
+          min_dip: buy?.min_dip ? { ...buy.min_dip, level_label: buy.min_dip.level_kind === "GROUP" ? groupLabel.get(buy.min_dip.level_label_id) ?? "group" : nameOf(buy.min_dip.level_label_id) } : null,
+          alternatives: p.source === "ENGINE" ? alternativesFor(buy, p.date) : [],
           trigger_group: buy?.trigger_group_id ? groupLabel.get(buy.trigger_group_id) ?? null : null,
           // Every group this one physical lot also feeds (same arrival date), so the sheet can name them all.
           trigger_also_groups: (buy?.covers ?? []).filter((c: string) => c !== "OWN" && c !== "MEMBER_GUARD" && c !== buy?.trigger_group_id).map((c: string) => groupLabel.get(c) ?? "—"),
@@ -494,12 +496,55 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       moves_advised: arrivals.filter((a) => a.engine_best_date).length,
     };
 
+    // Owner 2026-10-30: schedule check tabs. Every not-yet-shipped order is placed on its advised date; for each day something lands, every level's Min / Max / cover
+    // and the pool left are listed, so the advised dates can be verified against the method (CHECK = per order x level, LEVELS = the whole plan by date).
+    const checkRows: Array<Record<string, unknown>> = [];
+    const levelRows: Array<Record<string, unknown>> = [];
+    const whole = (n: number | null | undefined) => (n === null || n === undefined ? null : Math.round(n));
+    for (const fam of plan.schedule_checks ?? []) {
+      const members = fam.member_ids.filter((m) => !bulkRm.has(m));
+      if (members.length === 0) continue;
+      const lead = members[0];
+      const groupNames = [...new Set(fam.days.flatMap((d) => d.levels.filter((l) => l.level_kind === "GROUP").map((l) => groupLabel.get(l.level_id) ?? "")).filter(Boolean))];
+      const familyName = groupNames.length ? groupNames.join(" / ") : members.map(nameOf).join(" / ");
+      const uom = uomOf(lead);
+      const q = (n: number) => dq(lead, n) ?? 0;
+      const levelLabel = (kind: string, id: string) => (kind === "OWN" ? `Exclusive — ${nameOf(id)}` : groupLabel.get(id) ?? "Group");
+      const dayMap = new Map(fam.days.map((d) => [d.day, d]));
+      const prevOf = (d: string) => addDaysIso2(d, -1);
+      const events: Array<{ day: string; label: string; qty: number; type: string; recorded: string | null; shift: number | null }> = [
+        ...fam.arrivals.filter((a) => a.advised && a.advised >= calendar.asOf).map((a) => ({
+          day: a.advised as string, label: `${a.reference} · ${nameOf(a.material_id)}`, qty: q(a.qty_base),
+          type: a.movable ? "Not shipped (engine date)" : "Shipped / in transit (fixed)", recorded: a.recorded,
+          shift: a.movable && a.recorded && a.advised ? Math.round((Date.parse(`${a.advised}T00:00:00Z`) - Date.parse(`${a.recorded}T00:00:00Z`)) / 86_400_000) : null,
+        })),
+        ...fam.engine_lots.map((l) => ({ day: l.day, label: `NEW (engine) · ${nameOf(l.material_id)}`, qty: q(l.qty_base), type: "New engine order", recorded: null as string | null, shift: null as number | null })),
+      ].sort((a, b) => a.day.localeCompare(b.day) || a.label.localeCompare(b.label));
+      for (const ev of events) {
+        const after = dayMap.get(ev.day);
+        const before = dayMap.get(prevOf(ev.day));
+        if (!after) continue;
+        for (const lv of after.levels) {
+          const bf = before?.levels.find((x) => x.level_kind === lv.level_kind && x.level_id === lv.level_id);
+          const cover = lv.cover_days;
+          const verdict = cover === null || lv.min_days === null ? "" : cover + 1e-9 < lv.min_days ? `BELOW Min by ${Math.max(1, Math.round(lv.min_days - cover))} d` : lv.max_days !== null && cover > lv.max_days + 1e-9 ? "Above Max" : "OK: at or above Min";
+          const base = { family: familyName, level: levelLabel(lv.level_kind, lv.level_id), uom };
+          levelRows.push({ ...base, date: ev.day, event: ev.label, qty: ev.qty, min_days: whole(lv.min_days), max_days: whole(lv.max_days), cover_days: whole(cover), reserve: q(lv.reserve_qty), excess_after: q(after.pool_qty), verdict });
+          if (ev.type === "Not shipped (engine date)") {
+            checkRows.push({ ...base, order: ev.label, qty: ev.qty, recorded: ev.recorded, advised: ev.day, shift_days: ev.shift, min_days: whole(lv.min_days), max_days: whole(lv.max_days),
+              cover_before: whole(bf?.cover_days ?? null), cover_after: whole(cover), reserve: q(lv.reserve_qty), excess_after: q(after.pool_qty), verdict });
+          }
+        }
+      }
+    }
+
     return okResponse({
       company_id: companyId, company_code: text(company.company_code) || null, company_name: text(company.company_name) || null,
       calendar: { as_of: calendar.asOf, horizon_end: calendar.horizonEnd, months: calendar.months },
       demand_label: plan.demand_version.label,
       bulk_rm_excluded: bulkRm.size,
       summary, blocks, requirement, buys, store, arrivals, explain,
+      schedule_check: { check_rows: checkRows, level_rows: levelRows },
       // Owner 2026-10-28: R003 -> R001 / R002 and R001 <-> R002, how much and by when.
       // Owner 2026-10-28: Store plan for the whole horizon, month by month (group items; only ACTUAL stock may be issued).
       store_plan: {

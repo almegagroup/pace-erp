@@ -553,6 +553,29 @@ async function getDomesticLeadTime(csn: CsnRow): Promise<Record<string, unknown>
     return null;
   }
 
+  // STO / FG STO CSN: its "vendor" is the SENDING COMPANY (company id stored in vendor_id),
+  // so lead_time_master_domestic (vendor x company) can never match. Use the symmetric
+  // company-to-company master instead; one row per unordered pair, valid both ways.
+  if (toTrimmedString(csn.sto_id)) {
+    const today = todayIsoInKolkata();
+    const { data, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("lead_time_master_company")
+      .select("transit_days")
+      .eq("company_a_id", vendorId < companyId ? vendorId : companyId)
+      .eq("company_b_id", vendorId < companyId ? companyId : vendorId)
+      .eq("active", true)
+      .lte("effective_from", today)
+      .or(`effective_to.is.null,effective_to.gte.${today}`)
+      .order("effective_from", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      throw new Error("PROCUREMENT_COMPANY_LEAD_TIME_LOOKUP_FAILED");
+    }
+    return (data as Record<string, unknown> | null) ?? null;
+  }
+
   const { data, error } = await serviceRoleClient
     .schema("erp_master")
     .from("lead_time_master_domestic")
@@ -1152,7 +1175,7 @@ export async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
       ? serviceRoleClient.schema("erp_master").from("vendor_master").select("id, vendor_name").in("id", vendorIds)
       : Promise.resolve({ data: [], error: null }),
     materialIds.length
-      ? serviceRoleClient.schema("erp_master").from("material_master").select("id, material_name, pace_code, base_uom_code").in("id", materialIds)
+      ? serviceRoleClient.schema("erp_master").from("material_master").select("id, material_name, pace_code, base_uom_code, material_type").in("id", materialIds)
       : Promise.resolve({ data: [], error: null }),
     transporterIds.length
       ? serviceRoleClient.schema("erp_master").from("transporter_master").select("id, transporter_name").in("id", transporterIds)
@@ -1334,6 +1357,8 @@ export async function enrichTrackerRows(rows: CsnRow[]): Promise<CsnRow[]> {
         : null,
       material_name: material?.material_name ?? null,
       material_code: material?.pace_code ?? null,
+      // Item Type (RM / PM / INT / SFG / FG ...) straight from the material master.
+      material_type: material?.material_type ?? null,
       base_uom_code: material?.base_uom_code ?? null,
       // `consignment_note.po_qty` is the quantity allocated to this CSN at
       // its creation.  It intentionally remains immutable so the dispatch
