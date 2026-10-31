@@ -504,10 +504,12 @@ export default function CSNTrackerPage() {
   const [showSaveLayout, setShowSaveLayout] = useState(false);
   const [selectedLayoutId, setSelectedLayoutId] = useState("");
   const [dispatchDialog, setDispatchDialog] = useState(null);
+  const [holdDialog, setHoldDialog] = useState(null);
   const [activeHistoryKey, setActiveHistoryKey] = useState("");
   const [histories, setHistories] = useState({});
   const [loadingHistoryKey, setLoadingHistoryKey] = useState("");
   const dateFieldPickerRef = useRef(null);
+  const holdReasonRef = useRef(null);
 
   const columns = useMemo(() => buildColumnDefs(), []);
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
@@ -841,15 +843,28 @@ export default function CSNTrackerPage() {
       } finally { setSavingRowId(""); }
       return;
     }
-    const reason = window.prompt("Why should this CSN be put on hold? This reason is required for the audit trail.", "");
-    if (reason === null) return;
-    if (!reason.trim()) { setError("A Hold reason is required."); return; }
+    setHoldDialog({ row, reason: "" });
+  }
+
+  async function submitHold() {
+    const row = holdDialog?.row;
+    const reason = toText(holdDialog?.reason);
+    const scopedCompanyId = effectiveCompanyId || row?.company_id || "";
+    if (!row?.id || !scopedCompanyId) return;
+    if (!reason) {
+      setError("A Hold reason is required.");
+      holdReasonRef.current?.focus();
+      return;
+    }
     setSavingRowId(row.id);
+    setError("");
+    setNotice("");
     try {
-      await holdCSN(row.id, { company_id: scopedCompanyId, reason: reason.trim() });
+      await holdCSN(row.id, { company_id: scopedCompanyId, reason });
       await invalidateTracker();
       setNotice("CSN placed on Hold. It remains editable but is excluded from PO22 planning.");
       resetDraft(null);
+      setHoldDialog(null);
     } catch (transitionError) {
       setError(transitionError instanceof Error ? transitionError.message : "PROCUREMENT_CSN_HOLD_FAILED");
     } finally { setSavingRowId(""); }
@@ -1707,6 +1722,37 @@ export default function CSNTrackerPage() {
             </select>
           </label>
         </div>
+      </ModalBase>
+
+      <ModalBase
+        visible={Boolean(holdDialog)}
+        eyebrow="Consignment Hold"
+        title="Put this CSN on Hold?"
+        message="It will remain editable, but no CSN alert or PO22 planning total will consider it until you release it. A Hold reason is retained in the audit trail."
+        onEscape={() => setHoldDialog(null)}
+        initialFocusRef={holdReasonRef}
+        actions={
+          <>
+            <button type="button" onClick={() => setHoldDialog(null)} disabled={Boolean(savingRowId)} className="border border-slate-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50">
+              Cancel
+            </button>
+            <button type="button" onClick={() => void submitHold()} disabled={!toText(holdDialog?.reason) || Boolean(savingRowId)} className="border border-amber-700 bg-amber-100 px-4 py-2 text-sm font-semibold text-amber-950 disabled:cursor-not-allowed disabled:opacity-50">
+              {savingRowId ? "Putting on Hold…" : "Put on Hold"}
+            </button>
+          </>
+        }
+      >
+        <label className="grid gap-1 text-sm font-medium text-slate-700">
+          Hold reason <span className="text-rose-700">*</span>
+          <textarea
+            ref={holdReasonRef}
+            value={holdDialog?.reason ?? ""}
+            onChange={(event) => setHoldDialog((current) => ({ ...current, reason: event.target.value }))}
+            rows={3}
+            placeholder="State why this consignment must be excluded temporarily"
+            className="min-h-[78px] border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-amber-600"
+          />
+        </label>
       </ModalBase>
 
       <ModalBase
