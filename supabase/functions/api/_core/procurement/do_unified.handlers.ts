@@ -1945,6 +1945,7 @@ type ProcInvoiceGroup = {
   group_key: string;
   source_type: "SALES_ORDER" | "STO";
   dispatch_type: string | null;
+  allows_backlog_tally_date: boolean;
   so_id: string | null;
   sto_id: string | null;
   document_number: string | null;
@@ -2294,11 +2295,17 @@ export async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonReco
     const soRoundOffAmount = Number([...new Set(groupLines.map((l) => l.so_line_id).filter(Boolean))]
       .reduce((sum, id) => sum + Number(soLineById.get(id as string)?.round_off_amount ?? 0), 0)
       .toFixed(4));
+    const dispatchType = meta.source_type === "SALES_ORDER"
+      ? (toUpperTrimmedString(soMap.get(meta.so_id)?.dispatch_type) || null)
+      : null;
 
     groups.push({
       group_key: groupKey,
       source_type: meta.source_type,
-      dispatch_type: meta.source_type === "SALES_ORDER" ? (toUpperTrimmedString(soMap.get(meta.so_id)?.dispatch_type) || null) : null,
+      dispatch_type: dispatchType,
+      // Client-side validation consumes this server-derived policy flag, so
+      // the invoice form cannot drift from the authoritative PGI rule.
+      allows_backlog_tally_date: canUseDependentDepotBacklogTallyDate(dispatchType, todayIsoDate()),
       so_id: meta.so_id || null,
       sto_id: meta.sto_id || null,
       document_number: documentNumber,
