@@ -9,6 +9,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
+import { isDispatchBacklogGracePeriodOpen } from "../../_shared/dispatchBacklogWindow.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { computeInvoiceGroups } from "./do_unified.handlers.ts";
 import { canMaintainDoBulkAccess } from "./do_bulk.handlers.ts";
@@ -34,7 +35,7 @@ function validDispatchDate(lrDate: string, dispatchDate: string) {
   if (!validIsoDate(lrDate) || !validIsoDate(dispatchDate)) return false;
   const today = todayIsoInKolkata();
   if (dispatchDate < lrDate || dispatchDate > today) return false;
-  if (today >= "2026-11-16") {
+  if (!isDispatchBacklogGracePeriodOpen(today)) {
     const floor = new Date(`${today}T00:00:00Z`); floor.setUTCDate(floor.getUTCDate() - 2);
     return dispatchDate >= floor.toISOString().slice(0, 10);
   }

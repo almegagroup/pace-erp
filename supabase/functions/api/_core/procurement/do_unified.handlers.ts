@@ -29,12 +29,12 @@ import { deriveSalesInvoiceGstType, getSnapshotForIssue } from "./sales_order.ha
 import { syncDdDeliveryOrderReservation } from "./dd_reservation.ts";
 import {
   assertPhase3PostingDateMatch,
-  hasDependentDepotLatePgiException,
   isHistoricalBackfillInvoiceDate,
   resolveBackfillPhase,
   resolvePhase1PostingDate,
   type BackfillClassification,
 } from "../../_shared/dispatchBackfillPosting.ts";
+import { canUseDependentDepotBacklogTallyDate } from "../../_shared/dispatchBacklogWindow.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -3353,7 +3353,7 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
       // retain its historical Tally date through 15 Nov 2026.  It still
       // posts stock today; from 16 Nov this exact Phase-3 rule resumes
       // automatically for Depot too.
-      } else if (backfillPhase === "PHASE_3" && !hasDependentDepotLatePgiException(group.dispatch_type, today)) {
+      } else if (backfillPhase === "PHASE_3" && !canUseDependentDepotBacklogTallyDate(group.dispatch_type, today)) {
         try {
           assertPhase3PostingDateMatch(tallyInvoiceDate, today);
         } catch {

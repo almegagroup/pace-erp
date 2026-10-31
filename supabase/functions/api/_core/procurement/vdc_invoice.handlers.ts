@@ -10,6 +10,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
+import { isDispatchBacklogGracePeriodOpen } from "../../_shared/dispatchBacklogWindow.ts";
 import { generateMaterialDocNumber } from "../../_shared/materialDocument.ts";
 import { hasPhysicalInventoryBlock, hasPhysicalInventoryBlockForBatch } from "../../_shared/physicalInventoryBlock.ts";
 import { errorResponse, okResponse } from "../response.ts";
@@ -147,9 +148,9 @@ function isValidDeferredDispatchDate(lrDate: string, dispatchDate: string): bool
   if (!isIsoDate(lrDate) || !isIsoDate(dispatchDate)) return false;
   const today = todayIsoInKolkata();
   if (dispatchDate < lrDate || dispatchDate > today) return false;
-  // The design's narrower Today-2 window starts on 16 November 2026 -- the backlog window stays open through 15 November inclusive (moved from 14 October, then 31 October, by the business owner, 2026-10-30). The same date is in vdc_truck_dispatch.handlers.ts. Keeping
-  // the decision date explicit makes the temporary backlog rule auditable.
-  if (today >= "2026-11-16") {
+  // The common backlog window stays open through 15 November inclusive. On
+  // 16 November the existing Today-2 validation resumes automatically.
+  if (!isDispatchBacklogGracePeriodOpen(today)) {
     const floor = new Date(`${today}T00:00:00Z`);
     floor.setUTCDate(floor.getUTCDate() - 2);
     return dispatchDate >= floor.toISOString().slice(0, 10);

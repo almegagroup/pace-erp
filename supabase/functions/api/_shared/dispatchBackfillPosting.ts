@@ -35,11 +35,6 @@ const PHASE_2_END = "2026-09-07"; // Phase 2 collapsed to zero width -- see note
 // own invoice date even while Phase 1 remains open for August backfill.
 const HISTORICAL_BACKFILL_INVOICE_END = "2026-08-31";
 
-// Temporary operational recovery for DEPENDENT_DEPOT dispatches only.  The
-// comparison is inclusive so the exception ends automatically when business
-// opens on 16 November; no deployment or manual switch-off is required.
-export const DEPENDENT_DEPOT_LATE_PGI_EXCEPTION_END = "2026-11-15";
-
 export type BackfillPhase = "PHASE_1" | "PHASE_2" | "PHASE_3";
 
 export function resolveBackfillPhase(todayIso: string): BackfillPhase {
@@ -60,14 +55,6 @@ export function isPastBackfillWindow(todayIso: string): boolean {
 
 export function isHistoricalBackfillInvoiceDate(tallyInvoiceDate: string): boolean {
   return tallyInvoiceDate <= HISTORICAL_BACKFILL_INVOICE_END;
-}
-
-export function hasDependentDepotLatePgiException(
-  dispatchType: string | null | undefined,
-  todayIso: string,
-): boolean {
-  return String(dispatchType ?? "").trim().toUpperCase() === "DEPENDENT_DEPOT"
-    && todayIso <= DEPENDENT_DEPOT_LATE_PGI_EXCEPTION_END;
 }
 
 // Phase 1, MTO/HPS rule -- Packing PO's own Final timestamp + 10 minutes,
