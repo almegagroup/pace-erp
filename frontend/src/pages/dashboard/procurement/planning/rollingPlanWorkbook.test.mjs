@@ -42,6 +42,17 @@ test("PLAN matrix: company × month columns, empty SKUs dropped", () => {
   assert.deepEqual(m.columns.slice(0, 3).map((c) => c.basis), ["FINAL", "ROLLING", "No plan"], "plan basis per month");
 });
 
+test("SUMMARY: held CSNs are visible but stay outside planning totals", () => {
+  const wb = buildRollingPlanWorkbook({ companies: [company("a", "Almeha Coatings", {
+    held_csns: [{ csn_number: "3000000999", material: "VAE A", supplier: "DAIREN", qty: 25000, uom: "KG", previous_status: "TRN", reason: "Vendor document correction", held_at: "2026-10-31", eta: "2026-11-06" }],
+  })], asOf: "2026-10-31" });
+  const summary = wb.getWorksheet("SUMMARY");
+  const cells = [];
+  summary.eachRow((row) => row.eachCell((cell) => cells.push(String(cell.value ?? ""))));
+  assert.ok(cells.includes("CSNs on Hold — excluded from every planning total"));
+  assert.ok(cells.includes("3000000999"));
+});
+
 test("sheet names: 31 chars, no illegal characters, unique", () => {
   const used = new Set();
   assert.equal(sheetName("A/B:C RM_PM", used), "A B C RM_PM");

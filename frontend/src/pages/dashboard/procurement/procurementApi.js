@@ -440,6 +440,14 @@ export function updateCSN(id, data) {
   return fetchProcurement("PUT", `/api/procurement/csns/${encodeURIComponent(id)}`, data);
 }
 
+export function holdCSN(id, data) {
+  return fetchProcurement("POST", `/api/procurement/csns/${encodeURIComponent(id)}/hold`, { ...data, action: "HOLD" });
+}
+
+export function releaseCSN(id, data) {
+  return fetchProcurement("POST", `/api/procurement/csns/${encodeURIComponent(id)}/release`, { ...data, action: "RELEASE" });
+}
+
 export function createSubCSN(id, data) {
   return fetchProcurement("POST", `/api/procurement/csns/${encodeURIComponent(id)}/sub-csns`, data);
 }

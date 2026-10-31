@@ -707,7 +707,7 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
   const lineIds = lines.map((l) => text(l.id));
   const lotLineIds = lines.filter((l) => poById.get(text(l.po_id))?.order_in_lot === true).map((l) => text(l.id));
 
-  const [geLines, csns, lots, stoCsns, transfers, postedGrns] = await Promise.all([
+  const [geLines, csns, heldCsns, lots, stoCsns, transfers, postedGrns] = await Promise.all([
     lineIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(lineIds, (chunk) => serviceRoleClient
       .schema("erp_procurement").from("gate_entry_line")
       .select("po_line_id, ge_qty, uom_code, gate_entry_id, grn_posted")
@@ -716,6 +716,10 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
       .schema("erp_procurement").from("consignment_note")
       .select("id, csn_number, status, po_line_id, dispatch_qty, total_received_qty, eta_to_plant_calculated, is_mother_csn, consignee_company_id, sto_id")
       .in("po_line_id", chunk).in("status", OPEN_CSN_STATUSES)),
+    lineIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(lineIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("consignment_note")
+      .select("id, mother_csn_id, is_mother_csn, po_line_id, dispatch_qty, po_qty, total_received_qty, sto_id")
+      .in("po_line_id", chunk).eq("status", "HLD")),
     lotLineIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : serviceRoleClient.schema("erp_procurement")
       .rpc("po_lot_balances", { p_po_line_ids: lotLineIds, p_exclude_ge_line_id: null })
       .then(({ data, error }) => { if (error) throw new Error("MTS_REQ_LOT_LOAD_FAILED"); return (data ?? []) as JsonRecord[]; }),
@@ -756,6 +760,13 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
     if (foreign.length > 0) {
       warnings.push({ code: "CRCP_CSN_EXCLUDED", message: `PO ${text(po.po_number)}: ${foreign.length} CSN(s) are consigned to another company and are not counted here.`, material_id: materialId });
     }
+    // A held Mother has held children too; only the child quantities represent
+    // the physical split, otherwise the PO quantity would be excluded twice.
+    const heldMotherIds = new Set(heldCsns.map((c) => text(c.mother_csn_id)).filter(Boolean));
+    const heldBase = heldCsns
+      .filter((c) => text(c.po_line_id) === text(line.id) && !text(c.sto_id))
+      .filter((c) => !(c.is_mother_csn === true && heldMotherIds.has(text(c.id))))
+      .reduce((sum, c) => sum + Math.max(0, Math.max(Number(c.dispatch_qty ?? 0), Number(c.po_qty ?? 0)) - Number(c.total_received_qty ?? 0)) * (ratio ?? 0), 0);
     const input: PoLineInboundInput = {
       material_id: materialId,
       po_line_id: text(line.id),
@@ -789,6 +800,7 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
       lots: lots.filter((lot) => text(lot.po_line_id) === text(line.id) && !["CANCELLED", "CLOSED"].includes(text(lot.status)))
         .map((lot) => ({ lot_number: text(lot.lot_number), balance_qty: Number(lot.balance_qty ?? 0), delivery_date: text(lot.delivery_date) || null })),
       committed_transfer_base: transfers.committedByPoLine.get(text(line.id)) ?? 0,
+      held_csn_base: heldBase,
     };
     events.push(...partitionPoLineInbound(input, asOf, warnings));
   }

@@ -29,6 +29,7 @@ import {
   listCSNsHandler,
   listTrackerLayoutsHandler,
   previewDispatchQtyAdjustmentHandler,
+  transitionCSNHoldHandler,
   updateCSNHandler,
 } from "../_core/procurement/csn.handlers.ts";
 import {
@@ -1251,6 +1252,10 @@ export async function dispatchProcurementRoutes(
     if (req.method === "PUT") {
       return await updateCSNHandler(req, ctx);
     }
+  }
+
+  if (/^\/api\/procurement\/csns\/[^/]+\/(hold|release)$/.test(pathname) && req.method === "POST") {
+    return await transitionCSNHoldHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/csns\/[^/]+\/sub-csns$/.test(pathname) && req.method === "POST") {

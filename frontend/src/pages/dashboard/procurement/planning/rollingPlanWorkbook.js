@@ -289,6 +289,17 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
     { label: "Arrival moves advised", value: (c) => c.summary.moves_advised, num: true },
   ], companies, { color: (c) => (c.summary.runs_out ? RED : null) });
   summary.addRow([]);
+  const heldCsns = companies.flatMap((c) => (c.held_csns ?? []).map((row) => ({ ...row, company: companyLabel(c) })));
+  if (heldCsns.length) {
+    const held = summary.addRow(["CSNs on Hold — excluded from every planning total"]);
+    held.getCell(1).font = { bold: true, color: { argb: "9A3412" } };
+    addTable(summary, [
+      { label: "Company", key: "company" }, { label: "CSN", key: "csn_number" }, { label: "Material", key: "material" },
+      { label: "Supplier", key: "supplier" }, { label: "Qty", value: (r) => num(r.qty), num: true }, { label: "UoM", key: "uom" },
+      { label: "Before Hold", key: "previous_status" }, { label: "Hold reason", key: "reason" }, { label: "Held on", value: (r) => day(r.held_at) }, { label: "ETA", value: (r) => day(r.eta) },
+    ], heldCsns, { color: () => AMBER });
+    summary.addRow([]);
+  }
   const att = summary.addRow(["Needs attention (runs out or below Critical)"]);
   att.getCell(1).font = { bold: true };
   addTable(summary, [

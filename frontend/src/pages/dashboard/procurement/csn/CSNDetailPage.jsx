@@ -25,6 +25,7 @@ const STATUS_LABELS = {
   GRD: "GRN Done",
   CAN: "Cancelled",
   KOF: "Knocked Off",
+  HLD: "On Hold",
 };
 
 function buildForm(detail) {
@@ -176,6 +177,8 @@ function getTone(value) {
     case "CAN":
     case "KOF":
       return "slate";
+    case "HLD":
+      return "amber";
     case "IMPORT":
       return "sky";
     case "DOMESTIC":

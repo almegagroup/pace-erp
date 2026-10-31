@@ -25,11 +25,13 @@ import {
   getAllAlertCounts,
   getCSNFieldHistory,
   getCSNTracker,
+  holdCSN,
   listCHAs,
   listCSNTrackerLayouts,
   listPorts,
   listTransporters,
   previewCSNDispatchQty,
+  releaseCSN,
   updateCSN,
 } from "../procurementApi.js";
 
@@ -49,7 +51,7 @@ async function fetchAllTrackerRows(params) {
   }
   return { data: all, total: all.length };
 }
-const STATUS_OPTIONS = ["ORD", "TRN", "GED", "GRD", "CAN", "KOF"];
+const STATUS_OPTIONS = ["ORD", "TRN", "HLD", "GED", "GRD", "CAN", "KOF"];
 const STATUS_LABELS = {
   ORD: "Ordered",
   TRN: "In Transit",
@@ -57,6 +59,7 @@ const STATUS_LABELS = {
   GRD: "GRN Done",
   CAN: "Cancelled",
   KOF: "Knocked Off",
+  HLD: "On Hold",
 };
 const YES_NO_OPTIONS = [
   { value: true, label: "Yes" },
@@ -204,6 +207,8 @@ function getBadgeTone(value) {
       return "bg-[#E24B4A] text-[#FCEBEB]";
     case "KOF":
       return "bg-[#5F5E5A] text-[#F1EFE8]";
+    case "HLD":
+      return "bg-[#F5C26B] text-[#5C2D00]";
     case "TRN":
       return "bg-[#B5D4F4] text-[#042C53]";
     case "ORD":
@@ -809,6 +814,47 @@ export default function CSNTrackerPage() {
     }
   }
 
+  async function handleHoldTransition(row) {
+    const scopedCompanyId = effectiveCompanyId || row?.company_id || "";
+    if (!row?.id || !scopedCompanyId) return;
+    const status = toText(row.status).toUpperCase();
+    if (status === "HLD") {
+      if (row.hold_root_csn_id && row.hold_root_csn_id !== row.id) {
+        setError("This Sub-CSN is held with its Mother CSN. Release the Mother CSN to release the whole consignment.");
+        return;
+      }
+      const confirmed = await openActionConfirm({
+        eyebrow: "Consignment Hold",
+        title: "Release this CSN?",
+        message: "The latest edited CSN values will be counted in PO22 planning again after the next planning run.",
+        confirmLabel: "Release CSN",
+      });
+      if (!confirmed) return;
+      setSavingRowId(row.id);
+      try {
+        await releaseCSN(row.id, { company_id: scopedCompanyId });
+        await invalidateTracker();
+        setNotice("CSN released. It will be considered in the next PO22 planning run.");
+        resetDraft(null);
+      } catch (transitionError) {
+        setError(transitionError instanceof Error ? transitionError.message : "PROCUREMENT_CSN_RELEASE_FAILED");
+      } finally { setSavingRowId(""); }
+      return;
+    }
+    const reason = window.prompt("Why should this CSN be put on hold? This reason is required for the audit trail.", "");
+    if (reason === null) return;
+    if (!reason.trim()) { setError("A Hold reason is required."); return; }
+    setSavingRowId(row.id);
+    try {
+      await holdCSN(row.id, { company_id: scopedCompanyId, reason: reason.trim() });
+      await invalidateTracker();
+      setNotice("CSN placed on Hold. It remains editable but is excluded from PO22 planning.");
+      resetDraft(null);
+    } catch (transitionError) {
+      setError(transitionError instanceof Error ? transitionError.message : "PROCUREMENT_CSN_HOLD_FAILED");
+    } finally { setSavingRowId(""); }
+  }
+
   async function saveLayout() {
     try {
       setError("");
@@ -1226,6 +1272,15 @@ export default function CSNTrackerPage() {
                 />
               ) : null}
               <IconActionButton glyph="OP" title="Open full detail (Ctrl+O)" onClick={() => openDetail(currentRow)} />
+              {(["ORD", "TRN", "HLD"].includes(toText(currentRow.status).toUpperCase())) ? (
+                <IconActionButton
+                  glyph={toText(currentRow.status).toUpperCase() === "HLD" ? "RL" : "HD"}
+                  title={toText(currentRow.status).toUpperCase() === "HLD" ? "Release CSN from Hold" : "Put CSN on Hold"}
+                  onClick={() => void handleHoldTransition(currentRow)}
+                  disabled={savingRowId === currentRow.id}
+                  tone={toText(currentRow.status).toUpperCase() === "HLD" ? "primary" : "danger"}
+                />
+              ) : null}
               <IconActionButton
                 glyph="SV"
                 title={savingRowId === currentRow.id ? "Saving" : "Save (Ctrl+S)"}

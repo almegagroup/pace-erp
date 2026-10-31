@@ -51,6 +51,16 @@ import {
 } from "./mts_requirement.logic.ts";
 import type { GroupUsageOrder } from "../../_shared/groupUsageOrder.logic.ts";
 
+Deno.test("PO22: a held CSN is excluded without returning as a PO remainder", () => {
+  const warnings: Warning[] = [];
+  const events = partitionPoLineInbound({
+    material_id: "MAT", po_line_id: "line", po_number: "PO1", line_number: 1,
+    open_qty: 100, base_per_po_unit: 1, expected_delivery_date: "2026-11-30",
+    at_gate: [], csns: [], lots: [], held_csn_base: 100,
+  }, "2026-10-31", warnings);
+  if (events.length !== 0) throw new Error(`held CSN must produce no inbound event: ${JSON.stringify(events)}`);
+});
+
 function assert(condition: unknown, message: string): asserts condition {
   if (!condition) throw new Error(message);
 }

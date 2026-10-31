@@ -1084,6 +1084,10 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { POST: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "EDIT" } },
   },
   {
+    pattern: /^\/api\/procurement\/csns\/[^/]+\/(hold|release)$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "EDIT" } },
+  },
+  {
     pattern: /^\/api\/procurement\/mts-requirement\/layouts\/[^/]+$/,
     methods: {
       PATCH: { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },

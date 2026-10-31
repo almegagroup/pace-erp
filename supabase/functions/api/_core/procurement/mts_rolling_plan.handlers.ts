@@ -109,10 +109,13 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     const csnIds = unique(reqData.output.rows.flatMap((r) => r.inbound_events.map((e) => e.csn_id)));
     const materialIds = reqData.output.rows.map((r) => r.material_id);
     const groupIds = unique([...reqData.masters.groupMembers.keys()]);
-    const [poRows, csnRows, historyCsns, groupRows] = await Promise.all([
+    const [poRows, csnRows, heldCsnRows, historyCsns, groupRows] = await Promise.all([
       serviceRoleClient.schema("erp_procurement").from("purchase_order").select("po_number, vendor_id").eq("company_id", companyId).eq("status", "CONFIRMED").limit(10000),
       csnIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(csnIds, (chunk) => serviceRoleClient
         .schema("erp_procurement").from("consignment_note").select("id, vendor_id").in("id", chunk)),
+      serviceRoleClient.schema("erp_procurement").from("consignment_note")
+        .select("csn_number, material_id, vendor_id, dispatch_qty, po_qty, po_uom_code, hold_reason, inactive_from_status, inactive_at, eta_to_plant_calculated")
+        .or(`company_id.eq.${companyId},consignee_company_id.eq.${companyId}`).eq("status", "HLD").order("inactive_at", { ascending: false }).limit(10000),
       materialIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient
         .schema("erp_procurement").from("consignment_note").select("material_id, ata_at_port, eta_at_port, gate_entry_date")
         .eq("company_id", companyId).eq("status", "GRD").not("gate_entry_date", "is", null).in("material_id", chunk)),
@@ -121,12 +124,19 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     ]);
     if (poRows.error) throw new Error("MTS_ROLLING_PO_LOAD_FAILED");
     const pos = (poRows.data ?? []) as JsonRecord[];
-    const vendorIds = unique([...pos.map((p) => text(p.vendor_id)), ...csnRows.map((c) => text(c.vendor_id))]);
+    if (heldCsnRows.error) throw new Error("MTS_ROLLING_HELD_CSN_LOAD_FAILED");
+    const heldCsns = (heldCsnRows.data ?? []) as JsonRecord[];
+    const vendorIds = unique([...pos.map((p) => text(p.vendor_id)), ...csnRows.map((c) => text(c.vendor_id)), ...heldCsns.map((c) => text(c.vendor_id))]);
     const vendorRows = vendorIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(vendorIds, (chunk) => serviceRoleClient
       .schema("erp_master").from("vendor_master").select("id, vendor_name").in("id", chunk));
     const vendorName = new Map(vendorRows.map((v) => [text(v.id), text(v.vendor_name) || "—"]));
     const vendorByPo = new Map(pos.map((p) => [text(p.po_number), vendorName.get(text(p.vendor_id)) ?? null]));
     const vendorByCsn = new Map(csnRows.map((c) => [text(c.id), vendorName.get(text(c.vendor_id)) ?? null]));
+    const held_csns = heldCsns.map((c) => ({
+      csn_number: text(c.csn_number), material: nameOf(text(c.material_id)), supplier: vendorName.get(text(c.vendor_id)) ?? "—",
+      qty: Number(c.dispatch_qty ?? c.po_qty ?? 0), uom: text(c.po_uom_code), previous_status: text(c.inactive_from_status),
+      reason: text(c.hold_reason), held_at: text(c.inactive_at).slice(0, 10) || null, eta: text(c.eta_to_plant_calculated) || null,
+    }));
     const groupLabel = new Map(groupRows.map((g) => [text(g.id), text(g.group_name) || text(g.group_code) || "—"]));
     const groupFullLabel = new Map(groupRows.map((g) => [text(g.id), [text(g.group_code), text(g.group_name)].filter(Boolean).join(" — ") || "—"]));
     const portToPlant = new Map<string, number>();
@@ -569,7 +579,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       calendar: { as_of: calendar.asOf, horizon_end: calendar.horizonEnd, months: calendar.months },
       demand_label: plan.demand_version.label,
       bulk_rm_excluded: bulkRm.size,
-      summary, blocks, requirement, buys, store, arrivals, explain,
+      summary, blocks, requirement, buys, store, arrivals, explain, held_csns,
       schedule_check: { date_rows: dateRows, level_rows: levelRows },
       // Owner 2026-10-28: R003 -> R001 / R002 and R001 <-> R002, how much and by when.
       // Owner 2026-10-28: Store plan for the whole horizon, month by month (group items; only ACTUAL stock may be issued).

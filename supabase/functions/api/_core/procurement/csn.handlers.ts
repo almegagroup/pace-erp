@@ -32,6 +32,7 @@ const CSN_STATUS = {
   GRN_DONE: "GRD",
   CANCELLED: "CAN",
   KNOCKED_OFF: "KOF",
+  ON_HOLD: "HLD",
 } as const;
 // Locked 2026-08-13 (business owner override): GATE_ENTRY_DONE/GRN_DONE used to hard-block
 // every edit here (400 PROCUREMENT_CSN_READ_ONLY) -- that was too strict. GE/Stores can make
@@ -107,6 +108,8 @@ const SUB_CSN_OWN_FIELDS = new Set([
   "inactive_from_status",
   "inactive_at",
   "inactive_by",
+  "hold_reason",
+  "hold_root_csn_id",
   "gate_entry_id",
   "gate_entry_date",
   "grn_id",
@@ -220,7 +223,7 @@ const MANUAL_EDITABLE_FIELDS = [
   "last_mile_transporter_id",
   "last_mile_transporter_freetext",
 ];
-const HISTORY_TRACKED_FIELDS = new Set(MANUAL_EDITABLE_FIELDS);
+const HISTORY_TRACKED_FIELDS = new Set([...MANUAL_EDITABLE_FIELDS, "status", "hold_reason", "inactive_from_status"]);
 // Whitelist for the tracker list's date-field filter (AC01-style single
 // date-field picker) -- only real DATE/TIMESTAMPTZ columns on
 // consignment_note, never an arbitrary caller-supplied column name.
@@ -1711,6 +1714,43 @@ export async function updateCSNHandler(req: Request, ctx: ProcurementHandlerCont
   }
 }
 
+/** Temporary operational exclusion. HLD remains editable, but is not planning supply. */
+export async function transitionCSNHoldHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const id = getIdFromPath(req);
+    const body = await parseBody(req);
+    const action = toUpperTrimmedString(body.action);
+    const companyId = await getCompanyScopedCompanyId(ctx, toTrimmedString(body.company_id));
+    const csn = await getCsnById(id, companyId);
+    if (!csn) return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_NOT_FOUND", 404, "CSN not found");
+
+    // A Mother action changes its active children too. Do not let a user who
+    // can only see one company alter another company's share silently.
+    const accessibleCompanies = new Set(await getAccessibleCompanyIds(ctx));
+    const { data: affected, error: affectedError } = await serviceRoleClient
+      .schema("erp_procurement").from("consignment_note")
+      .select("id, company_id, consignee_company_id")
+      .or(`id.eq.${id},mother_csn_id.eq.${id}`);
+    if (affectedError) throw new Error("PROCUREMENT_CSN_HOLD_SCOPE_LOOKUP_FAILED");
+    if (((affected ?? []) as CsnRow[]).some((row) => !accessibleCompanies.has(toTrimmedString(row.company_id)) && !accessibleCompanies.has(toTrimmedString(row.consignee_company_id)))) {
+      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to every CSN affected by this action.");
+    }
+
+    const rpcAction = action === "HOLD" ? "HOLD" : action === "RELEASE" ? "RELEASE" : "";
+    if (!rpcAction) return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_HOLD_ACTION_INVALID", 400, "Action must be HOLD or RELEASE");
+    const { data, error } = await serviceRoleClient.schema("erp_procurement")
+      .rpc("transition_csn_hold", { p_csn_id: id, p_action: rpcAction, p_reason: toTrimmedString(body.reason), p_actor: ctx.auth_user_id });
+    const updated = Array.isArray(data) ? data[0] : data;
+    if (error || !updated) throw new Error(error?.message || "PROCUREMENT_CSN_HOLD_TRANSITION_FAILED");
+    await writeCsnFieldHistory(id, csn, updated as CsnRow, ctx.auth_user_id, ["status", "hold_reason", "inactive_from_status"]);
+    return okResponse({ data: await enrichCsnUserDisplays(updated as CsnRow) }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_CSN_HOLD_TRANSITION_FAILED";
+    const status = code.includes("NOT_FOUND") ? 404 : code.includes("SCOPE") ? 403 : 400;
+    return procurementErrorResponse(req, ctx, code, status, "CSN Hold transition failed");
+  }
+}
+
 export async function createSubCSNHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
   try {
     const id = getIdFromPath(req);
@@ -1956,7 +1996,7 @@ export async function getLCAlertCountHandler(req: Request, ctx: ProcurementHandl
       .select("id", { count: "exact", head: true })
       .eq("lc_required", true)
       .is("lc_opened_date", null);
-    query = query.lte("eta_at_port", threshold).not("status", "in", '("GRD","CAN","KOF")');
+    query = query.lte("eta_at_port", threshold).not("status", "in", '("GRD","CAN","KOF","HLD")');
     const companyScopeFilter = buildCompanyScopeOrFilter(companyIds);
     if (companyScopeFilter) {
       query = query.or(companyScopeFilter);
@@ -1984,7 +2024,7 @@ export async function getLCAlertListHandler(req: Request, ctx: ProcurementHandle
       .is("lc_opened_date", null);
     query = query
       .lte("eta_at_port", threshold)
-      .not("status", "in", '("GRD","CAN","KOF")')
+      .not("status", "in", '("GRD","CAN","KOF","HLD")')
       .order("eta_at_port", { ascending: true });
     const companyScopeFilter = buildCompanyScopeOrFilter(companyIds);
     if (companyScopeFilter) {
@@ -2011,7 +2051,7 @@ export async function getVesselBookingAlertCountHandler(req: Request, ctx: Procu
       .select("*")
       .eq("csn_type", "IMPORT")
       .is("vessel_booking_confirmed_date", null)
-      .not("status", "in", '("GED","GRD","CAN","KOF")');
+      .not("status", "in", '("GED","GRD","CAN","KOF","HLD")');
     const companyScopeFilter = buildCompanyScopeOrFilter(companyIds);
     if (companyScopeFilter) {
       query = query.or(companyScopeFilter);
@@ -2045,7 +2085,7 @@ export async function getVesselBookingAlertListHandler(req: Request, ctx: Procur
       .select("*")
       .eq("csn_type", "IMPORT")
       .is("vessel_booking_confirmed_date", null)
-      .not("status", "in", '("GED","GRD","CAN","KOF")');
+      .not("status", "in", '("GED","GRD","CAN","KOF","HLD")');
     const companyScopeFilter = buildCompanyScopeOrFilter(companyIds);
     if (companyScopeFilter) {
       query = query.or(companyScopeFilter);
@@ -2083,7 +2123,7 @@ export async function getAllAlertCountsHandler(req: Request, ctx: ProcurementHan
           .select("id", { count: "exact", head: true })
           .eq("lc_required", true)
           .is("lc_opened_date", null);
-        query = query.lte("eta_at_port", threshold).not("status", "in", '("GRD","CAN","KOF")');
+        query = query.lte("eta_at_port", threshold).not("status", "in", '("GRD","CAN","KOF","HLD")');
         const companyScopeFilter = buildCompanyScopeOrFilter(companyIds);
         if (companyScopeFilter) {
           query = query.or(companyScopeFilter);
@@ -2100,7 +2140,7 @@ export async function getAllAlertCountsHandler(req: Request, ctx: ProcurementHan
           .select("id, po_id")
           .eq("csn_type", "IMPORT")
           .is("vessel_booking_confirmed_date", null)
-          .not("status", "in", '("GED","GRD","CAN","KOF")');
+          .not("status", "in", '("GED","GRD","CAN","KOF","HLD")');
         const companyScopeFilter = buildCompanyScopeOrFilter(companyIds);
         if (companyScopeFilter) {
           query = query.or(companyScopeFilter);
