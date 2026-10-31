@@ -29,6 +29,7 @@ import { deriveSalesInvoiceGstType, getSnapshotForIssue } from "./sales_order.ha
 import { syncDdDeliveryOrderReservation } from "./dd_reservation.ts";
 import {
   assertPhase3PostingDateMatch,
+  hasDependentDepotLatePgiException,
   isHistoricalBackfillInvoiceDate,
   resolveBackfillPhase,
   resolvePhase1PostingDate,
@@ -1943,6 +1944,7 @@ type ProcPartyDetail = { name: string | null; address: string | null; state: str
 type ProcInvoiceGroup = {
   group_key: string;
   source_type: "SALES_ORDER" | "STO";
+  dispatch_type: string | null;
   so_id: string | null;
   sto_id: string | null;
   document_number: string | null;
@@ -2060,7 +2062,7 @@ export async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonReco
   }
 
   const [soRows, stoRows, foRows] = await Promise.all([
-    soIds.size ? fetchInChunks<JsonRecord>([...soIds], (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, so_number, so_date, customer_po_number, customer_po_date, customer_id, bill_to_name, bill_to_address, bill_to_state, bill_to_gst_number, ship_to_name, ship_to_address, ship_to_state, ship_to_gst_number, bill_to_parent_company_id, bill_to_vdc_id, bill_to_depot_code_id, freight_term, payment_term_id, ibn_required").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
+    soIds.size ? fetchInChunks<JsonRecord>([...soIds], (chunk) => serviceRoleClient.schema("erp_procurement").from("sales_order").select("id, so_number, so_date, dispatch_type, customer_po_number, customer_po_date, customer_id, bill_to_name, bill_to_address, bill_to_state, bill_to_gst_number, ship_to_name, ship_to_address, ship_to_state, ship_to_gst_number, bill_to_parent_company_id, bill_to_vdc_id, bill_to_depot_code_id, freight_term, payment_term_id, ibn_required").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
     stoIds.size ? fetchInChunks<JsonRecord>([...stoIds], (chunk) => serviceRoleClient.schema("erp_procurement").from("stock_transfer_order").select("id, sto_number, sto_date, receiving_company_id").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
     foIds.size ? fetchInChunks<JsonRecord>([...foIds], (chunk) => serviceRoleClient.schema("erp_production").from("plan_feed").select("id, fo_number, order_date").in("id", chunk)) : Promise.resolve([] as JsonRecord[]),
   ]);
@@ -2296,6 +2298,7 @@ export async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonReco
     groups.push({
       group_key: groupKey,
       source_type: meta.source_type,
+      dispatch_type: meta.source_type === "SALES_ORDER" ? (toUpperTrimmedString(soMap.get(meta.so_id)?.dispatch_type) || null) : null,
       so_id: meta.so_id || null,
       sto_id: meta.sto_id || null,
       document_number: documentNumber,
@@ -3346,7 +3349,11 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
         resolvedPostingDate = resolvePhase1PostingDate(classification, tallyInvoiceDate);
       } else if (backfillPhase === "PHASE_1") {
         resolvedPostingDate = tallyInvoiceDate;
-      } else if (backfillPhase === "PHASE_3") {
+      // Business-authorised, time-boxed recovery: Dependent Depot PGI may
+      // retain its historical Tally date through 15 Nov 2026.  It still
+      // posts stock today; from 16 Nov this exact Phase-3 rule resumes
+      // automatically for Depot too.
+      } else if (backfillPhase === "PHASE_3" && !hasDependentDepotLatePgiException(group.dispatch_type, today)) {
         try {
           assertPhase3PostingDateMatch(tallyInvoiceDate, today);
         } catch {
