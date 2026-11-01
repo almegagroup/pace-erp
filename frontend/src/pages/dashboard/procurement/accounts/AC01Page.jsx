@@ -16,6 +16,7 @@ import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
+import ModalBase from "../../../../components/layer/ModalBase.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
@@ -543,6 +544,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   const [invoiceVerificationSnapshot, setInvoiceVerificationSnapshot] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [gstCorrectionReasonOpen, setGstCorrectionReasonOpen] = useState(false);
+  const gstCorrectionReasonRef = useRef(null);
 
   // Last mile transporter -- search-and-select against Transporter Master,
   // same mechanism GRN's own Transporter tab uses (GRNPostFlow.jsx), plus an
@@ -749,6 +752,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
     setInvoiceVerified(false);
     setInvoiceVerificationSnapshot("");
     setError("");
+    setGstCorrectionReasonOpen(false);
     setLastMileTransporterName("");
     setLastMileTransporterSearch("");
     setLmtCreateOpen(false);
@@ -767,7 +771,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
     const gstPctChanged = enteredGstPct != null
       && (storedGstPct == null || Math.abs(enteredGstPct - storedGstPct) > 0.000001);
     if (gstPctChanged && !draft.gst_correction_reason?.trim()) {
-      setError("Enter the GST correction reason before saving.");
+      setError("");
+      setGstCorrectionReasonOpen(true);
       return;
     }
     if (!invoiceVerified) {
@@ -1561,6 +1566,49 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
           </div>
         )}
       </DrawerBase>
+      <ModalBase
+        visible={gstCorrectionReasonOpen}
+        eyebrow="AC01 · GST Correction"
+        title="Why is the GST % being changed?"
+        message="This reason is retained in the Accounts audit trail with the old and corrected GST percentage."
+        onEscape={() => setGstCorrectionReasonOpen(false)}
+        initialFocusRef={gstCorrectionReasonRef}
+        actions={
+          <>
+            <button
+              type="button"
+              onClick={() => setGstCorrectionReasonOpen(false)}
+              disabled={saving}
+              className="border border-slate-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={!draft?.gst_correction_reason?.trim() || saving}
+              onClick={() => {
+                setGstCorrectionReasonOpen(false);
+                void handleSave();
+              }}
+              className="border border-sky-700 bg-sky-700 px-4 py-1.5 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Continue to Save
+            </button>
+          </>
+        }
+      >
+        <label className="grid gap-1 text-sm font-medium text-slate-700">
+          GST correction reason <span className="text-rose-700">*</span>
+          <textarea
+            ref={gstCorrectionReasonRef}
+            value={draft?.gst_correction_reason ?? ""}
+            onChange={(event) => setDraft((current) => ({ ...current, gst_correction_reason: event.target.value }))}
+            rows={3}
+            placeholder="Example: GRN entry was 27%; supplier invoice confirms 18%"
+            className="min-h-[78px] border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-600"
+          />
+        </label>
+      </ModalBase>
     </>
   );
 }
