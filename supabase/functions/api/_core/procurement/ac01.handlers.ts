@@ -1353,7 +1353,7 @@ export async function getAC01GRNHandler(
     // §3.9.5 "GRN Split" — if this GRN was the original that got split, show
     // which new GRN(s) it became. Same reverse-lookup as the list endpoint.
     // And the reverse for an invoice GRN: which split source (physical receipt) it came from.
-    const [{ data: splitIntoRows }, { data: splitSourceRow }] = await Promise.all([
+    const [{ data: splitIntoRows }, { data: splitSourceRow }, { data: gstCorrectionRows, error: gstCorrectionError }] = await Promise.all([
       serviceRoleClient
         .schema("erp_procurement").from("goods_receipt")
         .select("grn_number, invoice_number, invoice_date, received_qty").eq("split_source_grn_id", grnId)
@@ -1362,9 +1362,20 @@ export async function getAC01GRNHandler(
         ? serviceRoleClient.schema("erp_procurement").from("goods_receipt")
           .select("grn_number").eq("id", String(grn.split_source_grn_id)).maybeSingle()
         : Promise.resolve({ data: null }),
+      serviceRoleClient
+        .schema("erp_procurement").from("ac01_gst_correction_audit")
+        .select("from_gst_pct, to_gst_pct, reason, corrected_by, corrected_at")
+        .eq("grn_id", grnId).order("corrected_at", { ascending: false }).limit(1),
     ]);
+    if (gstCorrectionError) {
+      return ac01ErrorResponse(req, ctx, "AC01_GST_AUDIT_FETCH_FAILED", 500, "Unable to fetch GST correction audit.");
+    }
     const splitIntoGrnNumbers = ((splitIntoRows ?? []) as JsonRecord[])
       .map((row) => toTrimmedString(row.grn_number)).filter(Boolean);
+    const latestGstCorrection = ((gstCorrectionRows ?? []) as JsonRecord[])[0] ?? null;
+    const gstCorrectorDisplayNames = latestGstCorrection?.corrected_by
+      ? await resolveUserDisplayNames([toTrimmedString(latestGstCorrection.corrected_by)])
+      : new Map<string, string>();
 
     return okResponse({
       ...grn,
@@ -1400,6 +1411,10 @@ export async function getAC01GRNHandler(
       material_sgst_amount: detailMaterialTax.sgstAmount,
       material_igst_amount: detailMaterialTax.igstAmount,
       invoice_total_value: Number((detailTaxableValue + detailMaterialTax.gstAmount).toFixed(4)),
+      latest_gst_correction: latestGstCorrection ? {
+        ...latestGstCorrection,
+        corrected_by_display: gstCorrectorDisplayNames.get(toTrimmedString(latestGstCorrection.corrected_by)) || null,
+      } : null,
       cost_per_unit: Number(computeLandedCostPerUnit(grn, landedCostTotalForView).toFixed(4)),
       vendor_suggested_payable: suggestedPayables.vendor,
       transporter_suggested_payable: suggestedPayables.transporter,
@@ -1429,7 +1444,7 @@ export async function saveAC01GRNCostHandler(
     const body = await parseBody(req);
 
     const { data: grn, error: grnError } = await serviceRoleClient
-      .schema("erp_procurement").from("goods_receipt").select("id, company_id, status").eq("id", grnId).single();
+      .schema("erp_procurement").from("goods_receipt").select("id, company_id, status, gst_pct").eq("id", grnId).single();
     if (grnError || !grn) {
       return ac01ErrorResponse(req, ctx, "AC01_GRN_NOT_FOUND", 404, "GRN not found.");
     }
@@ -1448,6 +1463,19 @@ export async function saveAC01GRNCostHandler(
 
     const costLines = Array.isArray(body.cost_lines) ? body.cost_lines : [];
     const deductionLines = Array.isArray(body.deduction_lines) ? body.deduction_lines : [];
+    const suppliedGstPct = body.gst_pct != null ? Number(body.gst_pct) : null;
+    if (suppliedGstPct != null && (!Number.isFinite(suppliedGstPct) || suppliedGstPct < 0 || suppliedGstPct > 100)) {
+      return ac01ErrorResponse(req, ctx, "AC01_GST_PCT_INVALID", 422, "GST % must be between 0 and 100.");
+    }
+    // GST entered at GRN can be corrected by Accounts, but never silently.
+    // The RPC repeats this guard inside its transaction and records every
+    // actual change in the immutable AC01 GST correction audit table.
+    const currentGstPct = grn.gst_pct != null ? Number(grn.gst_pct) : null;
+    const gstPctChanged = suppliedGstPct != null
+      && (currentGstPct == null || Math.abs(suppliedGstPct - currentGstPct) > 0.000001);
+    if (gstPctChanged && !toTrimmedString(body.gst_correction_reason)) {
+      return ac01ErrorResponse(req, ctx, "AC01_GST_CORRECTION_REASON_REQUIRED", 422, "Enter the reason for changing GST %.");
+    }
 
     // Single atomic entry point — CLAUDE.md §8D. Never split this into
     // separate goods_receipt/landed_cost/*_line writes from TypeScript.
@@ -1460,7 +1488,8 @@ export async function saveAC01GRNCostHandler(
         p_last_mile_transporter_id: toTrimmedString(body.last_mile_transporter_id) || null,
         p_invoice_number: toTrimmedString(body.invoice_number) || null,
         p_invoice_date: toTrimmedString(body.invoice_date) || null,
-        p_gst_pct: body.gst_pct != null ? Number(body.gst_pct) : null,
+        p_gst_pct: suppliedGstPct,
+        p_gst_correction_reason: toTrimmedString(body.gst_correction_reason) || null,
         p_cost_lines: costLines,
         p_deduction_lines: deductionLines,
         p_reason: toTrimmedString(body.reason) || "AC01 landed cost save",
@@ -1482,7 +1511,9 @@ export async function saveAC01GRNCostHandler(
       });
 
     if (error) {
-      return ac01ErrorResponse(req, ctx, "AC01_SAVE_FAILED", 500, error.message ?? "Unable to save AC01 GRN cost.");
+      const message = error.message ?? "Unable to save AC01 GRN cost.";
+      const isGstValidationError = message.includes("AC01_GST_");
+      return ac01ErrorResponse(req, ctx, isGstValidationError ? message : "AC01_SAVE_FAILED", isGstValidationError ? 422 : 500, message);
     }
 
     // A commercial split has many invoice-only GRNs but exactly one physical
