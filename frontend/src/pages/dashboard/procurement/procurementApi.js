@@ -698,6 +698,14 @@ export function listFgStoMaterials(params) {
   return fetchProcurement("GET", "/api/procurement/fg-stos/materials", undefined, params);
 }
 
+export function listFgStoReceivingCompanies(params) {
+  return fetchProcurement("GET", "/api/procurement/fg-stos/receiving-companies", undefined, params);
+}
+
+export function getFgStoLastPaymentTerm(params) {
+  return fetchProcurement("GET", "/api/procurement/fg-stos/last-payment-term", undefined, params);
+}
+
 export function getFgStoLaneTransit(params) {
   return fetchProcurement("GET", "/api/procurement/fg-stos/lane-transit", undefined, params);
 }
