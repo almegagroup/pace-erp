@@ -238,7 +238,23 @@ export async function getSettlementByTallyInvoiceHandler(
       .select("id, grn_number, grn_date, received_qty, material_id, invoice_number, invoice_date")
       .eq("settlement_invoice_id", invoice.id);
 
-    return okResponse({ invoice, covered_grns: coveredGrns ?? [] }, ctx.request_id, req);
+    // The Settled tab shows the same full column set as PO12 Tab 1, so each covered GRN is returned in
+    // the Tab 1 row shape. fetchCrcpDiscrepancyRows only looks at a bounded recent window of GRNs, so a
+    // covered GRN it did not return keeps a basic row built from the GRN itself (never silently dropped).
+    const settledRows = await fetchCrcpDiscrepancyRows(String(invoice.bill_to_company_id), { settlementStatus: "SETTLED" });
+    const settledRowByGrnId = new Map(settledRows.map((row) => [String(row.grn_id), row]));
+    const coveredRows = ((coveredGrns ?? []) as JsonRecord[]).map((grn) => settledRowByGrnId.get(String(grn.id)) ?? {
+      grn_id: grn.id,
+      grn_number: grn.grn_number,
+      grn_date: grn.grn_date,
+      grn_qty: grn.received_qty,
+      invoice_number: grn.invoice_number,
+      invoice_date: grn.invoice_date,
+      settlement_status: "SETTLED",
+      settlement_invoice_id: invoice.id,
+    });
+
+    return okResponse({ invoice, covered_grns: coveredRows }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "SETTLEMENT_LOOKUP_FAILED";
     return settlementErrorResponse(req, ctx, code, 500, code);
