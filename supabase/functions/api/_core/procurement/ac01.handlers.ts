@@ -826,11 +826,12 @@ export async function listAC01GRNsHandler(
       crcpMirrorOwnerByGrnId = await getCrcpMirrorOwnerByGrnId(companyId);
     }
 
+    // The text search (GRN / invoice / LR number, vendor name, material name or external code) now runs
+    // inside the database function as well, so a term that matches many vendors or materials cannot lose
+    // rows. companyId empty = every company (SA/GA view), the function treats a NULL company that way.
     // deno-lint-ignore no-explicit-any
-    let query: any = (companyId
-      // deno-lint-ignore no-explicit-any
-      ? (serviceRoleClient.schema("erp_procurement") as any).rpc("ac01_visible_goods_receipts", { p_company_id: companyId }, { count: "exact" })
-      : serviceRoleClient.schema("erp_procurement").from("goods_receipt").select("*", { count: "exact" }))
+    let query: any = (serviceRoleClient.schema("erp_procurement") as any)
+      .rpc("ac01_visible_goods_receipts", { p_company_id: companyId || null, p_search: search || null }, { count: "exact" })
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
@@ -838,35 +839,6 @@ export async function listAC01GRNsHandler(
     if (rateStatus === "CONFIRMED") query = query.eq("rate_confirmed", true);
     if (dateFrom) query = query.gte(dateColumn, dateFrom);
     if (dateTo) query = query.lte(dateColumn, dateTo);
-    if (search) {
-      // goods_receipt has no denormalized supplier/item name (only vendor_id/
-      // material_id FKs) -- the placeholder ("GRN, invoice, item, supplier...")
-      // promised those fields but the filter below never actually matched
-      // them, live 2026-08-25 (business owner: "Time techno" typed against a
-      // visible TIME TECHNOPLAST LIMITED row returned zero results). Resolve
-      // matching vendor/material ids by name first, then OR them into the
-      // same filter as the existing grn/invoice/lr text match.
-      const [vendorMatchResp, materialMatchResp] = await Promise.all([
-        serviceRoleClient.schema("erp_master").from("vendor_master")
-          .select("id").ilike("vendor_name", `%${search}%`).limit(50),
-        serviceRoleClient.schema("erp_master").from("material_master")
-          .select("id").or(`material_name.ilike.%${search}%,external_code.ilike.%${search}%`).limit(50),
-      ]);
-      if (vendorMatchResp.error || materialMatchResp.error) {
-        return ac01ErrorResponse(req, ctx, "AC01_LIST_FAILED", 500, "Unable to list AC01 GRN rows.");
-      }
-      const vendorIdMatches = ((vendorMatchResp.data ?? []) as JsonRecord[]).map((row) => String(row.id));
-      const materialIdMatches = ((materialMatchResp.data ?? []) as JsonRecord[]).map((row) => String(row.id));
-
-      const orClauses = [
-        `grn_number.ilike.%${search}%`,
-        `invoice_number.ilike.%${search}%`,
-        `lr_number.ilike.%${search}%`,
-      ];
-      if (vendorIdMatches.length > 0) orClauses.push(`vendor_id.in.(${vendorIdMatches.join(",")})`);
-      if (materialIdMatches.length > 0) orClauses.push(`material_id.in.(${materialIdMatches.join(",")})`);
-      query = query.or(orClauses.join(","));
-    }
 
     const { data, error, count } = await query;
     if (error) {
