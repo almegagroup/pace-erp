@@ -270,26 +270,29 @@ export async function fetchCrcpDiscrepancyRows(
   companyId: string,
   opts: { settlementStatus?: "PENDING" | "SETTLED" } = {},
 ): Promise<JsonRecord[]> {
-  // Known interim scaling simplification (brand-new, low-volume feature):
-  // the Bill-To/Ship-To/Actual-Receiver visibility rule genuinely needs a
-  // join goods_receipt has no FK-expressible path for (po_id -> purchase_
-  // order.company_id, sto_id -> stock_transfer_order.receiving_company_id),
-  // so this pulls a bounded recent window and joins/filters server-side in
-  // TS rather than at the DB level. Revisit with a dedicated view/RPC if
-  // this ever needs to page past a few thousand GRNs.
-  const { data: grnRows, error: grnError } = await serviceRoleClient
-    .schema("erp_procurement")
-    .from("goods_receipt")
-    .select("*")
-    .or("po_id.not.is.null,sto_id.not.is.null")
+  // The candidate GRNs come from the database (crcp_candidate_goods_receipts: Bill-To differs from the
+  // receiving company, and the viewer is the Bill-To, Ship-To or actual receiver) and are read in full:
+  // PostgREST returns at most 1,000 rows per request, so page through the whole set. The previous
+  // "latest 2000 GRNs" window really delivered 1,000 and silently dropped older discrepancy rows.
+  const CANDIDATE_PAGE_SIZE = 1000;
+  // The real supabase-js client returns a filterable builder from rpc() on a SETOF function; the
+  // codebase's DbClient type stub does not declare that (nor rpc's count option), hence the cast.
+  // deno-lint-ignore no-explicit-any
+  const candidatePage = (from: number) => (serviceRoleClient.schema("erp_procurement") as any)
+    .rpc("crcp_candidate_goods_receipts", { p_company_id: companyId }, { count: "exact" })
     .order("created_at", { ascending: false })
-    .limit(2000);
-  if (grnError) throw new Error("CRCP_DISCREPANCY_LIST_FAILED");
-
-  const allGrns = (grnRows ?? []) as JsonRecord[];
-  // Re-filter cleanly in TS so a Postgrest quirk in the .or() clause above
-  // can't silently widen the set.
-  const candidateGrns = allGrns.filter((row) => row.po_id || row.sto_id);
+    .range(from, from + CANDIDATE_PAGE_SIZE - 1);
+  const firstPage = await candidatePage(0);
+  if (firstPage.error) throw new Error("CRCP_DISCREPANCY_LIST_FAILED");
+  const candidateGrns = [...((firstPage.data ?? []) as JsonRecord[])];
+  const totalCandidates = Number(firstPage.count ?? candidateGrns.length);
+  const laterOffsets: number[] = [];
+  for (let from = CANDIDATE_PAGE_SIZE; from < totalCandidates; from += CANDIDATE_PAGE_SIZE) laterOffsets.push(from);
+  const laterPages = await Promise.all(laterOffsets.map((from) => candidatePage(from)));
+  for (const page of laterPages) {
+    if (page.error) throw new Error("CRCP_DISCREPANCY_LIST_FAILED");
+    candidateGrns.push(...((page.data ?? []) as JsonRecord[]));
+  }
 
   const poIds = collectIds(candidateGrns, "po_id");
   const stoIds = collectIds(candidateGrns, "sto_id");
