@@ -1066,8 +1066,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
               // CRCP mirrored view (locked 2026-10-04) -- this company is the
               // ITC owner, not the Actual Receiver who created this GRN.
               <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">
-                You are viewing this GRN as the ITC-owning company — it belongs
-                to another company and is read-only here.
+                You are viewing this GRN as the ITC-owning company and do not have
+                AC01 edit access for it, so it is read-only here.
               </div>
             ) : null}
             <DrawerSection eyebrow="Identification" title="Company, supplier and invoice reference">

@@ -554,6 +554,17 @@ Local files এ আমরা 000001, 000002 দিয়েছিলাম → `
 
 ## 6. Next Actions
 
+> ### 🟢 2026-11-02 — AC01 owner rule (business owner): ITC owner = company that issued the PO
+>
+> A GRN received against a PO belongs, for ITC, to the PO's company (CMP011 PO received at CMP005 -> ITC CMP011; unloading/stock stays CMP005).
+> **Both** the unloading company and the ITC owner can edit that GRN's AC01 row (each needs its own AC01 WRITE grant). This reverses the
+> 2026-10-04 lock "AC01 write is strictly GRN-company-scoped": `saveAC01GRNCostHandler` now accepts either company; the list/drawer
+> `is_editable_for_viewer` follows. ITC To in the list = CRCP mirror owner, else PO company, else landed-cost owner, else GRN company
+> (`resolveItcOwnerCompanyIdForGrn` in `ac01.handlers.ts`). A company that is neither unloader nor ITC owner still sees nothing.
+> Open: AC01 save revalues the unloading company's stock (confirmed rate cascade), so an ITC-owner save changes that company's valuation.
+> Prod data fix done by hand the same day: GRNs 2000000673/677/678/701/806 moved to CMP011's JI/PO40 (lot 0002), Ship-To CMP011;
+> 700/701 qty 23/9 MT with stock ledger, QA and PO line corrected (ledger UPDATE rule dropped and re-created inside one transaction).
+>
 > ### 🟢 2026-10-30 — FG STO (MTS) + STO lane lead time: BUILT, LIVE CLICK-THROUGH PENDING
 >
 > **Flow:** SO01 "Create FG STO" (`PROC_SO_CREATE`, sender creates, MTS FG SKUs only via `erp_planning.mts_company_skus`,
