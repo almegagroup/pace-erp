@@ -165,7 +165,7 @@ deferred-PGI branch, never by editing the atomic paths DC/RM/PM/INT already use.
 - [x] **T12.** Backend: bulk-resolve + validate endpoint for the Bulk DO Upload
   template (FO/SO type-mismatch check, Storage Location dropdown, Transporter
   resolve, stock-check/reservation per §6 point 18) — driving **existing**
-  `createDeliveryOrderUnifiedHandler` per resolved FO/SO group, never new DO-write
+  `createDeliveryOrderUnifiedHandler` per resolved shipment-header group, never new DO-write
   logic.
   **2026-10-09 ✅** New `supabase/functions/api/_core/procurement/do_bulk.handlers.ts`
   (`previewDoBulkUploadHandler`/`saveDoBulkUploadHandler`). FO/SO type
@@ -198,7 +198,7 @@ deferred-PGI branch, never by editing the atomic paths DC/RM/PM/INT already use.
   **Save** drives `createDeliveryOrderUnifiedHandler` via the exact
   synthetic-`Request` pattern `gate_entry.handlers.ts`'s own "replace
   lines" flow already uses (same codebase convention, not a new one) —
-  one call per FO/SO group, passing `transporter_id`/`lr_number`/
+  one call per shipment-header group, passing `transporter_id`/`lr_number`/
   `lr_date`/`vehicle_number` straight through (all already-existing body
   fields on that handler) and `so_map_allocation_id`/`quantity`/
   `storage_location_id` per line. Since that handler's own RPC payload
@@ -231,7 +231,7 @@ deferred-PGI branch, never by editing the atomic paths DC/RM/PM/INT already use.
   Location code input + "Re-check Rows" button (re-runs the whole batch
   preview after a manual correction — simpler than a per-cell live
   lookup, consistent with this drawer's batch-oriented design), a
-  per-FO/SO-group readiness summary (one Delivery Order per group,
+  per-shipment-header readiness summary (one Delivery Order per group,
   listing exactly what's still missing), and "Create N Delivery
   Order(s)" calling `saveDoBulkUpload` once with every ready group,
   showing a per-group CREATED/ERROR result list (never an all-or-nothing
