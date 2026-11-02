@@ -15,6 +15,8 @@ import TransactionCompanySelector from "../../../../components/inputs/Transactio
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
+import { useErpVisibleColumns } from "../../../../hooks/useErpVisibleColumns.js";
+import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
 import { usePaymentTermOptionsQuery } from "../../../../hooks/queries/useProcurementMasterQueries.js";
 import { useCostCentersQuery } from "../../../../hooks/queries/useOmMasterQueries.js";
 import {
@@ -23,6 +25,10 @@ import {
   getSettlementByTallyInvoice,
   reverseSettlementInvoice,
 } from "../procurementApi.js";
+// The pending list uses PO12 Tab 1's own full column set (same file the Discrepancy List and Bulk Component Map use).
+import { COLUMNS as PO12_COLUMNS } from "./crcpDiscrepancyColumns.jsx";
+
+const PENDING_COLUMN_KEYS = PO12_COLUMNS.map((column) => column.key);
 
 // Same codes as POCreatePage.jsx/SOCreatePage.jsx -- no new options invented.
 const FREIGHT_TERM_OPTIONS = [
@@ -86,6 +92,14 @@ export default function SettlementInvoicePage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
+
+  // Column picker for the pending GRN list (all PO12 Tab 1 columns shown by default; the choice is remembered per browser).
+  const [showColumns, setShowColumns] = useState(false);
+  const { visibleColumns: pickedPo12Columns, visibleColumnKeys, toggleColumn, resetColumns } = useErpVisibleColumns({
+    storageKey: "po12-settlement-pending-columns",
+    columnDefs: PO12_COLUMNS,
+    defaultColumnKeys: PENDING_COLUMN_KEYS,
+  });
 
   const [lookupNumber, setLookupNumber] = useState("");
   const [lookupDate, setLookupDate] = useState("");
@@ -218,13 +232,7 @@ export default function SettlementInvoicePage() {
         />
       ),
     },
-    { key: "bill_to_company_name", label: "Bill-To", width: "150px" },
-    { key: "actual_receiver_company_name", label: "Actual Receiver", width: "150px" },
-    { key: "grn_number", label: "GRN No.", width: "110px" },
-    { key: "grn_date", label: "GRN Date", width: "100px", filterType: "date" },
-    { key: "material_name", label: "Material", width: "160px" },
-    { key: "grn_qty", label: "Qty", width: "90px", align: "right", render: (row) => formatQty(row.grn_qty) },
-    { key: "base_uom_code", label: "UOM", width: "60px" },
+    ...pickedPo12Columns,
   ];
 
   const settledColumns = [
@@ -243,6 +251,9 @@ export default function SettlementInvoicePage() {
         ...(error ? [{ key: "settlement-error", tone: "error", message: error }] : []),
         ...(notice ? [{ key: "settlement-notice", tone: "success", message: notice }] : []),
       ]}
+      actions={activeTab === "pending" ? [
+        { key: "columns", label: "Columns", onClick: () => setShowColumns(true) },
+      ] : []}
       filterSection={{
         eyebrow: "",
         title: "",
@@ -383,6 +394,14 @@ export default function SettlementInvoicePage() {
               rowKey={(row) => row.grn_id}
               columnFilter
               emptyMessage={pendingQuery.isLoading ? "Loading..." : "No pending CRCP discrepancy rows for this company."}
+            />
+            <ErpColumnVisibilityDrawer
+              visible={showColumns}
+              columns={PO12_COLUMNS}
+              visibleColumnKeys={visibleColumnKeys}
+              onToggleColumn={toggleColumn}
+              onResetColumns={resetColumns}
+              onClose={() => setShowColumns(false)}
             />
           </div>
         ) : (
