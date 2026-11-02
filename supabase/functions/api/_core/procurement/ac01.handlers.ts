@@ -807,6 +807,9 @@ export async function listAC01GRNsHandler(
     const dateField = toTrimmedString(url.searchParams.get("date_field")) || "invoice_date";
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
+    // A SPLIT source GRN (the physical receipt of an invoice split) repeats the qty and landed cost of its
+    // invoice GRNs and is not payable, so the list leaves it out unless include_split_sources=1.
+    const includeSplitSources = ["1", "true"].includes(toTrimmedString(url.searchParams.get("include_split_sources")).toLowerCase());
     const limit = parsePositiveInt(url.searchParams.get("limit"), 100);
     const offset = parsePositiveInt(url.searchParams.get("offset"), 0) - 1 >= 0
       ? parsePositiveInt(url.searchParams.get("offset"), 1) - 1
@@ -835,6 +838,7 @@ export async function listAC01GRNsHandler(
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
+    if (!includeSplitSources) query = query.neq("status", "SPLIT");
     if (rateStatus === "PENDING") query = query.eq("rate_confirmed", false);
     if (rateStatus === "CONFIRMED") query = query.eq("rate_confirmed", true);
     if (dateFrom) query = query.gte(dateColumn, dateFrom);

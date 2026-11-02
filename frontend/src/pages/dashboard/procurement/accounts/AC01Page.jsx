@@ -535,6 +535,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [rateStatus, setRateStatus] = useState("");
+  // A SPLIT source GRN repeats the same qty and landed cost as its invoice GRNs, so it is hidden by default (totals and Excel stay single).
+  const [showSplitSources, setShowSplitSources] = useState(false);
   const [selectedGrnId, setSelectedGrnId] = useState(initialGrnId);
   const [drawerOpen, setDrawerOpen] = useState(Boolean(initialGrnId));
   const [draft, setDraft] = useState(null);
@@ -614,7 +616,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   }, [companyId, defaultCompanyId]);
 
   const listQuery = useQuery({
-    queryKey: ["ac01", "grns", { companyId, search, dateField, dateFrom, dateTo, rateStatus }],
+    queryKey: ["ac01", "grns", { companyId, search, dateField, dateFrom, dateTo, rateStatus, showSplitSources }],
     queryFn: () =>
       listAllAC01GRNs({
         company_id: companyId || undefined,
@@ -623,6 +625,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
         rate_status: rateStatus || undefined,
+        include_split_sources: showSplitSources ? "1" : undefined,
       }),
     enabled: Boolean(companyId),
   });
@@ -921,7 +924,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
             key: "bulk-component-map",
             label: "Bulk Component Map",
             onClick: () => openScreenWithContext(OPERATION_SCREENS.PROC_BULK_COMPONENT_MAP.screen_code, {
-              origin: "AC01", companyId, ac01Filters: { search, date_field: dateField, date_from: dateFrom, date_to: dateTo, rate_status: rateStatus },
+              origin: "AC01", companyId, ac01Filters: { search, date_field: dateField, date_from: dateFrom, date_to: dateTo, rate_status: rateStatus, include_split_sources: showSplitSources ? "1" : undefined },
             }),
             disabled: !companyId,
           }] : []),
@@ -973,6 +976,10 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                   <option value="PENDING">Rate pending</option>
                   <option value="CONFIRMED">Confirmed</option>
                 </select>
+              </label>
+              <label className="flex h-[26px] items-center gap-1 self-end text-[11px] font-medium text-slate-600" title="A split GRN repeats the qty and landed cost of its invoice GRNs. Shown only for reference; it is not payable.">
+                <input type="checkbox" checked={showSplitSources} onChange={(event) => setShowSplitSources(event.target.checked)} />
+                Show split source GRNs
               </label>
             </div>
           ),

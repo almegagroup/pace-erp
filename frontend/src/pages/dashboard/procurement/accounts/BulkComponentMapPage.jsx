@@ -149,6 +149,31 @@ const COST_LINE_GRID_COLUMNS = "1.3fr 0.6fr 1fr 0.55fr 0.55fr 0.55fr 0.45fr 0.8f
 const DEDUCTION_LINE_GRID_COLUMNS = "1.2fr 0.6fr 1fr 0.5fr 0.6fr 0.9fr 0.5fr 0.5fr";
 
 
+// AC01's list endpoint is paged. The map must offer every GRN, not only the first page (a single
+// limit:500 request silently hid the rest), so read page after page until the total is reached.
+const AC01_MAP_PAGE_SIZE = 200;
+async function listAllAC01GRNsForMap(params) {
+  const firstPage = await listAC01GRNs({ ...params, limit: AC01_MAP_PAGE_SIZE, offset: 1 });
+  const items = Array.isArray(firstPage?.items) ? [...firstPage.items] : [];
+  const componentsByKey = new Map();
+  const addComponents = (page) => {
+    for (const component of Array.isArray(page?.components) ? page.components : []) {
+      if (component?.key && !componentsByKey.has(component.key)) componentsByKey.set(component.key, component);
+    }
+  };
+  addComponents(firstPage);
+  const total = Number(firstPage?.total ?? items.length);
+  // Stop on an empty page too, so a stale count can never loop forever.
+  for (let offset = items.length + 1; items.length < total; offset = items.length + 1) {
+    const page = await listAC01GRNs({ ...params, limit: AC01_MAP_PAGE_SIZE, offset });
+    const pageItems = Array.isArray(page?.items) ? page.items : [];
+    if (pageItems.length === 0) break;
+    items.push(...pageItems);
+    addComponents(page);
+  }
+  return { items, total, components: [...componentsByKey.values()] };
+}
+
 export default function BulkComponentMapPage() {
   // Context arrives via the screen stack (openScreenWithContext from AC01Page.jsx
   // / CrcpDiscrepancyPage.jsx), not router location.state -- this page is reached
@@ -176,7 +201,7 @@ export default function BulkComponentMapPage() {
     queryFn: () =>
       origin === "PO12"
         ? listCrcpDiscrepancy({ company_id: companyId })
-        : listAC01GRNs({ company_id: companyId || undefined, ...ac01Filters, limit: 500 }),
+        : listAllAC01GRNsForMap({ company_id: companyId || undefined, ...ac01Filters }),
     enabled: Boolean(companyId),
   });
   // "Smart" per-component columns (same mechanism as AC01's own list) ride
