@@ -1723,6 +1723,7 @@ export async function postGRNHandler(
 // difference is how many grn_ids the caller selects.
 
 // §3.9.3 write-authority/visibility rule (locked 2026-10-06, business owner):
+// (2026-11-02: ITC owner = PO company also sees/maps these, see below.)
 // scoped PURELY to the company where unloading happens -- goods_receipt.
 // company_id, the Actual Receiver -- whoever has GRN access there sees and
 // maps these candidates. No other company (including a CRCP Bill-To that
@@ -1748,6 +1749,24 @@ async function resolveBulkGrnCandidates(companyId: string, tab: "pending" | "map
     ? baseQuery.is("invoice_number", null)
     : baseQuery.not("invoice_number", "is", null));
   const grns = (grnRows ?? []) as JsonRecord[];
+  // ITC owner (2026-11-02): also list GRNs received elsewhere against POs issued by this company.
+  const ownPoIds: string[] = [];
+  for (let from = 0;; from += 1000) {
+    const { data: poPage } = await serviceRoleClient.schema("erp_procurement").from("purchase_order")
+      .select("id").eq("company_id", companyId).eq("delivery_type", "BULK").order("id").range(from, from + 999);
+    const page = (poPage ?? []) as JsonRecord[];
+    ownPoIds.push(...page.map((r) => String(r.id)));
+    if (page.length < 1000) break;
+  }
+  if (ownPoIds.length > 0) {
+    const seen = new Set(grns.map((g) => String(g.id)));
+    const itcRows = await fetchInChunks<JsonRecord>(ownPoIds, (idChunk) => {
+      const q = serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+        .select("*").eq("status", "POSTED").neq("company_id", companyId).in("po_id", idChunk);
+      return isPending ? q.is("invoice_number", null) : q.not("invoice_number", "is", null);
+    });
+    for (const r of itcRows) if (!seen.has(String(r.id))) grns.push(r);
+  }
   if (grns.length === 0) return [];
 
   const poIds = [...new Set(grns.map((g) => toTrimmedString(g.po_id)).filter(Boolean))];
@@ -1934,6 +1953,38 @@ export async function checkExistingGrnInvoiceHandler(
   }
 }
 
+// ITC owner rule (2026-11-02): the company that issued the PO (or the CRCP STO receiving company) owns the
+// GRN's commercial side, so it may map/unmap/split exactly like the unloading (GRN) company.
+async function grnMaintainCompanyCandidates(grn: JsonRecord): Promise<string[]> {
+  const out = [String(grn.company_id)];
+  if (grn.po_id) {
+    const { data } = await serviceRoleClient.schema("erp_procurement").from("purchase_order")
+      .select("company_id").eq("id", String(grn.po_id)).maybeSingle();
+    const c = toTrimmedString((data as JsonRecord | null)?.company_id);
+    if (c) out.push(c);
+  } else if (grn.sto_id) {
+    const { data } = await serviceRoleClient.schema("erp_procurement").from("stock_transfer_order")
+      .select("receiving_company_id, crcp_enabled").eq("id", String(grn.sto_id)).maybeSingle();
+    const row = data as JsonRecord | null;
+    const c = toTrimmedString(row?.receiving_company_id);
+    if (row?.crcp_enabled === true && c) out.push(c);
+  }
+  return [...new Set(out)];
+}
+
+// Returns true when the caller has scope + EDIT on PROC_GRN_LIST at the GRN company or the ITC owner.
+async function canMaintainGrnCommercially(ctx: ProcurementHandlerContext, grn: JsonRecord): Promise<boolean> {
+  for (const companyId of await grnMaintainCompanyCandidates(grn)) {
+    try {
+      await assertCompanyScope(ctx, companyId);
+    } catch {
+      continue;
+    }
+    if (await canMaintainCompanyResource(ctx, companyId, "PROC_GRN_LIST", "EDIT")) return true;
+  }
+  return false;
+}
+
 export async function mapGrnInvoiceHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -1972,17 +2023,8 @@ export async function mapGrnInvoiceHandler(
     }
     const shipToByGrnId = new Map<string, string | null>();
     for (const grn of grns) {
-      const grnCompanyId = String(grn.company_id);
-      try {
-        await assertCompanyScope(ctx, grnCompanyId);
-      } catch {
-        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
-      }
-      // §8A pattern #2 -- membership at grnCompanyId is not enough; the
-      // caller's ACL grant must be EDIT-level at THIS specific company for
-      // PROC_GRN_LIST (same resource:action the route itself requires).
-      const canMap = await canMaintainCompanyResource(ctx, grnCompanyId, "PROC_GRN_LIST", "EDIT");
-      if (!canMap) {
+      // §8A pattern #2 -- scope + EDIT-level PROC_GRN_LIST at the GRN company OR the ITC owner (PO company).
+      if (!await canMaintainGrnCommercially(ctx, grn)) {
         return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have EDIT access to GRNs at this company.");
       }
       const [poResp, stoResp] = await Promise.all([
@@ -2065,15 +2107,8 @@ export async function unmapGrnInvoiceHandler(
       return procurementErrorResponse(req, ctx, "GRN_MAPPING_GRN_NOT_FOUND", 404, "One or more selected GRNs were not found.");
     }
     for (const grn of grns) {
-      const grnCompanyId = String(grn.company_id);
-      try {
-        await assertCompanyScope(ctx, grnCompanyId);
-      } catch {
-        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
-      }
-      // §8A pattern #2 -- same EDIT-level check as mapGrnInvoiceHandler.
-      const canUnmap = await canMaintainCompanyResource(ctx, grnCompanyId, "PROC_GRN_LIST", "EDIT");
-      if (!canUnmap) {
+      // §8A pattern #2 -- same check as mapGrnInvoiceHandler (GRN company or ITC owner).
+      if (!await canMaintainGrnCommercially(ctx, grn)) {
         return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have EDIT access to GRNs at this company.");
       }
     }
@@ -2181,14 +2216,7 @@ export async function splitGrnHandler(
     if (toUpperTrimmedString(grn.status) !== "POSTED") {
       return procurementErrorResponse(req, ctx, "GRN_NOT_POSTED", 400, "Only POSTED GRNs can be split.");
     }
-    const grnCompanyId = String(grn.company_id);
-    try {
-      await assertCompanyScope(ctx, grnCompanyId);
-    } catch {
-      return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
-    }
-    const canSplit = await canMaintainCompanyResource(ctx, grnCompanyId, "PROC_GRN_LIST", "EDIT");
-    if (!canSplit) {
+    if (!await canMaintainGrnCommercially(ctx, grn as JsonRecord)) {
       return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have EDIT access to GRNs at this company.");
     }
 
