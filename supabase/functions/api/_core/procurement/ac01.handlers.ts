@@ -815,46 +815,25 @@ export async function listAC01GRNsHandler(
     const ALLOWED_DATE_FIELDS = new Set(["invoice_date", "grn_date", "posting_date"]);
     const dateColumn = ALLOWED_DATE_FIELDS.has(dateField) ? dateField : "invoice_date";
 
-    // AC01 "ITC To" + cross-company visibility: a company sees a GRN when it
-    // owns it, when a landed-cost record names it as ITC owner, OR when the
-    // receipt belongs to one of its CRCP POs/STOs. The latter is essential
-    // before the first landed-cost header exists; otherwise a Bill-To company
-    // cannot see the very GRN whose quality/payment/freight it must monitor.
-    // Write access remains strictly GRN-company-scoped via canWriteAC01().
-    let itcOwnerGrnIds: string[] = [];
+    // AC01 "ITC To" + cross-company visibility: a company sees a GRN when it owns it, when a
+    // landed-cost record names it as ITC owner, OR when the receipt belongs to one of its CRCP POs/STOs
+    // (the Bill-To must be able to see a GRN before the first landed-cost header exists).
+    // The rule runs in the database (ac01_visible_goods_receipts, SETOF goods_receipt) and is paged
+    // with .range() like any table: no id list in the URL, no cap, nothing silently dropped.
+    // Write access is separate: saveAC01GRNCostHandler checks the unloading company and the ITC owner.
     let crcpMirrorOwnerByGrnId = new Map<string, string>();
     if (companyId) {
-      const [itcOwnerLcResponse, crcpMirrorOwners] = await Promise.all([
-        serviceRoleClient
-          .schema("erp_procurement").from("landed_cost")
-          .select("grn_id").eq("itc_owner_company_id", companyId).not("grn_id", "is", null),
-        getCrcpMirrorOwnerByGrnId(companyId),
-      ]);
-      if (itcOwnerLcResponse.error) {
-        return ac01ErrorResponse(req, ctx, "AC01_ITC_OWNER_FETCH_FAILED", 500, "Unable to resolve AC01 ITC-owner GRNs.");
-      }
-      crcpMirrorOwnerByGrnId = crcpMirrorOwners;
-      itcOwnerGrnIds = uniqueRelationIds([
-        ...((itcOwnerLcResponse.data ?? []) as JsonRecord[]).map((row) => row.grn_id),
-        ...crcpMirrorOwnerByGrnId.keys(),
-      ]);
-      // This list is inlined into one .or() URL below. Keep the established
-      // cap until the list becomes large enough to justify a dedicated view.
-      itcOwnerGrnIds = itcOwnerGrnIds.slice(0, 300);
+      crcpMirrorOwnerByGrnId = await getCrcpMirrorOwnerByGrnId(companyId);
     }
 
-    let query = serviceRoleClient
-      .schema("erp_procurement")
-      .from("goods_receipt")
-      .select("*", { count: "exact" })
+    // deno-lint-ignore no-explicit-any
+    let query: any = (companyId
+      // deno-lint-ignore no-explicit-any
+      ? (serviceRoleClient.schema("erp_procurement") as any).rpc("ac01_visible_goods_receipts", { p_company_id: companyId }, { count: "exact" })
+      : serviceRoleClient.schema("erp_procurement").from("goods_receipt").select("*", { count: "exact" }))
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
-    if (companyId && itcOwnerGrnIds.length > 0) {
-      query = query.or(`company_id.eq.${companyId},id.in.(${itcOwnerGrnIds.join(",")})`);
-    } else if (companyId) {
-      query = query.eq("company_id", companyId);
-    }
     if (rateStatus === "PENDING") query = query.eq("rate_confirmed", false);
     if (rateStatus === "CONFIRMED") query = query.eq("rate_confirmed", true);
     if (dateFrom) query = query.gte(dateColumn, dateFrom);
