@@ -126,6 +126,22 @@ async function getCrcpMirrorOwnerForGrn(grn: JsonRecord): Promise<string | null>
   return null;
 }
 
+// The ITC owner of a GRN (owner rule, 2026-11-02): the company that issued the PO the GRN is received
+// against; for a CRCP STO receipt the receiving company; otherwise the GRN's own company. The ITC owner
+// has full AC01 access to the GRN's accounting row, exactly like the unloading (GRN) company.
+async function resolveItcOwnerCompanyIdForGrn(grn: JsonRecord): Promise<string> {
+  const mirror = await getCrcpMirrorOwnerForGrn(grn);
+  if (mirror) return mirror;
+  if (grn.po_id) {
+    const { data: po, error } = await serviceRoleClient.schema("erp_procurement").from("purchase_order")
+      .select("company_id").eq("id", String(grn.po_id)).maybeSingle();
+    if (error) throw new Error("AC01_CRCP_OWNER_SOURCE_FETCH_FAILED");
+    const poCompanyId = toRelationId((po as JsonRecord | null)?.company_id);
+    if (poCompanyId) return poCompanyId;
+  }
+  return toRelationId(grn.company_id);
+}
+
 function parsePositiveInt(value: unknown, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
@@ -600,7 +616,8 @@ function buildListRow(
   // only visible because the viewer is the ITC owner of a GRN some OTHER
   // company actually received (never direct ownership). Frontend uses this
   // to grey the row out and lock its drawer read-only.
-  const isEditableForViewer = !viewerCompanyId || String(grn.company_id) === viewerCompanyId;
+  // Editable for the unloading company AND for the ITC owner (the real ACL WRITE check is on save).
+  const isEditableForViewer = !viewerCompanyId || String(grn.company_id) === viewerCompanyId || itcOwnerCompanyId === viewerCompanyId;
   const rowCostLines = landedCost ? (costLinesByLc.get(String(landedCost.id)) ?? []) : [];
   const rowDeductionLines = landedCost ? (deductionLinesByLc.get(String(landedCost.id)) ?? []) : [];
   const suggestedPayables = computeSuggestedPayables(grn, rowCostLines, rowDeductionLines);
@@ -1200,8 +1217,8 @@ export async function getAC01GRNHandler(
     // deliberately works before the first landed-cost header exists.
     const crcpMirrorOwnerCompanyId = await getCrcpMirrorOwnerForGrn(grn as JsonRecord);
     const effectiveItcOwnerCompanyId = (
-      crcpMirrorOwnerCompanyId ?? toRelationId(landedCost?.itc_owner_company_id)
-    ) || toRelationId(grn.company_id);
+      crcpMirrorOwnerCompanyId ?? await resolveItcOwnerCompanyIdForGrn(grn as JsonRecord)
+    ) || toRelationId(landedCost?.itc_owner_company_id) || toRelationId(grn.company_id);
     let isDirectOwner = true;
     try {
       await assertCompanyScope(ctx, String(grn.company_id));
@@ -1220,11 +1237,11 @@ export async function getAC01GRNHandler(
     if (!isDirectOwner && !isItcOwnerViewer) {
       return ac01ErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
-    // Write access (canWriteAC01/requireAC01WriteAccess, saveAC01GRNCostHandler
-    // below) stays exactly as already locked -- strictly GRN-company-scoped,
-    // never widened to the ITC-owner mirror. This flag is read-only display
-    // metadata so the frontend can lock the drawer for a mirrored view.
-    const isEditableForViewer = isDirectOwner;
+    // Owner rule (2026-11-02): both the unloading company and the ITC owner can edit the GRN's AC01
+    // row (saveAC01GRNCostHandler enforces the same). This flag only tells the frontend whether to
+    // lock the drawer: an ITC-owner viewer needs AC01 WRITE in the ITC-owning company.
+    const isEditableForViewer = isDirectOwner
+      || (isItcOwnerViewer && await canWriteAC01(ctx, effectiveItcOwnerCompanyId));
 
     // §8A Foundation Rule -- the drawer never showed material/vendor identity
     // at all (only raw material_id/vendor_id sat unused on `grn`), unlike the
@@ -1450,7 +1467,7 @@ export async function saveAC01GRNCostHandler(
     const body = await parseBody(req);
 
     const { data: grn, error: grnError } = await serviceRoleClient
-      .schema("erp_procurement").from("goods_receipt").select("id, company_id, status, gst_pct").eq("id", grnId).single();
+      .schema("erp_procurement").from("goods_receipt").select("id, company_id, status, gst_pct, po_id, sto_id").eq("id", grnId).single();
     if (grnError || !grn) {
       return ac01ErrorResponse(req, ctx, "AC01_GRN_NOT_FOUND", 404, "GRN not found.");
     }
@@ -1459,13 +1476,26 @@ export async function saveAC01GRNCostHandler(
     if (toTrimmedString(grn.status).toUpperCase() === "SPLIT") {
       return ac01ErrorResponse(req, ctx, "AC01_GRN_SPLIT_READ_ONLY", 422, "This GRN was split into invoice GRNs. Enter cost and payable on those invoice GRNs instead.");
     }
-    try {
-      await assertCompanyScope(ctx, String(grn.company_id));
-    } catch {
+    // Owner rule (2026-11-02): the unloading company (GRN company) and the ITC owner (the company that
+    // issued the PO) can both edit this GRN's AC01 row, each through its own AC01 WRITE grant.
+    const itcOwnerCompanyId = await resolveItcOwnerCompanyIdForGrn(grn as JsonRecord);
+    let hasCompanyScope = false;
+    let canWrite = false;
+    for (const candidateCompanyId of new Set([String(grn.company_id), itcOwnerCompanyId])) {
+      try {
+        await assertCompanyScope(ctx, candidateCompanyId);
+      } catch {
+        continue;
+      }
+      hasCompanyScope = true;
+      if (await canWriteAC01(ctx, candidateCompanyId)) { canWrite = true; break; }
+    }
+    if (!hasCompanyScope) {
       return ac01ErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
-    const forbidden = await requireAC01WriteAccess(req, ctx, String(grn.company_id));
-    if (forbidden) return forbidden;
+    if (!canWrite) {
+      return ac01ErrorResponse(req, ctx, "AC01_WRITE_FORBIDDEN", 403, "You do not have edit access to AC01 for this company.");
+    }
 
     const costLines = Array.isArray(body.cost_lines) ? body.cost_lines : [];
     const deductionLines = Array.isArray(body.deduction_lines) ? body.deduction_lines : [];
