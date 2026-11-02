@@ -582,7 +582,12 @@ function buildListRow(
   // isItcOwnerViewer/isEditableForViewer unchanged for the ordinary case
   // (itcOwnerCompanyId === viewerCompanyId was already true for the GRN's
   // own company either way).
+  // Business rule (owner, 2026-11-02): the company that issued the PO is the ITC owner of every
+  // GRN received against that PO. A GRN with no landed-cost row yet (nothing saved in AC01) used
+  // to show its own receiving company here, so a CMP011 PO received at CMP005 read "CMP005".
+  const poCompanyId = po?.company_id ? String(po.company_id) : null;
   const itcOwnerCompanyId = crcpMirrorOwnerByGrnId.get(String(grn.id))
+    ?? poCompanyId
     ?? (landedCost?.itc_owner_company_id
       ? String(landedCost.itc_owner_company_id)
       : String(grn.company_id));
@@ -994,6 +999,7 @@ export async function listAC01GRNsHandler(
       [
         ...landedCosts.map((lc) => toTrimmedString(lc.itc_owner_company_id)),
         ...crcpMirrorOwnerByGrnId.values(),
+        ...purchaseOrders.map((po) => toTrimmedString(po.company_id)),
       ].filter(Boolean),
     )].filter((id) => !companyMap.has(id));
     if (itcOwnerCompanyIds.length > 0) {
