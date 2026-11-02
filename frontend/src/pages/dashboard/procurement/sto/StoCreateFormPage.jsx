@@ -4,6 +4,7 @@ import { useNavigate } from "react-router-dom";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
+import UomQuantityInput from "../../../../components/forms/UomQuantityInput.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
@@ -19,6 +20,9 @@ import {
   getLastStoPaymentTerm,
   getStoLaneTransit,
   getFgStoLaneTransit,
+  getFgStoLastPaymentTerm,
+  listFgStoReceivingCompanies,
+  listMaterialUomConversionsForProcurement,
   createFgSto,
   listFgStoMaterials,
   listAvailableSubCsnsForSto,
@@ -183,6 +187,26 @@ function LineMoreDrawer({ line, visible, onClose, onChange }) {
 
 // fgMode = the SO01 "Create FG STO" tab: same STO form, INTER_PLANT only (no distribution / sub-CSN),
 // materials limited to the sending company's MTS FG SKUs, permission = SO01's (PROC_SO_CREATE).
+// FG STO quantity: the user may type it in the SKU's outer pack unit (BAG, JAR...) like IN05 / PID;
+// only the base-UoM (KG) quantity goes into the line -- the same conversion rows IN05 uses.
+function FgQtyCell({ materialId, baseUomCode, onBaseQty }) {
+  const conversionsQuery = useQuery({
+    queryKey: ["procurement", "material-uom-conversions", materialId],
+    queryFn: () => listMaterialUomConversionsForProcurement(materialId),
+    enabled: Boolean(materialId),
+  });
+  if (!materialId || !baseUomCode) {
+    return <input disabled placeholder="Select material" className="h-8 w-full border border-slate-300 bg-slate-100 px-2 text-xs text-slate-500" />;
+  }
+  return (
+    <UomQuantityInput
+      baseUomCode={baseUomCode}
+      conversions={Array.isArray(conversionsQuery.data) ? conversionsQuery.data : []}
+      onChange={(baseQty) => onBaseQty(baseQty)}
+    />
+  );
+}
+
 export default function StoCreateFormPage({ openingMode = false, fgMode = false }) {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
@@ -224,6 +248,13 @@ export default function StoCreateFormPage({ openingMode = false, fgMode = false 
     queryFn: () => listFgStoMaterials({ sending_company_id: form.sending_company_id }),
     enabled: fgMode && Boolean(form.sending_company_id),
   });
+  // FG STO: the receiving company is a counterparty, not one of the user's own companies -- offer only
+  // the companies that have a lead-time lane with the sending company (an STO needs that lane anyway).
+  const fgReceivingQuery = useQuery({
+    queryKey: ["procurement", "fg-sto-receiving-companies", form.sending_company_id, form.sto_date],
+    queryFn: () => listFgStoReceivingCompanies({ sending_company_id: form.sending_company_id, date: form.sto_date || undefined }),
+    enabled: fgMode && Boolean(form.sending_company_id),
+  });
   const sendingCostCenterQuery = useCostCentersQuery(
     { company_id: form.sending_company_id, active: true },
     { enabled: Boolean(form.sending_company_id) }
@@ -235,7 +266,7 @@ export default function StoCreateFormPage({ openingMode = false, fgMode = false 
   const lastPaymentTermQuery = useQuery({
     queryKey: ["procurement", "sto-last-payment-term", form.sending_company_id, form.receiving_company_id],
     queryFn: () =>
-      getLastStoPaymentTerm({
+      (fgMode ? getFgStoLastPaymentTerm : getLastStoPaymentTerm)({
         sending_company_id: form.sending_company_id,
         receiving_company_id: form.receiving_company_id,
       }),
@@ -252,7 +283,7 @@ export default function StoCreateFormPage({ openingMode = false, fgMode = false 
         receiving_company_id: form.receiving_company_id,
         date: form.sto_date || undefined,
       }),
-    enabled: !openingMode && Boolean(form.sending_company_id && form.receiving_company_id),
+    enabled: !openingMode && Boolean(form.sending_company_id && form.receiving_company_id && form.sending_company_id !== form.receiving_company_id),
   });
   const laneChecked = !openingMode && laneQuery.isSuccess;
   const laneTransitDays = laneChecked && laneQuery.data?.transit_days != null ? Number(laneQuery.data.transit_days) : null;
@@ -282,14 +313,15 @@ export default function StoCreateFormPage({ openingMode = false, fgMode = false 
   const isConsignmentSto = form.sto_type === "CONSIGNMENT_DISTRIBUTION";
   const defaultPaymentTermId = String(lastPaymentTermQuery.data?.payment_term_id || "");
 
-  const companyOptions = useMemo(
-    () =>
-      companies.map((entry) => ({
+  const companyOptions = useMemo(() => {
+    const source = fgMode ? (Array.isArray(fgReceivingQuery.data) ? fgReceivingQuery.data : []) : companies;
+    return source
+      .filter((entry) => entry.id !== form.sending_company_id)
+      .map((entry) => ({
         value: entry.id,
         label: entry.company_code || entry.company_name ? formatCompanyLabel(entry) : entry.id,
-      })),
-    [companies]
-  );
+      }));
+  }, [fgMode, fgReceivingQuery.data, companies, form.sending_company_id]);
   const materialOptions = useMemo(
     () =>
       materials.map((entry) => ({
@@ -372,12 +404,21 @@ export default function StoCreateFormPage({ openingMode = false, fgMode = false 
         runtimeDefaultCompanyId ||
         companies[0]?.id ||
         "",
-      receiving_company_id:
-        current.receiving_company_id ||
-        companies.find((entry) => entry.id !== (runtimeDefaultCompanyId || ""))?.id ||
-        "",
+      receiving_company_id: fgMode
+        ? current.receiving_company_id
+        : current.receiving_company_id ||
+          companies.find((entry) => entry.id !== (runtimeDefaultCompanyId || ""))?.id ||
+          "",
     }));
-  }, [companies, runtimeDefaultCompanyId]);
+  }, [companies, runtimeDefaultCompanyId, fgMode]);
+
+  // A receiving company that is no longer offered (sending company changed, or it equals the sending company) is cleared.
+  useEffect(() => {
+    if (!form.receiving_company_id) return;
+    if (fgMode && !fgReceivingQuery.isSuccess) return;
+    if (companyOptions.some((entry) => entry.value === form.receiving_company_id)) return;
+    setForm((current) => ({ ...current, receiving_company_id: "" }));
+  }, [form.receiving_company_id, companyOptions, fgMode, fgReceivingQuery.isSuccess]);
 
   useEffect(() => {
     if (!defaultPaymentTermId) return;
@@ -421,7 +462,7 @@ export default function StoCreateFormPage({ openingMode = false, fgMode = false 
           nextLine.source_csn_id = "";
           const material = materials.find((entry) => entry.id === patch.material_id);
           nextLine.uom_code = material?.base_uom_code || "";
-          if (isConsignmentSto) {
+          if (isConsignmentSto || fgMode) {
             nextLine.quantity = "";
           }
         }
@@ -587,8 +628,15 @@ export default function StoCreateFormPage({ openingMode = false, fgMode = false 
     {
       key: "quantity",
       label: "Qty",
-      width: "100px",
-      render: (_row, index) => (
+      width: fgMode ? "260px" : "100px",
+      render: (_row, index) => fgMode ? (
+        <FgQtyCell
+          key={lines[index].material_id || `blank-${index}`}
+          materialId={lines[index].material_id}
+          baseUomCode={lines[index].uom_code}
+          onBaseQty={(qty) => updateLine(index, { quantity: qty === null ? "" : String(qty) })}
+        />
+      ) : (
         <input
           type="number"
           min="0"

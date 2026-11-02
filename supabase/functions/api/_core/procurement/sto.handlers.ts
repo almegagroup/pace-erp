@@ -1361,6 +1361,49 @@ export async function getStoLaneTransitHandler(
   }
 }
 
+// Receiving-company choices for the SO01 "Create FG STO" form: only companies that have an active
+// company-to-company lane with the sending company (an STO needs that lane anyway). The receiving
+// company is a counterparty, so it is NOT limited to the caller's own companies -- the sending
+// company is (getCompanyScope). Names are resolved here, never raw ids.
+export async function listFgStoReceivingCompaniesHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const sendingCompanyId = await getCompanyScope(ctx, url.searchParams.get("sending_company_id") ?? undefined);
+    if (!sendingCompanyId) {
+      return stoErrorResponse(req, ctx, "FG_STO_SENDING_COMPANY_REQUIRED", 400, "sending_company_id is required.");
+    }
+    const onDate = toTrimmedString(url.searchParams.get("date")) || todayIsoDate();
+    const { data: lanes, error } = await serviceRoleClient
+      .schema("erp_master")
+      .from("lead_time_master_company")
+      .select("company_a_id, company_b_id, transit_days")
+      .or(`company_a_id.eq.${sendingCompanyId},company_b_id.eq.${sendingCompanyId}`)
+      .eq("active", true)
+      .lte("effective_from", onDate)
+      .or(`effective_to.is.null,effective_to.gte.${onDate}`);
+    if (error) throw new Error("FG_STO_RECEIVING_COMPANY_LOOKUP_FAILED");
+    const transitByPartner = new Map<string, number>();
+    for (const lane of (lanes ?? []) as JsonRecord[]) {
+      const partner = toTrimmedString(lane.company_a_id) === sendingCompanyId ? toTrimmedString(lane.company_b_id) : toTrimmedString(lane.company_a_id);
+      if (partner && partner !== sendingCompanyId) transitByPartner.set(partner, Number(lane.transit_days));
+    }
+    const partnerIds = [...transitByPartner.keys()];
+    const companies = partnerIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(partnerIds, (chunk) =>
+      serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", chunk));
+    const rows = companies
+      .map((row) => ({ id: toTrimmedString(row.id), company_code: toTrimmedString(row.company_code), company_name: toTrimmedString(row.company_name), transit_days: transitByPartner.get(toTrimmedString(row.id)) ?? null }))
+      .sort((a, b) => a.company_code.localeCompare(b.company_code));
+    return okResponse({ data: rows }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "FG_STO_RECEIVING_COMPANY_LOOKUP_FAILED";
+    return stoErrorResponse(req, ctx, code, 500, code);
+  }
+}
+
 // ---------------------------------------------------------------------------
 // FG STO (SO01 "Create FG STO" tab). Same STO document, same create flow, but: INTER_PLANT only,
 // every line an MTS FG SKU of the sending company (erp_planning.mts_company_skus -- the SKU list the

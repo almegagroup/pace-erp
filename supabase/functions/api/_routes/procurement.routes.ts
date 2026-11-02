@@ -553,6 +553,7 @@ import {
   knockOffSTOLineHandler,
   getSTOHandler,
   getLastStoPaymentTermHandler,
+  listFgStoReceivingCompaniesHandler,
   getStoLaneTransitHandler,
   createFgStoHandler,
   listFgStoMaterialsHandler,
@@ -1195,6 +1196,10 @@ export async function dispatchProcurementRoutes(
       return await getStoLaneTransitHandler(req, ctx);
     case "GET:/api/procurement/fg-stos/materials":
       return await listFgStoMaterialsHandler(req, ctx);
+    case "GET:/api/procurement/fg-stos/receiving-companies":
+      return await listFgStoReceivingCompaniesHandler(req, ctx);
+    case "GET:/api/procurement/fg-stos/last-payment-term":
+      return await getLastStoPaymentTermHandler(req, ctx);
     case "POST:/api/procurement/fg-stos":
       return await createFgStoHandler(req, ctx);
     case "POST:/api/procurement/purchase-orders":

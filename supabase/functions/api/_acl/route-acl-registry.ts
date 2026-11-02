@@ -206,6 +206,8 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/stos/lane-transit":          { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "VIEW"  },
   "GET:/api/procurement/fg-stos/lane-transit":       { skipAcl: false, resourceCode: "PROC_SO_CREATE",  action: "VIEW"  },
   "GET:/api/procurement/fg-stos/materials":          { skipAcl: false, resourceCode: "PROC_SO_CREATE",  action: "VIEW"  },
+  "GET:/api/procurement/fg-stos/receiving-companies": { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "VIEW"  },
+  "GET:/api/procurement/fg-stos/last-payment-term":  { skipAcl: false, resourceCode: "PROC_SO_CREATE",  action: "VIEW"  },
   "POST:/api/procurement/fg-stos":                   { skipAcl: false, resourceCode: "PROC_SO_CREATE",  action: "WRITE" },
   "POST:/api/procurement/stos":                       { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "WRITE" },
 
