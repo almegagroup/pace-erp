@@ -2945,7 +2945,7 @@
   },
   {
     "page": "frontend/src/pages/dashboard/procurement/csn/CSNDetailPage.jsx",
-    "dependencyCount": 5,
+    "dependencyCount": 6,
     "deps": [
       {
         "fn": "listPorts",
@@ -2986,12 +2986,20 @@
         "resourceCode": "PROC_CSN_TRACKER",
         "action": "EDIT",
         "skipAcl": false
+      },
+      {
+        "fn": "getCsnTrackerCapability",
+        "method": "GET",
+        "path": "/api/procurement/csn-tracker-capability",
+        "resourceCode": "PROC_CSN_TRACKER",
+        "action": "VIEW",
+        "skipAcl": false
       }
     ]
   },
   {
     "page": "frontend/src/pages/dashboard/procurement/csn/CSNTrackerPage.jsx",
-    "dependencyCount": 15,
+    "dependencyCount": 16,
     "deps": [
       {
         "fn": "listPorts",
@@ -3112,6 +3120,14 @@
         "resourceCode": "UNRESOLVED",
         "action": "?",
         "skipAcl": true
+      },
+      {
+        "fn": "getCsnTrackerCapability",
+        "method": "GET",
+        "path": "/api/procurement/csn-tracker-capability",
+        "resourceCode": "PROC_CSN_TRACKER",
+        "action": "VIEW",
+        "skipAcl": false
       }
     ]
   },
@@ -9535,6 +9551,42 @@
         "method": "GET",
         "path": "/api/procurement/po-lot-orders",
         "resourceCode": "PROC_PO_CREATE",
+        "action": "EDIT",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/sales/FgStoListPage.jsx",
+    "dependencyCount": 1,
+    "deps": [
+      {
+        "fn": "listFgStos",
+        "method": "GET",
+        "path": "/api/procurement/fg-stos",
+        "resourceCode": "PROC_SO_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/sales/FgStoDetailPage.jsx",
+    "dependencyCount": 2,
+    "deps": [
+      {
+        "fn": "getFgSto",
+        "method": "GET",
+        "path": "/api/procurement/fg-stos/${encodeURIComponent(id)}",
+        "resourceCode": "PROC_SO_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "cancelFgSto",
+        "method": "POST",
+        "path": "/api/procurement/fg-stos/${encodeURIComponent(id)}/cancel",
+        "resourceCode": "PROC_SO_CREATE",
         "action": "EDIT",
         "skipAcl": false
       }

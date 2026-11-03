@@ -55,12 +55,15 @@ function makeNewSoLine(lineMaterialType) {
     fg_type: lineMaterialType === "FG" || lineMaterialType === "SFG" ? "" : null,
     quantity: "",
     base_qty: "",
+    pack_uom_code: "",
     pack_qty: "",
     per_pack_qty: "",
     rate_basis: "",
     rate: "",
     gst_treatment: "EXCLUSIVE",
     gst_rate: "",
+    uom_code: "",
+    __perPackVariable: false,
     hsn_code: "",
     batch_number: "",
     expiry_date: "",
@@ -503,6 +506,10 @@ export default function SODetailPage() {
     const material = pickedSku ?? fgSkuMap.get(materialId) ?? materialMap.get(materialId);
     updateNewLine(key, {
       material_id: materialId,
+      uom_code: material?.base_uom_code || "",
+      pack_uom_code: material?.pack_uom_code || "",
+      per_pack_qty: material?.per_pack_qty != null ? String(material.per_pack_qty) : "",
+      __perPackVariable: Boolean(material?.variable_conversion),
       hsn_code: material?.hsn_code || "",
       gst_rate: material?.gst_rate != null ? String(material.gst_rate) : "",
     });
@@ -576,9 +583,11 @@ export default function SODetailPage() {
         // itself), so sending the same raw value in both is harmless either way.
         quantity: line.quantity === "" ? null : Number(line.quantity),
         base_qty: line.quantity === "" ? null : Number(line.quantity),
+        pack_uom_code: line.pack_uom_code || null,
         pack_qty: line.pack_qty === "" ? null : Number(line.pack_qty),
         per_pack_qty: line.per_pack_qty === "" ? null : Number(line.per_pack_qty),
         rate_basis: line.rate_basis || null,
+        uom_code: line.uom_code || null,
         rate: line.rate === "" ? null : Number(line.rate),
         gst_treatment: line.gst_treatment || "EXCLUSIVE",
         gst_rate: line.gst_rate === "" ? null : Number(line.gst_rate),
@@ -1150,7 +1159,14 @@ export default function SODetailPage() {
                           {(line.line_material_type === "FG" || line.line_material_type === "SFG") ? (
                             <label className="grid gap-0.5 text-[10px] font-semibold text-slate-500">
                               Type
-                              <select value={line.fg_type || ""} onChange={(event) => updateNewLine(line.__key, { fg_type: event.target.value })} className={inputCls}>
+                              <select value={line.fg_type || ""} onChange={(event) => updateNewLine(line.__key, {
+                                fg_type: event.target.value,
+                                material_id: "",
+                                pack_uom_code: "",
+                                per_pack_qty: "",
+                                __perPackVariable: false,
+                                rate_basis: event.target.value === "MTEST" ? "FIXED" : "BASE_UOM",
+                              })} className={inputCls}>
                                 <option value="">Type</option>
                                 {FG_TYPE_OPTIONS.map((option) => <option key={option} value={option}>{option}</option>)}
                               </select>
@@ -1174,7 +1190,7 @@ export default function SODetailPage() {
                                 <input type="number" step="0.0001" placeholder="Pack Qty" value={line.pack_qty} onChange={(event) => updateNewLine(line.__key, { pack_qty: event.target.value, rate_basis: line.rate_basis || "BASE_UOM" })} className={inputCls} />
                               </label>
                               <label className="grid gap-0.5 text-[10px] font-semibold text-slate-500">Per Pack
-                                <input type="number" step="0.0001" placeholder="Per Pack" value={line.per_pack_qty} onChange={(event) => updateNewLine(line.__key, { per_pack_qty: event.target.value })} className={inputCls} />
+                                <input type="number" step="0.0001" placeholder="Select SKU" value={line.per_pack_qty} readOnly={!line.__perPackVariable} title={line.__perPackVariable ? "Variable conversion: enter Per Pack quantity" : "Auto-filled from the selected SKU's pack conversion"} onChange={(event) => updateNewLine(line.__key, { per_pack_qty: event.target.value })} className={`${inputCls} ${line.__perPackVariable ? "bg-white" : "bg-slate-100 text-slate-500"}`} />
                               </label>
                             </>
                           ) : (

@@ -3,7 +3,7 @@
  * Domain: PROCUREMENT / Sales
  * Purpose: "Bulk DO Upload" — additive to DOListPage.jsx (SO03), per
  *          FG-STO-MTS-DISPATCH-DESIGN-DOC.md §6 points 14-15. One template
- *          row-group (same FO/SO Number) = one Delivery Order. A VDC row
+ *          shipment-header group = one Delivery Order. A VDC row
  *          carries an FO Number (resolved against the already-mapped SO Map
  *          allocation, §6 points 8-12); a DC row carries a plain SO Number
  *          (no Customer/Site resolution needed, §6 point 10's correction).
@@ -20,6 +20,7 @@ import { getDoBulkSubmissionStatus, previewDoBulkUpload, saveDoBulkUpload } from
 import { getTransporterMasterRevision } from "./transporterMasterRevision.js";
 import { markSpreadsheetDuplicates, prioritizeUploadReviewRows } from "../../../../shared/uploadReviewRows.js";
 import { TEMPLATE_HEADERS, parseUploadedWorkbook } from "./bulkDoWorkbook.js";
+import { bulkDoShipmentKey, bulkDoSpreadsheetLineKey, normalizedBulkDoKeyPart } from "./bulkDoUploadIdentity.js";
 
 
 async function buildTemplateWorkbook() {
@@ -226,29 +227,24 @@ function bulkDoReviewPriority(row) {
   return 0;
 }
 
-function normalizedUploadKeyPart(value) {
-  return String(value ?? "").trim().replace(/\s+/g, " ").toUpperCase();
-}
-
-function normalizeUploadQuantity(value) {
-  const quantity = Number(value);
-  return Number.isFinite(quantity) ? quantity.toFixed(6) : normalizedUploadKeyPart(value);
+function shipmentKeyForRow(row, rawByIndex) {
+  return bulkDoShipmentKey(row, rawByIndex[row.row_index] ?? {});
 }
 
 function deriveBulkDoReviewRows(rows, rawByIndex) {
-  // The agreed spreadsheet identity is FO/SO + SKU + Pack Qty.  A repeated
-  // physical line is removable from this upload; it does not alter any ERP DO.
+  // Only an exact repeat of a shipment header + line is removable.  The same
+  // FO/SO, SKU and quantity can recur in a later invoice/LR and must survive.
   const withUploadDuplicates = markSpreadsheetDuplicates(rows, (row) => {
     const raw = rawByIndex[row.row_index] ?? {};
-    return [raw.fo_or_so_number ?? row.fo_or_so_number, raw.sku, normalizeUploadQuantity(raw.pack_qty)].map(normalizedUploadKeyPart).join("::");
+    return bulkDoSpreadsheetLineKey(row, raw);
   });
-  const rowsBySource = new Map();
+  const rowsByShipment = new Map();
   for (const row of withUploadDuplicates) {
-    const key = normalizedUploadKeyPart(row.fo_or_so_number);
-    rowsBySource.set(key, [...(rowsBySource.get(key) ?? []), row]);
+    const key = shipmentKeyForRow(row, rawByIndex);
+    rowsByShipment.set(key, [...(rowsByShipment.get(key) ?? []), row]);
   }
-  const fullyDispatchedSources = new Map();
-  for (const [key, groupRows] of rowsBySource.entries()) {
+  const fullyDispatchedShipments = new Map();
+  for (const [key, groupRows] of rowsByShipment.entries()) {
     const everyLineIsExhaustedByExistingDo = groupRows.length > 0 && groupRows.every((row) => (
       row.qty_status === "EXCEEDS_BALANCE"
       && Number(row.remaining_base_qty ?? 0) <= 0.0001
@@ -257,10 +253,10 @@ function deriveBulkDoReviewRows(rows, rawByIndex) {
     ));
     if (!everyLineIsExhaustedByExistingDo) continue;
     const references = [...new Set(groupRows.flatMap((row) => (row.existing_delivery_orders ?? []).map((entry) => String(entry.dc_number ?? "").trim()).filter(Boolean)))];
-    fullyDispatchedSources.set(key, references);
+    fullyDispatchedShipments.set(key, references);
   }
   return withUploadDuplicates.map((row) => {
-    const existingDoNumbers = fullyDispatchedSources.get(normalizedUploadKeyPart(row.fo_or_so_number)) ?? [];
+    const existingDoNumbers = fullyDispatchedShipments.get(shipmentKeyForRow(row, rawByIndex)) ?? [];
     const existingDeliveryOrderDuplicate = existingDoNumbers.length > 0;
     const reviewDuplicateKind = existingDeliveryOrderDuplicate ? "ALREADY_CREATED" : row.upload_duplicate ? "UPLOAD_DUPLICATE" : null;
     return {
@@ -369,10 +365,20 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
     const statusGroups = Array.isArray(result?.groups) ? result.groups : [];
     const byKey = new Map(statusGroups.map((group) => [group.client_group_key, group]));
     const createdGroups = new Set(statusGroups.filter((group) => group.status === "CREATED").map((group) => group.client_group_key));
-    const createdReferences = new Set(statusGroups.filter((group) => group.status === "CREATED").map((group) => group.source_reference));
+    const sourceReferenceByClientGroupKey = new Map();
+    for (const row of currentRows ?? []) {
+      const shipmentKey = shipmentKeyForRow(row, rawByIndex);
+      // The source-only fallback lets a pre-fix, in-progress browser session
+      // reconcile once after deployment. New uploads always use shipment keys.
+      const clientGroupKey = activeGroupKeys[shipmentKey] ?? activeGroupKeys[normalizedBulkDoKeyPart(row.fo_or_so_number)];
+      if (clientGroupKey && !sourceReferenceByClientGroupKey.has(clientGroupKey)) {
+        sourceReferenceByClientGroupKey.set(clientGroupKey, row.fo_or_so_number);
+      }
+    }
     const nextRows = (currentRows ?? []).filter((row) => {
-      const groupKey = activeGroupKeys[row.fo_or_so_number];
-      return !createdGroups.has(groupKey) && !createdReferences.has(row.fo_or_so_number);
+      const shipmentKey = shipmentKeyForRow(row, rawByIndex);
+      const clientGroupKey = activeGroupKeys[shipmentKey] ?? activeGroupKeys[normalizedBulkDoKeyPart(row.fo_or_so_number)];
+      return !createdGroups.has(clientGroupKey);
     });
     const nextResults = statusGroups.map((group) => ({
       submission_group_key: group.client_group_key,
@@ -383,17 +389,17 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
       attempt_count: group.attempt_count,
     }));
     Object.entries(activeGroupKeys)
-      .filter(([, groupKey]) => !byKey.has(groupKey))
-      .forEach(([sourceReference, groupKey]) => nextResults.push({
-        submission_group_key: groupKey,
-        fo_or_so_number: sourceReference,
+      .filter(([, clientGroupKey]) => !byKey.has(clientGroupKey))
+      .forEach(([shipmentKey, clientGroupKey]) => nextResults.push({
+        submission_group_key: clientGroupKey,
+        fo_or_so_number: sourceReferenceByClientGroupKey.get(clientGroupKey) ?? shipmentKey,
         status: "NOT_STARTED",
       }));
     setRows(nextRows);
     setSaveResults(nextResults);
     persistSubmission({ rows: nextRows, submissionId: activeSubmissionId, submissionGroupKeys: activeGroupKeys });
     return { created: createdGroups.size, total: statusGroups.length, groups: statusGroups, nextRows };
-  }, [activeCompanyId, persistSubmission]);
+  }, [activeCompanyId, persistSubmission, rawByIndex]);
 
   // Returning from Transporter Master is navigation, not another upload. Keep
   // the already-resolved preview on screen immediately. If a transporter was
@@ -550,10 +556,8 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
     });
   }
 
-  // One Delivery Order per (fo_or_so_number) group — §6 point 14/17. Header
-  // fields (DO Date/LR/Transporter/Truck/Dispatch/Tally) are repeated on
-  // every row of the same group in the source Excel; the first row's raw
-  // values are used as the group's header.
+  // One Delivery Order per shipment header.  A repeated FO/SO in a later
+  // invoice/LR is a separate shipment and must create a separate DO.
   const reviewedRowsWithDuplicates = useMemo(
     () => deriveBulkDoReviewRows(rows, rawByIndex),
     [rawByIndex, rows],
@@ -568,8 +572,8 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
       if (row.is_removable_duplicate) continue;
       if (row.status !== "RESOLVED") continue;
       const raw = rawByIndex[row.row_index] ?? {};
-      const key = row.fo_or_so_number;
-      if (!byKey.has(key)) byKey.set(key, { fo_or_so_number: key, dd_flag: row.dd_flag, so_id: row.so_id, raw, rows: [] });
+      const key = shipmentKeyForRow(row, rawByIndex);
+      if (!byKey.has(key)) byKey.set(key, { client_group_key: key, fo_or_so_number: row.fo_or_so_number, dd_flag: row.dd_flag, so_id: row.so_id, raw, rows: [] });
       byKey.get(key).rows.push(row);
     }
     return [...byKey.values()];
@@ -603,7 +607,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
     try {
       const nextGroupKeys = { ...submissionGroupKeys };
       groups.forEach((group) => {
-        if (!nextGroupKeys[group.fo_or_so_number]) nextGroupKeys[group.fo_or_so_number] = newSubmissionId();
+        if (!nextGroupKeys[group.client_group_key]) nextGroupKeys[group.client_group_key] = newSubmissionId();
       });
       setSubmissionId(activeSubmissionId);
       setSubmissionGroupKeys(nextGroupKeys);
@@ -613,7 +617,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
           const first = group.rows[0];
           const raw = group.raw;
           return {
-            submission_group_key: nextGroupKeys[group.fo_or_so_number],
+            submission_group_key: nextGroupKeys[group.client_group_key],
             fo_or_so_number: group.fo_or_so_number,
             dd_flag: group.dd_flag,
             so_id: group.so_id,
@@ -641,8 +645,8 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
       const resultRows = responseRows(result);
       setSaveResults(resultRows);
       const createdCount = resultRows.filter((row) => row.status === "CREATED").length;
-      const createdReferences = new Set(resultRows.filter((row) => row.status === "CREATED").map((row) => row.fo_or_so_number));
-      const remainingRows = (rows ?? []).filter((row) => !createdReferences.has(row.fo_or_so_number));
+      const createdGroupKeys = new Set(resultRows.filter((row) => row.status === "CREATED").map((row) => row.submission_group_key));
+      const remainingRows = (rows ?? []).filter((row) => !createdGroupKeys.has(nextGroupKeys[shipmentKeyForRow(row, rawByIndex)]));
       setRows(remainingRows);
       persistSubmission({ rows: remainingRows, submissionId: activeSubmissionId, submissionGroupKeys: nextGroupKeys });
       const failureCount = resultRows.length - createdCount;
@@ -733,7 +737,7 @@ export default function BulkDoUploadDrawer({ companyId, onClose, onSaved, initia
         {error ? <div className="border border-rose-300 bg-rose-50 px-3 py-2 text-xs font-semibold text-rose-800">{error}</div> : null}
         {notice ? <div className="border border-emerald-300 bg-emerald-50 px-3 py-2 text-xs font-semibold text-emerald-800">{notice}</div> : null}
         <p className="text-xs text-slate-600">
-          One column takes either an FO Number (VDC rows — resolved against this SO's already-mapped SO Map allocation) or an SO Number / External SO Number (DC rows — Customer/Site resolution not required). Each distinct FO/SO Number becomes one Delivery Order.
+          One column takes either an FO Number (VDC rows — resolved against this SO's already-mapped SO Map allocation) or an SO Number / External SO Number (DC rows — Customer/Site resolution not required). Rows with one common shipment header become one Delivery Order; a later LR, invoice/IBN, truck or dispatch date is a separate Delivery Order.
         </p>
 
         <div className="flex items-center gap-2">

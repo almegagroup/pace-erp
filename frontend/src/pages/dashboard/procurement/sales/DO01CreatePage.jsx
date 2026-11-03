@@ -212,7 +212,9 @@ function TransporterPicker({ transporterId, transporterName, onSelect, onClear, 
 // jumps straight to that document (calls onPick immediately, no extra click
 // through the list); typing a partial number just filters the list as
 // before. Both paths read the same already-fetched open-document list —
-// exact-match resolution is a pure client-side lookup, no extra round trip.
+// exact-match resolution is a server lookup.  That matters for an External
+// SO number: it can safely find the one authorised selling company even when
+// this browser session currently defaults to another company.
 function SourceDocumentDrawer({ visible, sourceType, companyId, selectedIds, onToggle, onConfirm, onClose }) {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -247,9 +249,26 @@ function SourceDocumentDrawer({ visible, sourceType, companyId, selectedIds, onT
         || String(item.reference_display || "").toLowerCase().includes(normalizedSearch))
     : allItems;
 
-  function handleSearchKeyDown(event) {
+  async function handleSearchKeyDown(event) {
     if (event.key !== "Enter") return;
-    const exact = allItems.find((item) => String(item.document_number || "").toLowerCase() === normalizedSearch
+    event.preventDefault();
+    if (!normalizedSearch) return;
+    // Enter promises a direct jump.  Do not look only at `allItems`: it can
+    // still hold the blank-query result while the 300 ms typeahead debounce
+    // is pending, which made a fast exact External SO search falsely fail.
+    let directItems = allItems;
+    try {
+      const result = await listDOSourceDocuments({
+        source_type: sourceType,
+        company_id: companyId,
+        search: normalizedSearch,
+        exact_external_lookup: sourceType === "SALES_ORDER" ? "true" : undefined,
+      });
+      directItems = Array.isArray(result?.items) ? result.items : [];
+    } catch {
+      directItems = [];
+    }
+    const exact = directItems.find((item) => String(item.document_number || "").toLowerCase() === normalizedSearch
       || String(item.reference_display || "").toLowerCase().replace(/^customer po\s*/, "").trim() === normalizedSearch);
     if (exact) {
       setNoExactMatch(false);
@@ -665,6 +684,18 @@ export default function DO01CreatePage() {
   }
 
   function toggleSource(sourceType, source) {
+    const sourceCompanyId = String(source.company_id || "").trim();
+    // An exact External SO lookup can legitimately return a document from a
+    // different company the user is authorised for.  A DO cannot mix selling
+    // companies, so adopt that company only for a clean truck; otherwise make
+    // the user finish/remove the existing company's selections first.
+    if (sourceCompanyId && sourceCompanyId !== companyId) {
+      if (selectedSources.length > 0 || picks.length > 0) {
+        setError("This SO belongs to a different company. Remove the existing SO/STO selections before adding it to this truck.");
+        return;
+      }
+      setCompanyId(sourceCompanyId);
+    }
     const exists = selectedSources.some((item) => item.source_type === sourceType && item.id === source.id);
     if (exists) {
       removeSource(sourceType, source.id);

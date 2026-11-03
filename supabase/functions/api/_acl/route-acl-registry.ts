@@ -45,6 +45,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/csns":                        { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
   "GET:/api/procurement/csns/available-for-sto":      { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
   "GET:/api/procurement/tracker":                     { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
+  "GET:/api/procurement/csn-tracker-capability":      { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
   "GET:/api/procurement/tracker/layouts":             { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
   "POST:/api/procurement/tracker/layouts":            { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "WRITE" },
   "GET:/api/procurement/alerts/lc-count":             { skipAcl: false, resourceCode: "PROC_CSN_ALERTS",  action: "VIEW" },
@@ -206,7 +207,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/stos/lane-transit":          { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "VIEW"  },
   "GET:/api/procurement/fg-stos/lane-transit":       { skipAcl: false, resourceCode: "PROC_SO_CREATE",  action: "VIEW"  },
   "GET:/api/procurement/fg-stos/materials":          { skipAcl: false, resourceCode: "PROC_SO_CREATE",  action: "VIEW"  },
+  "GET:/api/procurement/fg-stos/receiving-companies": { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "VIEW"  },
+  "GET:/api/procurement/fg-stos/last-payment-term":  { skipAcl: false, resourceCode: "PROC_SO_CREATE",  action: "VIEW"  },
   "POST:/api/procurement/fg-stos":                   { skipAcl: false, resourceCode: "PROC_SO_CREATE",  action: "WRITE" },
+  // FG STO register: Stores/Accounts/Logistics have SO01/SO02 ACL, not PROC_STO_LIST.
+  "GET:/api/procurement/fg-stos":                    { skipAcl: false, resourceCode: "PROC_SO_LIST",    action: "VIEW"  },
   "POST:/api/procurement/stos":                       { skipAcl: false, resourceCode: "PROC_STO_CREATE", action: "WRITE" },
 
   // ── Procurement: Sales ───────────────────────────────────────────────────
@@ -1084,6 +1089,10 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
     methods: { POST: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "EDIT" } },
   },
   {
+    pattern: /^\/api\/procurement\/csns\/[^/]+\/(hold|release)$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "EDIT" } },
+  },
+  {
     pattern: /^\/api\/procurement\/mts-requirement\/layouts\/[^/]+$/,
     methods: {
       PATCH: { skipAcl: false, resourceCode: "PROC_MTS_REQUIREMENT", action: "VIEW" },
@@ -1386,6 +1395,16 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   },
 
   // ── STO ───────────────────────────────────────────────────────────────────
+  {
+    pattern: /^\/api\/procurement\/fg-stos\/[^/]+\/cancel$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/procurement\/fg-stos\/[^/]+$/,
+    methods: {
+      GET: { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "VIEW" },
+    },
+  },
   {
     pattern: /^\/api\/procurement\/stos\/[^/]+$/,
     methods: {

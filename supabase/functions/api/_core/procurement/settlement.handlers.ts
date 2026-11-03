@@ -68,13 +68,13 @@ const RPC_ERROR_STATUS: Record<string, number> = {
 // Resolves and validates the Bill-To company shared by every GRN id in the
 // request -- same join shape as crcp_discrepancy.handlers.ts's own
 // resolveBillTo, duplicated narrowly here rather than imported since this
-// only ever needs one pass over a small, caller-supplied id list (never the
-// bounded-window scan the full discrepancy list does).
+// only ever needs one pass over the caller-supplied id list.
 async function resolveSharedBillTo(grnIds: string[]): Promise<{ billTo: string | null; actualReceiver: string | null }> {
-  const { data: grns } = await serviceRoleClient
-    .schema("erp_procurement").from("goods_receipt")
-    .select("id, company_id, po_id, sto_id").in("id", grnIds);
-  const rows = (grns ?? []) as JsonRecord[];
+  // One settlement invoice can cover hundreds of GRNs: chunk the id list (§8E) so a long selection is
+  // neither cut by the URL length limit nor silently read as "no GRNs".
+  const rows = await fetchInChunks<JsonRecord>(grnIds, (chunk) =>
+    serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+      .select("id, company_id, po_id, sto_id").in("id", chunk));
   const poIds = collectIds(rows, "po_id");
   const stoIds = collectIds(rows, "sto_id");
   const [poRows, stoRows] = await Promise.all([
@@ -238,7 +238,23 @@ export async function getSettlementByTallyInvoiceHandler(
       .select("id, grn_number, grn_date, received_qty, material_id, invoice_number, invoice_date")
       .eq("settlement_invoice_id", invoice.id);
 
-    return okResponse({ invoice, covered_grns: coveredGrns ?? [] }, ctx.request_id, req);
+    // The Settled tab shows the same full column set as PO12 Tab 1, so each covered GRN is returned in
+    // the Tab 1 row shape (fetchCrcpDiscrepancyRows reads every candidate GRN, no window). A covered GRN it
+    // does not return keeps a basic row built from the GRN itself, so a row is never silently dropped.
+    const settledRows = await fetchCrcpDiscrepancyRows(String(invoice.bill_to_company_id), { settlementStatus: "SETTLED" });
+    const settledRowByGrnId = new Map(settledRows.map((row) => [String(row.grn_id), row]));
+    const coveredRows = ((coveredGrns ?? []) as JsonRecord[]).map((grn) => settledRowByGrnId.get(String(grn.id)) ?? {
+      grn_id: grn.id,
+      grn_number: grn.grn_number,
+      grn_date: grn.grn_date,
+      grn_qty: grn.received_qty,
+      invoice_number: grn.invoice_number,
+      invoice_date: grn.invoice_date,
+      settlement_status: "SETTLED",
+      settlement_invoice_id: invoice.id,
+    });
+
+    return okResponse({ invoice, covered_grns: coveredRows }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "SETTLEMENT_LOOKUP_FAILED";
     return settlementErrorResponse(req, ctx, code, 500, code);

@@ -698,16 +698,16 @@ live transcript, ধাপে ধাপে confirm করা হচ্ছে —
     - **FO Number** আগে SO Map-এ resolve/mapped হয়ে থাকতেই হবে, না থাকলে error, skip।
     - **SKU/Pack Qty consistency** — FO/SO-র জন্য আগেই resolve হয়ে থাকা SKU/qty-র সাথে
       মিলতে হবে, না মিললে highlight + auto-suggest dropdown (SO Map-এর একই pattern)।
-    - **Duplicate key = (FO/SO Number + SKU):**
-      - সব field অপরিবর্তিত থাকলে → plain Duplicate, auto-skip।
+    - **Shipment/duplicate identity:** এক FO/SO একাধিকবার dispatch হতে পারে। তাই একটি DO হবে একই shipment header-র row-গুলো নিয়ে: FO/SO Number, DO Date, Transporter, LR Number/Date, Tally Invoice Number/Date, IBN, Truck Number এবং Dispatch Date।
+      - একই FO/SO + SKU + Pack Qty পরের LR/invoice/date-এ এলে সেটা নতুন shipment/new DO; duplicate নয়।
+      - সব shipment-header field, SKU, Pack Qty এবং Storage Location অপরিবর্তিত থাকলে → plain Duplicate, auto-skip।
       - কোনো field-এ **আগে blank ছিল, এখন value এসেছে** (Truck Number/Dispatch Date-এর
         মতো) → row highlighted, per-row **Confirm** (overwrite) / Remove, যতক্ষণ না হয়
         **Save button inactive**।
       - কোনো field-এ **আগে থেকেই value ছিল, এখন ভিন্ন value এসেছে** (true correction) →
         bulk upload দিয়ে overwrite হবে না — শুধু note/flag দেখাবে, user-কে সেই correction
         **DO-র single-row Edit screen থেকেই** করতে হবে।
-    - **একটা FO-তে multiple SKU/item** — (FO/SO + SKU) key-এর কারণে স্বাভাবিকভাবেই সাপোর্ট
-      করে, প্রতিটা আলাদা row/line হিসেবে independently resolve/validate হয়।
+    - **একটা FO-তে multiple SKU/item বা multiple shipment** — একই header-র multiple SKU এক DO-র multiple line; পরে আলাদা LR/invoice/date-এর same FO shipment আলাদা DO হিসেবে independently resolve/validate হয়।
 
 16. **DO Edit — "Edit Transporter Details" mechanism (SO03):**
     - লাইভ কোড-এ `DO01CreatePage.jsx` Edit mode (`isEditMode`/`editDcId`) আগে থেকেই আছে,

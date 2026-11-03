@@ -440,6 +440,18 @@ export function updateCSN(id, data) {
   return fetchProcurement("PUT", `/api/procurement/csns/${encodeURIComponent(id)}`, data);
 }
 
+export function getCsnTrackerCapability(companyId) {
+  return fetchProcurement("GET", "/api/procurement/csn-tracker-capability", undefined, { company_id: companyId });
+}
+
+export function holdCSN(id, data) {
+  return fetchProcurement("POST", `/api/procurement/csns/${encodeURIComponent(id)}/hold`, { ...data, action: "HOLD" });
+}
+
+export function releaseCSN(id, data) {
+  return fetchProcurement("POST", `/api/procurement/csns/${encodeURIComponent(id)}/release`, { ...data, action: "RELEASE" });
+}
+
 export function createSubCSN(id, data) {
   return fetchProcurement("POST", `/api/procurement/csns/${encodeURIComponent(id)}/sub-csns`, data);
 }
@@ -690,12 +702,32 @@ export function listFgStoMaterials(params) {
   return fetchProcurement("GET", "/api/procurement/fg-stos/materials", undefined, params);
 }
 
+export function listFgStoReceivingCompanies(params) {
+  return fetchProcurement("GET", "/api/procurement/fg-stos/receiving-companies", undefined, params);
+}
+
+export function getFgStoLastPaymentTerm(params) {
+  return fetchProcurement("GET", "/api/procurement/fg-stos/last-payment-term", undefined, params);
+}
+
 export function getFgStoLaneTransit(params) {
   return fetchProcurement("GET", "/api/procurement/fg-stos/lane-transit", undefined, params);
 }
 
 export function createFgSto(data) {
   return fetchProcurement("POST", "/api/procurement/fg-stos", data);
+}
+
+export function listFgStos(params) {
+  return fetchProcurement("GET", "/api/procurement/fg-stos", undefined, params);
+}
+
+export function cancelFgSto(id, data) {
+  return fetchProcurement("POST", `/api/procurement/fg-stos/${encodeURIComponent(id)}/cancel`, data);
+}
+
+export function getFgSto(id) {
+  return fetchProcurement("GET", `/api/procurement/fg-stos/${encodeURIComponent(id)}`);
 }
 
 export function createSTO(data) {

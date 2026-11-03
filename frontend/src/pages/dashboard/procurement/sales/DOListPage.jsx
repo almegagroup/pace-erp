@@ -159,7 +159,13 @@ export default function DOListPage() {
   });
 
   function openCreateDO() {
-    openScreen(OPERATION_SCREENS.PROC_DO_CREATE.screen_code);
+    // The company selected on SO03 is the transaction company the user
+    // intends to dispatch from.  Preserve it for DO01; otherwise DO01 falls
+    // back to the runtime default company and its SO picker searches the
+    // wrong company after Create DO is clicked from a different company.
+    openScreen(OPERATION_SCREENS.PROC_DO_CREATE.screen_code, {
+      context: { do01FormValues: { companyId: effectiveCompanyId } },
+    });
     navigate("/dashboard/procurement/delivery-orders/create");
   }
 

@@ -25,11 +25,14 @@ import {
   getAllAlertCounts,
   getCSNFieldHistory,
   getCSNTracker,
+  getCsnTrackerCapability,
+  holdCSN,
   listCHAs,
   listCSNTrackerLayouts,
   listPorts,
   listTransporters,
   previewCSNDispatchQty,
+  releaseCSN,
   updateCSN,
 } from "../procurementApi.js";
 
@@ -49,7 +52,7 @@ async function fetchAllTrackerRows(params) {
   }
   return { data: all, total: all.length };
 }
-const STATUS_OPTIONS = ["ORD", "TRN", "GED", "GRD", "CAN", "KOF"];
+const STATUS_OPTIONS = ["ORD", "TRN", "HLD", "GED", "GRD", "CAN", "KOF"];
 const STATUS_LABELS = {
   ORD: "Ordered",
   TRN: "In Transit",
@@ -57,6 +60,7 @@ const STATUS_LABELS = {
   GRD: "GRN Done",
   CAN: "Cancelled",
   KOF: "Knocked Off",
+  HLD: "On Hold",
 };
 const YES_NO_OPTIONS = [
   { value: true, label: "Yes" },
@@ -204,6 +208,8 @@ function getBadgeTone(value) {
       return "bg-[#E24B4A] text-[#FCEBEB]";
     case "KOF":
       return "bg-[#5F5E5A] text-[#F1EFE8]";
+    case "HLD":
+      return "bg-[#F5C26B] text-[#5C2D00]";
     case "TRN":
       return "bg-[#B5D4F4] text-[#042C53]";
     case "ORD":
@@ -499,10 +505,12 @@ export default function CSNTrackerPage() {
   const [showSaveLayout, setShowSaveLayout] = useState(false);
   const [selectedLayoutId, setSelectedLayoutId] = useState("");
   const [dispatchDialog, setDispatchDialog] = useState(null);
+  const [holdDialog, setHoldDialog] = useState(null);
   const [activeHistoryKey, setActiveHistoryKey] = useState("");
   const [histories, setHistories] = useState({});
   const [loadingHistoryKey, setLoadingHistoryKey] = useState("");
   const dateFieldPickerRef = useRef(null);
+  const holdReasonRef = useRef(null);
 
   const columns = useMemo(() => buildColumnDefs(), []);
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
@@ -809,6 +817,60 @@ export default function CSNTrackerPage() {
     }
   }
 
+  async function handleHoldTransition(row) {
+    const scopedCompanyId = effectiveCompanyId || row?.company_id || "";
+    if (!row?.id || !scopedCompanyId) return;
+    const status = toText(row.status).toUpperCase();
+    if (status === "HLD") {
+      if (row.hold_root_csn_id && row.hold_root_csn_id !== row.id) {
+        setError("This Sub-CSN is held with its Mother CSN. Release the Mother CSN to release the whole consignment.");
+        return;
+      }
+      const confirmed = await openActionConfirm({
+        eyebrow: "Consignment Hold",
+        title: "Release this CSN?",
+        message: "The latest edited CSN values will be counted in PO22 planning again after the next planning run.",
+        confirmLabel: "Release CSN",
+      });
+      if (!confirmed) return;
+      setSavingRowId(row.id);
+      try {
+        await releaseCSN(row.id, { company_id: scopedCompanyId });
+        await invalidateTracker();
+        setNotice("CSN released. It will be considered in the next PO22 planning run.");
+        resetDraft(null);
+      } catch (transitionError) {
+        setError(transitionError instanceof Error ? transitionError.message : "PROCUREMENT_CSN_RELEASE_FAILED");
+      } finally { setSavingRowId(""); }
+      return;
+    }
+    setHoldDialog({ row, reason: "" });
+  }
+
+  async function submitHold() {
+    const row = holdDialog?.row;
+    const reason = toText(holdDialog?.reason);
+    const scopedCompanyId = effectiveCompanyId || row?.company_id || "";
+    if (!row?.id || !scopedCompanyId) return;
+    if (!reason) {
+      setError("A Hold reason is required.");
+      holdReasonRef.current?.focus();
+      return;
+    }
+    setSavingRowId(row.id);
+    setError("");
+    setNotice("");
+    try {
+      await holdCSN(row.id, { company_id: scopedCompanyId, reason });
+      await invalidateTracker();
+      setNotice("CSN placed on Hold. It remains editable but is excluded from PO22 planning.");
+      resetDraft(null);
+      setHoldDialog(null);
+    } catch (transitionError) {
+      setError(transitionError instanceof Error ? transitionError.message : "PROCUREMENT_CSN_HOLD_FAILED");
+    } finally { setSavingRowId(""); }
+  }
+
   async function saveLayout() {
     try {
       setError("");
@@ -933,6 +995,23 @@ export default function CSNTrackerPage() {
   }
 
   const currentRow = rows.find((row) => row.id === expandedRowId) || null;
+  // View-only users (CAP_*_VIEW, or a sending company looking at the receiver's CSN) get the drawer
+  // read-only: no inputs, Save, Hold/Release or Sub CSN. Safe default until the capability is known.
+  const rowCapabilityQuery = useQuery({
+    queryKey: ["procurement", "csn-tracker-capability", currentRow?.company_id],
+    queryFn: () => getCsnTrackerCapability(currentRow.company_id),
+    enabled: Boolean(currentRow?.company_id) && !currentRow?.read_only_for_viewer,
+    select: (d) => d?.data ?? d ?? {},
+  });
+  const canEditCurrentRow = Boolean(currentRow) && !currentRow.read_only_for_viewer && rowCapabilityQuery.data?.can_edit === true;
+  const layoutCapabilityQuery = useQuery({
+    queryKey: ["procurement", "csn-tracker-capability", effectiveCompanyId],
+    queryFn: () => getCsnTrackerCapability(effectiveCompanyId),
+    enabled: Boolean(effectiveCompanyId),
+    select: (d) => d?.data ?? d ?? {},
+  });
+  const canWriteLayouts = layoutCapabilityQuery.data?.can_write === true;
+  const canDeleteLayouts = layoutCapabilityQuery.data?.can_delete === true;
   const currentGroupOptions = currentRow?.material_group_options || [];
   const subCsnsForCurrentRow = useMemo(
     () => rows.filter((entry) => entry.mother_csn_id === expandedRowId),
@@ -948,6 +1027,10 @@ export default function CSNTrackerPage() {
     if (event.key === "Escape") {
       event.preventDefault();
       resetDraft(null);
+      return;
+    }
+    if (event.ctrlKey && event.key.toLowerCase() === "s" && !canEditCurrentRow) {
+      event.preventDefault(); // view-only: swallow the browser Save dialog, do nothing
       return;
     }
     if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "s" && currentRowSupportsSubCsn) {
@@ -1021,7 +1104,7 @@ export default function CSNTrackerPage() {
                 </div>
                 <div className="flex items-center gap-1">
                   <IconActionButton glyph="CL" title="Columns" onClick={() => setShowColumns(true)} />
-                  <IconActionButton glyph="LY" title="Save layout" onClick={() => setShowSaveLayout(true)} />
+                  {canWriteLayouts ? <IconActionButton glyph="LY" title="Save layout" onClick={() => setShowSaveLayout(true)} /> : null}
                   <IconActionButton
                     glyph={exporting ? "..." : "XLS"}
                     title={exporting ? "Exporting" : "Export Excel (the rows the grid shows)"}
@@ -1156,7 +1239,7 @@ export default function CSNTrackerPage() {
                     <button
                       type="button"
                       onClick={() => void removeSelectedLayout()}
-                      disabled={!selectedLayoutId}
+                      disabled={!selectedLayoutId || !canDeleteLayouts}
                       className="inline-flex h-[26px] items-center border border-rose-300 bg-rose-50 px-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-rose-900 disabled:opacity-50"
                     >
                       Delete
@@ -1216,7 +1299,7 @@ export default function CSNTrackerPage() {
         actions={
           currentRow ? (
             <>
-              {!currentRow.mother_csn_id ? (
+              {canEditCurrentRow && !currentRow.mother_csn_id ? (
                 <IconActionButton
                   glyph="+"
                   title="Create Sub CSN (Ctrl+Shift+S)"
@@ -1226,20 +1309,36 @@ export default function CSNTrackerPage() {
                 />
               ) : null}
               <IconActionButton glyph="OP" title="Open full detail (Ctrl+O)" onClick={() => openDetail(currentRow)} />
-              <IconActionButton
-                glyph="SV"
-                title={savingRowId === currentRow.id ? "Saving" : "Save (Ctrl+S)"}
-                onClick={() => void saveExpandedRow(currentRow)}
-                disabled={savingRowId === currentRow.id}
-                tone="primary"
-              />
+              {canEditCurrentRow && (["ORD", "TRN", "HLD"].includes(toText(currentRow.status).toUpperCase())) ? (
+                <IconActionButton
+                  glyph={toText(currentRow.status).toUpperCase() === "HLD" ? "RL" : "HD"}
+                  title={toText(currentRow.status).toUpperCase() === "HLD" ? "Release CSN from Hold" : "Put CSN on Hold"}
+                  onClick={() => void handleHoldTransition(currentRow)}
+                  disabled={savingRowId === currentRow.id}
+                  tone={toText(currentRow.status).toUpperCase() === "HLD" ? "primary" : "danger"}
+                />
+              ) : null}
+              {canEditCurrentRow ? (
+                <IconActionButton
+                  glyph="SV"
+                  title={savingRowId === currentRow.id ? "Saving" : "Save (Ctrl+S)"}
+                  onClick={() => void saveExpandedRow(currentRow)}
+                  disabled={savingRowId === currentRow.id}
+                  tone="primary"
+                />
+              ) : null}
               <IconActionButton glyph="X" title="Close (Esc)" onClick={() => resetDraft(null)} />
             </>
           ) : null
         }
       >
         {currentRow && draft ? (
-          <div className="grid gap-2">
+          <fieldset disabled={!canEditCurrentRow} className="grid min-w-0 gap-2 border-0 p-0 disabled:opacity-90">
+            {!canEditCurrentRow && !rowCapabilityQuery.isLoading ? (
+              <p className="border border-amber-200 bg-amber-50 px-3 py-1.5 text-[11px] text-amber-800">
+                View only — {currentRow.read_only_for_viewer ? "this consignment belongs to the receiving company." : "your access does not permit editing the CSN Tracker."}
+              </p>
+            ) : null}
             <TrackerSection eyebrow="Allocation" title="Dispatch balance and commercial flags">
               <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))" }}>
                 <EditField label="Dispatch Qty" rowId={currentRow.id} fieldName="dispatch_qty" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
@@ -1600,7 +1699,7 @@ export default function CSNTrackerPage() {
                 {currentRow.mother_csn_display_number || "-"}
               </span>
             </div>
-          </div>
+          </fieldset>
         ) : (
           <p className="p-6 text-center text-sm text-slate-400">Loading...</p>
         )}
@@ -1652,6 +1751,37 @@ export default function CSNTrackerPage() {
             </select>
           </label>
         </div>
+      </ModalBase>
+
+      <ModalBase
+        visible={Boolean(holdDialog)}
+        eyebrow="Consignment Hold"
+        title="Put this CSN on Hold?"
+        message="It will remain editable, but no CSN alert or PO22 planning total will consider it until you release it. A Hold reason is retained in the audit trail."
+        onEscape={() => setHoldDialog(null)}
+        initialFocusRef={holdReasonRef}
+        actions={
+          <>
+            <button type="button" onClick={() => setHoldDialog(null)} disabled={Boolean(savingRowId)} className="border border-slate-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50">
+              Cancel
+            </button>
+            <button type="button" onClick={() => void submitHold()} disabled={!toText(holdDialog?.reason) || Boolean(savingRowId)} className="border border-amber-700 bg-amber-100 px-4 py-2 text-sm font-semibold text-amber-950 disabled:cursor-not-allowed disabled:opacity-50">
+              {savingRowId ? "Putting on Hold…" : "Put on Hold"}
+            </button>
+          </>
+        }
+      >
+        <label className="grid gap-1 text-sm font-medium text-slate-700">
+          Hold reason <span className="text-rose-700">*</span>
+          <textarea
+            ref={holdReasonRef}
+            value={holdDialog?.reason ?? ""}
+            onChange={(event) => setHoldDialog((current) => ({ ...current, reason: event.target.value }))}
+            rows={3}
+            placeholder="State why this consignment must be excluded temporarily"
+            className="min-h-[78px] border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-amber-600"
+          />
+        </label>
       </ModalBase>
 
       <ModalBase

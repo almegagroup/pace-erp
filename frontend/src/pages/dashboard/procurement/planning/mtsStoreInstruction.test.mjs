@@ -77,3 +77,20 @@ test("simple Store view: one 'For' text, one wait quantity, one plain note", asy
   assert.match(note, /2 KG depends on a lot nobody has ordered/);
   assert.match(note, /1 KG is not covered by any stock or order/);
 });
+
+import { groupedItemRows, usageConsolidatedRows, usageDetailRows } from "./mtsStoreInstruction.js";
+
+test("Receipt tab drops standalone items; Usage tab sums one item across its parent/child groups per period", () => {
+  const base = { period: "1 Nov", period_order: 1, period_from: "2026-11-01", period_to: "2026-11-30", uom: "KG", use_stock: 0, use_arrival: 0, use_assumed: 0, use_lot: 0 };
+  const rows = [
+    { ...base, key: "a", item: "RP-4099", key_id: "m1", group: "RDP", mother: "PUTTY", child: "EXT", use_stock: 100, use_arrival: 20 },
+    { ...base, key: "b", item: "RP-4099", key_id: "m1", group: "RDP", mother: "TLA", child: "TLA GREY", use_stock: 30 },
+    { ...base, key: "c", item: "DISPELAIR", key_id: "m2", group: "", mother: "CTG", child: "CTG", use_stock: 8 },
+    { ...base, key: "d", item: "IDLE", key_id: "m3", group: "G", mother: "CTG", child: "CTG" },
+  ];
+  assert.deepEqual(groupedItemRows(rows).map((r) => r.key), ["a", "b", "d"]);
+  assert.equal(usageDetailRows(rows).length, 3, "zero-use row dropped, standalone kept");
+  const total = usageConsolidatedRows(rows);
+  assert.equal(total.find((r) => r.key_id === "m1").use_qty, 150);
+  assert.equal(total.length, 2);
+});

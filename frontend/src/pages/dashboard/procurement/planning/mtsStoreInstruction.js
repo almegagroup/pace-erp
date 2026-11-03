@@ -132,3 +132,43 @@ export function simpleStoreNote(row, fmt = (q) => String(q)) {
   if ((row.not_backed ?? 0) > 0.0005) parts.push(`${fmt(row.not_backed)} is not covered by any stock or order`);
   return parts.join(" · ");
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Two-tab Store report (owner 2026-10-30).
+//   Tab 1 "Receipt & hold": only items that belong to a material group (standalone items are left out) — per period, per
+//        parent/child group: issue now (stock in hand), wait for receipt, keep aside after the period.
+//   Tab 2 "Usage": per period, per item, per parent/child group: how much is used; beside it the consolidated total per item × period.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Total planned use of a Store row: stock in hand + everything that still waits for a receipt. */
+export function storeUseQty(row) {
+  return round((row.use_stock ?? 0) + storeWaitQty(row));
+}
+
+/** Tab 1: keep only items that sit in a material group; a standalone item (no group) is not shown. */
+export function groupedItemRows(rows) {
+  return (rows ?? []).filter((r) => String(r.group ?? "").trim() !== "");
+}
+
+/** Tab 2 (left): one row per Period × Item × parent group; the child groups of that parent stay on the row. Zero-use rows are dropped. */
+export function usageDetailRows(rows) {
+  return (rows ?? [])
+    .map((r) => ({
+      key: `${r.key}|usage`, period: r.period, period_order: r.period_order ?? 0, period_from: r.period_from ?? null, period_to: r.period_to ?? null,
+      item: r.item, key_id: r.key_id, material_id: r.material_id ?? null, mother: r.mother ?? "", child: r.child ?? "", uom: r.uom ?? "", use_qty: storeUseQty(r),
+    }))
+    .filter((r) => r.use_qty > 0.0005)
+    .sort((a, b) => a.period_order - b.period_order || String(a.item).localeCompare(String(b.item)) || String(a.mother || "~").localeCompare(String(b.mother || "~")));
+}
+
+/** Tab 2 (right): the consolidated total — one row per Period × Item, summed over every parent/child group. */
+export function usageConsolidatedRows(rows) {
+  const map = new Map();
+  for (const r of usageDetailRows(rows)) {
+    const key = `${r.period_order}|${r.key_id}`;
+    const seen = map.get(key) ?? { key, period: r.period, period_order: r.period_order, period_from: r.period_from, period_to: r.period_to, item: r.item, key_id: r.key_id, material_id: r.material_id, uom: r.uom, use_qty: 0 };
+    seen.use_qty = round(seen.use_qty + r.use_qty);
+    map.set(key, seen);
+  }
+  return [...map.values()].sort((a, b) => a.period_order - b.period_order || String(a.item).localeCompare(String(b.item)));
+}

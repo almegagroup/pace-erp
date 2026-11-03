@@ -24,7 +24,7 @@ const company = (id, name, extra = {}) => ({
 test("rolling plan workbook: every tab, both companies, PLAN totals per group", async () => {
   const wb = buildRollingPlanWorkbook({ companies: [company("a", "Almeha Coatings"), company("b", "Jayashree Industries")], asOf: "2026-10-21" });
   const names = wb.worksheets.map((s) => s.name);
-  assert.deepEqual(names, ["SUMMARY", "PLAN", "RM_PLANNING", "PM_PLANNING", "Almeha Coatings RM_PM", "Jayashree Industries RM_PM", "BUY_PLAN", "STORE_INSTRUCTIONS", "STORE_EXCESS", "STORE_TRANSFERS", "STORE_DETAIL", "ARRIVALS", "WATERFALL_SUMMARY", "WATERFALL_LEVELS", "WATERFALL_FLOW", "WATERFALL_WHO_HOLDS"]);
+  assert.deepEqual(names, ["SUMMARY", "PLAN", "RM_PLANNING", "PM_PLANNING", "Almeha Coatings RM_PM", "Jayashree Industries RM_PM", "BUY_PLAN", "STORE_INSTRUCTIONS", "STORE_EXCESS", "STORE_TRANSFERS", "STORE_DETAIL", "ARRIVALS", "Almeha Coatings 1 DATES", "Almeha Coatings 2 LEVELS", "Jayashree Industries 1 DATES", "Jayashree Industries 2 LEVELS", "WATERFALL_SUMMARY", "WATERFALL_LEVELS", "WATERFALL_FLOW", "WATERFALL_WHO_HOLDS"]);
   const buffer = await wb.xlsx.writeBuffer();
   assert.ok(buffer.byteLength > 5000, "valid xlsx written");
   const rm = wb.getWorksheet("RM_PLANNING");
@@ -40,6 +40,17 @@ test("PLAN matrix: company × month columns, empty SKUs dropped", () => {
   assert.equal(m.entries.length, 1);
   assert.equal(m.entries[0].qty.get("a|2026-10"), 8371);
   assert.deepEqual(m.columns.slice(0, 3).map((c) => c.basis), ["FINAL", "ROLLING", "No plan"], "plan basis per month");
+});
+
+test("SUMMARY: held CSNs are visible but stay outside planning totals", () => {
+  const wb = buildRollingPlanWorkbook({ companies: [company("a", "Almeha Coatings", {
+    held_csns: [{ csn_number: "3000000999", material: "VAE A", supplier: "DAIREN", qty: 25000, uom: "KG", previous_status: "TRN", reason: "Vendor document correction", held_at: "2026-10-31", eta: "2026-11-06" }],
+  })], asOf: "2026-10-31" });
+  const summary = wb.getWorksheet("SUMMARY");
+  const cells = [];
+  summary.eachRow((row) => row.eachCell((cell) => cells.push(String(cell.value ?? ""))));
+  assert.ok(cells.includes("CSNs on Hold — excluded from every planning total"));
+  assert.ok(cells.includes("3000000999"));
 });
 
 test("sheet names: 31 chars, no illegal characters, unique", () => {

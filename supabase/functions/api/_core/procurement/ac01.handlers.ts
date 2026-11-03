@@ -126,6 +126,22 @@ async function getCrcpMirrorOwnerForGrn(grn: JsonRecord): Promise<string | null>
   return null;
 }
 
+// The ITC owner of a GRN (owner rule, 2026-11-02): the company that issued the PO the GRN is received
+// against; for a CRCP STO receipt the receiving company; otherwise the GRN's own company. The ITC owner
+// has full AC01 access to the GRN's accounting row, exactly like the unloading (GRN) company.
+async function resolveItcOwnerCompanyIdForGrn(grn: JsonRecord): Promise<string> {
+  const mirror = await getCrcpMirrorOwnerForGrn(grn);
+  if (mirror) return mirror;
+  if (grn.po_id) {
+    const { data: po, error } = await serviceRoleClient.schema("erp_procurement").from("purchase_order")
+      .select("company_id").eq("id", String(grn.po_id)).maybeSingle();
+    if (error) throw new Error("AC01_CRCP_OWNER_SOURCE_FETCH_FAILED");
+    const poCompanyId = toRelationId((po as JsonRecord | null)?.company_id);
+    if (poCompanyId) return poCompanyId;
+  }
+  return toRelationId(grn.company_id);
+}
+
 function parsePositiveInt(value: unknown, fallback: number): number {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback;
@@ -582,7 +598,12 @@ function buildListRow(
   // isItcOwnerViewer/isEditableForViewer unchanged for the ordinary case
   // (itcOwnerCompanyId === viewerCompanyId was already true for the GRN's
   // own company either way).
+  // Business rule (owner, 2026-11-02): the company that issued the PO is the ITC owner of every
+  // GRN received against that PO. A GRN with no landed-cost row yet (nothing saved in AC01) used
+  // to show its own receiving company here, so a CMP011 PO received at CMP005 read "CMP005".
+  const poCompanyId = po?.company_id ? String(po.company_id) : null;
   const itcOwnerCompanyId = crcpMirrorOwnerByGrnId.get(String(grn.id))
+    ?? poCompanyId
     ?? (landedCost?.itc_owner_company_id
       ? String(landedCost.itc_owner_company_id)
       : String(grn.company_id));
@@ -595,7 +616,8 @@ function buildListRow(
   // only visible because the viewer is the ITC owner of a GRN some OTHER
   // company actually received (never direct ownership). Frontend uses this
   // to grey the row out and lock its drawer read-only.
-  const isEditableForViewer = !viewerCompanyId || String(grn.company_id) === viewerCompanyId;
+  // Editable for the unloading company AND for the ITC owner (the real ACL WRITE check is on save).
+  const isEditableForViewer = !viewerCompanyId || String(grn.company_id) === viewerCompanyId || itcOwnerCompanyId === viewerCompanyId;
   const rowCostLines = landedCost ? (costLinesByLc.get(String(landedCost.id)) ?? []) : [];
   const rowDeductionLines = landedCost ? (deductionLinesByLc.get(String(landedCost.id)) ?? []) : [];
   const suggestedPayables = computeSuggestedPayables(grn, rowCostLines, rowDeductionLines);
@@ -785,6 +807,9 @@ export async function listAC01GRNsHandler(
     const dateField = toTrimmedString(url.searchParams.get("date_field")) || "invoice_date";
     const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
     const dateTo = toTrimmedString(url.searchParams.get("date_to"));
+    // A SPLIT source GRN (the physical receipt of an invoice split) repeats the qty and landed cost of its
+    // invoice GRNs and is not payable, so the list leaves it out unless include_split_sources=1.
+    const includeSplitSources = ["1", "true"].includes(toTrimmedString(url.searchParams.get("include_split_sources")).toLowerCase());
     const limit = parsePositiveInt(url.searchParams.get("limit"), 100);
     const offset = parsePositiveInt(url.searchParams.get("offset"), 0) - 1 >= 0
       ? parsePositiveInt(url.searchParams.get("offset"), 1) - 1
@@ -793,79 +818,31 @@ export async function listAC01GRNsHandler(
     const ALLOWED_DATE_FIELDS = new Set(["invoice_date", "grn_date", "posting_date"]);
     const dateColumn = ALLOWED_DATE_FIELDS.has(dateField) ? dateField : "invoice_date";
 
-    // AC01 "ITC To" + cross-company visibility: a company sees a GRN when it
-    // owns it, when a landed-cost record names it as ITC owner, OR when the
-    // receipt belongs to one of its CRCP POs/STOs. The latter is essential
-    // before the first landed-cost header exists; otherwise a Bill-To company
-    // cannot see the very GRN whose quality/payment/freight it must monitor.
-    // Write access remains strictly GRN-company-scoped via canWriteAC01().
-    let itcOwnerGrnIds: string[] = [];
+    // AC01 "ITC To" + cross-company visibility: a company sees a GRN when it owns it, when a
+    // landed-cost record names it as ITC owner, OR when the receipt belongs to one of its CRCP POs/STOs
+    // (the Bill-To must be able to see a GRN before the first landed-cost header exists).
+    // The rule runs in the database (ac01_visible_goods_receipts, SETOF goods_receipt) and is paged
+    // with .range() like any table: no id list in the URL, no cap, nothing silently dropped.
+    // Write access is separate: saveAC01GRNCostHandler checks the unloading company and the ITC owner.
     let crcpMirrorOwnerByGrnId = new Map<string, string>();
     if (companyId) {
-      const [itcOwnerLcResponse, crcpMirrorOwners] = await Promise.all([
-        serviceRoleClient
-          .schema("erp_procurement").from("landed_cost")
-          .select("grn_id").eq("itc_owner_company_id", companyId).not("grn_id", "is", null),
-        getCrcpMirrorOwnerByGrnId(companyId),
-      ]);
-      if (itcOwnerLcResponse.error) {
-        return ac01ErrorResponse(req, ctx, "AC01_ITC_OWNER_FETCH_FAILED", 500, "Unable to resolve AC01 ITC-owner GRNs.");
-      }
-      crcpMirrorOwnerByGrnId = crcpMirrorOwners;
-      itcOwnerGrnIds = uniqueRelationIds([
-        ...((itcOwnerLcResponse.data ?? []) as JsonRecord[]).map((row) => row.grn_id),
-        ...crcpMirrorOwnerByGrnId.keys(),
-      ]);
-      // This list is inlined into one .or() URL below. Keep the established
-      // cap until the list becomes large enough to justify a dedicated view.
-      itcOwnerGrnIds = itcOwnerGrnIds.slice(0, 300);
+      crcpMirrorOwnerByGrnId = await getCrcpMirrorOwnerByGrnId(companyId);
     }
 
-    let query = serviceRoleClient
-      .schema("erp_procurement")
-      .from("goods_receipt")
-      .select("*", { count: "exact" })
+    // The text search (GRN / invoice / LR number, vendor name, material name or external code) now runs
+    // inside the database function as well, so a term that matches many vendors or materials cannot lose
+    // rows. companyId empty = every company (SA/GA view), the function treats a NULL company that way.
+    // deno-lint-ignore no-explicit-any
+    let query: any = (serviceRoleClient.schema("erp_procurement") as any)
+      .rpc("ac01_visible_goods_receipts", { p_company_id: companyId || null, p_search: search || null }, { count: "exact" })
       .order("created_at", { ascending: false })
       .range(offset, offset + limit - 1);
 
-    if (companyId && itcOwnerGrnIds.length > 0) {
-      query = query.or(`company_id.eq.${companyId},id.in.(${itcOwnerGrnIds.join(",")})`);
-    } else if (companyId) {
-      query = query.eq("company_id", companyId);
-    }
+    if (!includeSplitSources) query = query.neq("status", "SPLIT");
     if (rateStatus === "PENDING") query = query.eq("rate_confirmed", false);
     if (rateStatus === "CONFIRMED") query = query.eq("rate_confirmed", true);
     if (dateFrom) query = query.gte(dateColumn, dateFrom);
     if (dateTo) query = query.lte(dateColumn, dateTo);
-    if (search) {
-      // goods_receipt has no denormalized supplier/item name (only vendor_id/
-      // material_id FKs) -- the placeholder ("GRN, invoice, item, supplier...")
-      // promised those fields but the filter below never actually matched
-      // them, live 2026-08-25 (business owner: "Time techno" typed against a
-      // visible TIME TECHNOPLAST LIMITED row returned zero results). Resolve
-      // matching vendor/material ids by name first, then OR them into the
-      // same filter as the existing grn/invoice/lr text match.
-      const [vendorMatchResp, materialMatchResp] = await Promise.all([
-        serviceRoleClient.schema("erp_master").from("vendor_master")
-          .select("id").ilike("vendor_name", `%${search}%`).limit(50),
-        serviceRoleClient.schema("erp_master").from("material_master")
-          .select("id").or(`material_name.ilike.%${search}%,external_code.ilike.%${search}%`).limit(50),
-      ]);
-      if (vendorMatchResp.error || materialMatchResp.error) {
-        return ac01ErrorResponse(req, ctx, "AC01_LIST_FAILED", 500, "Unable to list AC01 GRN rows.");
-      }
-      const vendorIdMatches = ((vendorMatchResp.data ?? []) as JsonRecord[]).map((row) => String(row.id));
-      const materialIdMatches = ((materialMatchResp.data ?? []) as JsonRecord[]).map((row) => String(row.id));
-
-      const orClauses = [
-        `grn_number.ilike.%${search}%`,
-        `invoice_number.ilike.%${search}%`,
-        `lr_number.ilike.%${search}%`,
-      ];
-      if (vendorIdMatches.length > 0) orClauses.push(`vendor_id.in.(${vendorIdMatches.join(",")})`);
-      if (materialIdMatches.length > 0) orClauses.push(`material_id.in.(${materialIdMatches.join(",")})`);
-      query = query.or(orClauses.join(","));
-    }
 
     const { data, error, count } = await query;
     if (error) {
@@ -994,6 +971,7 @@ export async function listAC01GRNsHandler(
       [
         ...landedCosts.map((lc) => toTrimmedString(lc.itc_owner_company_id)),
         ...crcpMirrorOwnerByGrnId.values(),
+        ...purchaseOrders.map((po) => toTrimmedString(po.company_id)),
       ].filter(Boolean),
     )].filter((id) => !companyMap.has(id));
     if (itcOwnerCompanyIds.length > 0) {
@@ -1194,8 +1172,8 @@ export async function getAC01GRNHandler(
     // deliberately works before the first landed-cost header exists.
     const crcpMirrorOwnerCompanyId = await getCrcpMirrorOwnerForGrn(grn as JsonRecord);
     const effectiveItcOwnerCompanyId = (
-      crcpMirrorOwnerCompanyId ?? toRelationId(landedCost?.itc_owner_company_id)
-    ) || toRelationId(grn.company_id);
+      crcpMirrorOwnerCompanyId ?? await resolveItcOwnerCompanyIdForGrn(grn as JsonRecord)
+    ) || toRelationId(landedCost?.itc_owner_company_id) || toRelationId(grn.company_id);
     let isDirectOwner = true;
     try {
       await assertCompanyScope(ctx, String(grn.company_id));
@@ -1214,11 +1192,11 @@ export async function getAC01GRNHandler(
     if (!isDirectOwner && !isItcOwnerViewer) {
       return ac01ErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
-    // Write access (canWriteAC01/requireAC01WriteAccess, saveAC01GRNCostHandler
-    // below) stays exactly as already locked -- strictly GRN-company-scoped,
-    // never widened to the ITC-owner mirror. This flag is read-only display
-    // metadata so the frontend can lock the drawer for a mirrored view.
-    const isEditableForViewer = isDirectOwner;
+    // Owner rule (2026-11-02): both the unloading company and the ITC owner can edit the GRN's AC01
+    // row (saveAC01GRNCostHandler enforces the same). This flag only tells the frontend whether to
+    // lock the drawer: an ITC-owner viewer needs AC01 WRITE in the ITC-owning company.
+    const isEditableForViewer = isDirectOwner
+      || (isItcOwnerViewer && await canWriteAC01(ctx, effectiveItcOwnerCompanyId));
 
     // §8A Foundation Rule -- the drawer never showed material/vendor identity
     // at all (only raw material_id/vendor_id sat unused on `grn`), unlike the
@@ -1353,7 +1331,7 @@ export async function getAC01GRNHandler(
     // §3.9.5 "GRN Split" — if this GRN was the original that got split, show
     // which new GRN(s) it became. Same reverse-lookup as the list endpoint.
     // And the reverse for an invoice GRN: which split source (physical receipt) it came from.
-    const [{ data: splitIntoRows }, { data: splitSourceRow }] = await Promise.all([
+    const [{ data: splitIntoRows }, { data: splitSourceRow }, { data: gstCorrectionRows, error: gstCorrectionError }] = await Promise.all([
       serviceRoleClient
         .schema("erp_procurement").from("goods_receipt")
         .select("grn_number, invoice_number, invoice_date, received_qty").eq("split_source_grn_id", grnId)
@@ -1362,9 +1340,20 @@ export async function getAC01GRNHandler(
         ? serviceRoleClient.schema("erp_procurement").from("goods_receipt")
           .select("grn_number").eq("id", String(grn.split_source_grn_id)).maybeSingle()
         : Promise.resolve({ data: null }),
+      serviceRoleClient
+        .schema("erp_procurement").from("ac01_gst_correction_audit")
+        .select("from_gst_pct, to_gst_pct, reason, corrected_by, corrected_at")
+        .eq("grn_id", grnId).order("corrected_at", { ascending: false }).limit(1),
     ]);
+    if (gstCorrectionError) {
+      return ac01ErrorResponse(req, ctx, "AC01_GST_AUDIT_FETCH_FAILED", 500, "Unable to fetch GST correction audit.");
+    }
     const splitIntoGrnNumbers = ((splitIntoRows ?? []) as JsonRecord[])
       .map((row) => toTrimmedString(row.grn_number)).filter(Boolean);
+    const latestGstCorrection = ((gstCorrectionRows ?? []) as JsonRecord[])[0] ?? null;
+    const gstCorrectorDisplayNames = latestGstCorrection?.corrected_by
+      ? await resolveUserDisplayNames([toTrimmedString(latestGstCorrection.corrected_by)])
+      : new Map<string, string>();
 
     return okResponse({
       ...grn,
@@ -1400,6 +1389,10 @@ export async function getAC01GRNHandler(
       material_sgst_amount: detailMaterialTax.sgstAmount,
       material_igst_amount: detailMaterialTax.igstAmount,
       invoice_total_value: Number((detailTaxableValue + detailMaterialTax.gstAmount).toFixed(4)),
+      latest_gst_correction: latestGstCorrection ? {
+        ...latestGstCorrection,
+        corrected_by_display: gstCorrectorDisplayNames.get(toTrimmedString(latestGstCorrection.corrected_by)) || null,
+      } : null,
       cost_per_unit: Number(computeLandedCostPerUnit(grn, landedCostTotalForView).toFixed(4)),
       vendor_suggested_payable: suggestedPayables.vendor,
       transporter_suggested_payable: suggestedPayables.transporter,
@@ -1429,7 +1422,7 @@ export async function saveAC01GRNCostHandler(
     const body = await parseBody(req);
 
     const { data: grn, error: grnError } = await serviceRoleClient
-      .schema("erp_procurement").from("goods_receipt").select("id, company_id, status").eq("id", grnId).single();
+      .schema("erp_procurement").from("goods_receipt").select("id, company_id, status, gst_pct, po_id, sto_id").eq("id", grnId).single();
     if (grnError || !grn) {
       return ac01ErrorResponse(req, ctx, "AC01_GRN_NOT_FOUND", 404, "GRN not found.");
     }
@@ -1438,16 +1431,42 @@ export async function saveAC01GRNCostHandler(
     if (toTrimmedString(grn.status).toUpperCase() === "SPLIT") {
       return ac01ErrorResponse(req, ctx, "AC01_GRN_SPLIT_READ_ONLY", 422, "This GRN was split into invoice GRNs. Enter cost and payable on those invoice GRNs instead.");
     }
-    try {
-      await assertCompanyScope(ctx, String(grn.company_id));
-    } catch {
+    // Owner rule (2026-11-02): the unloading company (GRN company) and the ITC owner (the company that
+    // issued the PO) can both edit this GRN's AC01 row, each through its own AC01 WRITE grant.
+    const itcOwnerCompanyId = await resolveItcOwnerCompanyIdForGrn(grn as JsonRecord);
+    let hasCompanyScope = false;
+    let canWrite = false;
+    for (const candidateCompanyId of new Set([String(grn.company_id), itcOwnerCompanyId])) {
+      try {
+        await assertCompanyScope(ctx, candidateCompanyId);
+      } catch {
+        continue;
+      }
+      hasCompanyScope = true;
+      if (await canWriteAC01(ctx, candidateCompanyId)) { canWrite = true; break; }
+    }
+    if (!hasCompanyScope) {
       return ac01ErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
     }
-    const forbidden = await requireAC01WriteAccess(req, ctx, String(grn.company_id));
-    if (forbidden) return forbidden;
+    if (!canWrite) {
+      return ac01ErrorResponse(req, ctx, "AC01_WRITE_FORBIDDEN", 403, "You do not have edit access to AC01 for this company.");
+    }
 
     const costLines = Array.isArray(body.cost_lines) ? body.cost_lines : [];
     const deductionLines = Array.isArray(body.deduction_lines) ? body.deduction_lines : [];
+    const suppliedGstPct = body.gst_pct != null ? Number(body.gst_pct) : null;
+    if (suppliedGstPct != null && (!Number.isFinite(suppliedGstPct) || suppliedGstPct < 0 || suppliedGstPct > 100)) {
+      return ac01ErrorResponse(req, ctx, "AC01_GST_PCT_INVALID", 422, "GST % must be between 0 and 100.");
+    }
+    // GST entered at GRN can be corrected by Accounts, but never silently.
+    // The RPC repeats this guard inside its transaction and records every
+    // actual change in the immutable AC01 GST correction audit table.
+    const currentGstPct = grn.gst_pct != null ? Number(grn.gst_pct) : null;
+    const gstPctChanged = suppliedGstPct != null
+      && (currentGstPct == null || Math.abs(suppliedGstPct - currentGstPct) > 0.000001);
+    if (gstPctChanged && !toTrimmedString(body.gst_correction_reason)) {
+      return ac01ErrorResponse(req, ctx, "AC01_GST_CORRECTION_REASON_REQUIRED", 422, "Enter the reason for changing GST %.");
+    }
 
     // Single atomic entry point — CLAUDE.md §8D. Never split this into
     // separate goods_receipt/landed_cost/*_line writes from TypeScript.
@@ -1460,7 +1479,8 @@ export async function saveAC01GRNCostHandler(
         p_last_mile_transporter_id: toTrimmedString(body.last_mile_transporter_id) || null,
         p_invoice_number: toTrimmedString(body.invoice_number) || null,
         p_invoice_date: toTrimmedString(body.invoice_date) || null,
-        p_gst_pct: body.gst_pct != null ? Number(body.gst_pct) : null,
+        p_gst_pct: suppliedGstPct,
+        p_gst_correction_reason: toTrimmedString(body.gst_correction_reason) || null,
         p_cost_lines: costLines,
         p_deduction_lines: deductionLines,
         p_reason: toTrimmedString(body.reason) || "AC01 landed cost save",
@@ -1482,7 +1502,9 @@ export async function saveAC01GRNCostHandler(
       });
 
     if (error) {
-      return ac01ErrorResponse(req, ctx, "AC01_SAVE_FAILED", 500, error.message ?? "Unable to save AC01 GRN cost.");
+      const message = error.message ?? "Unable to save AC01 GRN cost.";
+      const isGstValidationError = message.includes("AC01_GST_");
+      return ac01ErrorResponse(req, ctx, isGstValidationError ? message : "AC01_SAVE_FAILED", isGstValidationError ? 422 : 500, message);
     }
 
     // A commercial split has many invoice-only GRNs but exactly one physical

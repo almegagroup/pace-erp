@@ -16,6 +16,7 @@ import { Link } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
+import ModalBase from "../../../../components/layer/ModalBase.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
@@ -197,7 +198,8 @@ function computeLivePreview(grn, draft, costLines, deductionLines) {
         : 0;
   const materialGstPct = draft.gst_pct !== "" && draft.gst_pct != null ? Number(draft.gst_pct) : (grn.gst_pct != null ? Number(grn.gst_pct) : 0);
   const purchaseCost = effectiveRate * consideredQty;
-  const purchaseCostGross = purchaseCost * (1 + materialGstPct / 100);
+  const materialGstAmount = purchaseCost * materialGstPct / 100;
+  const purchaseCostGross = purchaseCost + materialGstAmount;
   const baseUomRate = hasPackConversion ? effectiveRate / perPackQty : effectiveRate;
   const consideredQtyBase = hasPackConversion ? consideredQty * perPackQty : consideredQty;
 
@@ -243,6 +245,9 @@ function computeLivePreview(grn, draft, costLines, deductionLines) {
     // effectiveRate/purchaseCost this function already used internally for
     // vendorSuggested's gross-up, just exposed here too.
     itemValue: purchaseCost,
+    materialGstPct,
+    materialGstAmount,
+    invoiceTotal: purchaseCostGross,
     landedCostTotal,
     landedCostPerUnit,
     consideredQtyBase,
@@ -530,6 +535,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
   const [rateStatus, setRateStatus] = useState("");
+  // A SPLIT source GRN repeats the same qty and landed cost as its invoice GRNs, so it is hidden by default (totals and Excel stay single).
+  const [showSplitSources, setShowSplitSources] = useState(false);
   const [selectedGrnId, setSelectedGrnId] = useState(initialGrnId);
   const [drawerOpen, setDrawerOpen] = useState(Boolean(initialGrnId));
   const [draft, setDraft] = useState(null);
@@ -539,6 +546,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   const [invoiceVerificationSnapshot, setInvoiceVerificationSnapshot] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [gstCorrectionReasonOpen, setGstCorrectionReasonOpen] = useState(false);
+  const gstCorrectionReasonRef = useRef(null);
 
   // Last mile transporter -- search-and-select against Transporter Master,
   // same mechanism GRN's own Transporter tab uses (GRNPostFlow.jsx), plus an
@@ -607,7 +616,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   }, [companyId, defaultCompanyId]);
 
   const listQuery = useQuery({
-    queryKey: ["ac01", "grns", { companyId, search, dateField, dateFrom, dateTo, rateStatus }],
+    queryKey: ["ac01", "grns", { companyId, search, dateField, dateFrom, dateTo, rateStatus, showSplitSources }],
     queryFn: () =>
       listAllAC01GRNs({
         company_id: companyId || undefined,
@@ -616,6 +625,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         date_from: dateFrom || undefined,
         date_to: dateTo || undefined,
         rate_status: rateStatus || undefined,
+        include_split_sources: showSplitSources ? "1" : undefined,
       }),
     enabled: Boolean(companyId),
   });
@@ -685,6 +695,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
       considered_qty: grn.considered_qty ?? grn.ge_qty ?? grn.received_qty ?? "",
       revised_payment_date: toDDMMYYYY(grn.revised_payment_date),
       gst_pct: grn.gst_pct ?? "",
+      gst_correction_reason: "",
       last_mile_transporter_id: grn.last_mile_transporter_id ?? "",
       vendor_payable_override: grn.vendor_payable_override ?? "",
       transporter_payable_override: grn.transporter_payable_override ?? "",
@@ -744,6 +755,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
     setInvoiceVerified(false);
     setInvoiceVerificationSnapshot("");
     setError("");
+    setGstCorrectionReasonOpen(false);
     setLastMileTransporterName("");
     setLastMileTransporterSearch("");
     setLmtCreateOpen(false);
@@ -753,6 +765,19 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
 
   async function handleSave() {
     if (effectiveReadOnly || !selectedGrnId || !draft) return;
+    const enteredGstPct = draft.gst_pct === "" ? null : Number(draft.gst_pct);
+    if (enteredGstPct != null && (!Number.isFinite(enteredGstPct) || enteredGstPct < 0 || enteredGstPct > 100)) {
+      setError("GST % must be between 0 and 100.");
+      return;
+    }
+    const storedGstPct = grnDetailQuery.data?.gst_pct != null ? Number(grnDetailQuery.data.gst_pct) : null;
+    const gstPctChanged = enteredGstPct != null
+      && (storedGstPct == null || Math.abs(enteredGstPct - storedGstPct) > 0.000001);
+    if (gstPctChanged && !draft.gst_correction_reason?.trim()) {
+      setError("");
+      setGstCorrectionReasonOpen(true);
+      return;
+    }
     if (!invoiceVerified) {
       setError('Check "I Verify" before saving.');
       return;
@@ -765,7 +790,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         last_mile_transporter_id: draft.last_mile_transporter_id || null,
         invoice_number: draft.invoice_number || null,
         invoice_date: draft.invoice_date ? toISODate(draft.invoice_date) : null,
-        gst_pct: draft.gst_pct === "" ? null : Number(draft.gst_pct),
+        gst_pct: enteredGstPct,
+        gst_correction_reason: draft.gst_correction_reason?.trim() || null,
         considered_qty: draft.considered_qty === "" ? null : Number(draft.considered_qty),
         invoice_verified: invoiceVerified,
         revised_payment_date: draft.revised_payment_date ? toISODate(draft.revised_payment_date) : null,
@@ -898,7 +924,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
             key: "bulk-component-map",
             label: "Bulk Component Map",
             onClick: () => openScreenWithContext(OPERATION_SCREENS.PROC_BULK_COMPONENT_MAP.screen_code, {
-              origin: "AC01", companyId, ac01Filters: { search, date_field: dateField, date_from: dateFrom, date_to: dateTo, rate_status: rateStatus },
+              origin: "AC01", companyId, ac01Filters: { search, date_field: dateField, date_from: dateFrom, date_to: dateTo, rate_status: rateStatus, include_split_sources: showSplitSources ? "1" : undefined },
             }),
             disabled: !companyId,
           }] : []),
@@ -950,6 +976,10 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                   <option value="PENDING">Rate pending</option>
                   <option value="CONFIRMED">Confirmed</option>
                 </select>
+              </label>
+              <label className="flex h-[26px] items-center gap-1 self-end text-[11px] font-medium text-slate-600" title="A split GRN repeats the qty and landed cost of its invoice GRNs. Shown only for reference; it is not payable.">
+                <input type="checkbox" checked={showSplitSources} onChange={(event) => setShowSplitSources(event.target.checked)} />
+                Show split source GRNs
               </label>
             </div>
           ),
@@ -1043,8 +1073,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
               // CRCP mirrored view (locked 2026-10-04) -- this company is the
               // ITC owner, not the Actual Receiver who created this GRN.
               <div className="rounded border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-semibold text-amber-700">
-                You are viewing this GRN as the ITC-owning company — it belongs
-                to another company and is read-only here.
+                You are viewing this GRN as the ITC-owning company and do not have
+                AC01 edit access for it, so it is read-only here.
               </div>
             ) : null}
             <DrawerSection eyebrow="Identification" title="Company, supplier and invoice reference">
@@ -1089,7 +1119,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
               </div>
             </DrawerSection>
 
-            <DrawerSection eyebrow="Rate confirmation" title="PO rate, invoice rate and confirmed rate">
+            <DrawerSection eyebrow="Rate and GST confirmation" title="PO rate, invoice rate, confirmed rate and GST correction">
               <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}>
                 <DrawerField label="PO rate (reference)">
                   <input disabled value={formatNumberOrBlank(grnDetailQuery.data?.po_rate)} className={inputCls} />
@@ -1100,10 +1130,43 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                 <DrawerField label="Confirmed rate">
                   <input disabled={effectiveReadOnly} value={draft.confirmed_rate} onChange={(event) => setDraft((current) => ({ ...current, confirmed_rate: event.target.value }))} placeholder="Enter confirmed rate" className={inputCls} />
                 </DrawerField>
-                <DrawerField label="GST %">
-                  <input disabled={effectiveReadOnly} value={draft.gst_pct} onChange={(event) => setDraft((current) => ({ ...current, gst_pct: event.target.value }))} className={inputCls} />
+                <DrawerField label="Confirmed GST %">
+                  <input type="number" min="0" max="100" step="0.01" disabled={effectiveReadOnly} value={draft.gst_pct} onChange={(event) => setDraft((current) => ({ ...current, gst_pct: event.target.value }))} className={inputCls} />
                 </DrawerField>
               </div>
+              {(() => {
+                const enteredGstPct = draft.gst_pct === "" ? null : Number(draft.gst_pct);
+                const storedGstPct = grnDetailQuery.data?.gst_pct != null ? Number(grnDetailQuery.data.gst_pct) : null;
+                const gstPctChanged = enteredGstPct != null && Number.isFinite(enteredGstPct)
+                  && (storedGstPct == null || Math.abs(enteredGstPct - storedGstPct) > 0.000001);
+                const latestCorrection = grnDetailQuery.data?.latest_gst_correction;
+                return (
+                  <div className="mt-2 grid gap-2">
+                    {gstPctChanged ? (
+                      <DrawerField label="GST correction reason (required)">
+                        <input
+                          disabled={effectiveReadOnly}
+                          value={draft.gst_correction_reason}
+                          onChange={(event) => setDraft((current) => ({ ...current, gst_correction_reason: event.target.value }))}
+                          placeholder="Example: GRN entry was 27%; supplier invoice confirms 18%"
+                          className={inputCls}
+                        />
+                      </DrawerField>
+                    ) : null}
+                    <p className="text-[11px] text-slate-500">
+                      GST correction updates taxable GST, CGST/SGST or IGST, invoice total and suggested vendor payable. Landed cost remains GST-exclusive.
+                    </p>
+                    {latestCorrection ? (
+                      <p className="text-[11px] text-slate-500">
+                        Last GST correction: {formatNumberOrBlank(latestCorrection.from_gst_pct)}% → {formatNumberOrBlank(latestCorrection.to_gst_pct)}%
+                        {latestCorrection.corrected_at ? ` on ${toDDMMYYYY(latestCorrection.corrected_at)}` : ""}
+                        {latestCorrection.corrected_by_display ? ` by ${latestCorrection.corrected_by_display}` : ""}
+                        {latestCorrection.reason ? ` — ${latestCorrection.reason}` : ""}
+                      </p>
+                    ) : null}
+                  </div>
+                );
+              })()}
             </DrawerSection>
 
             <DrawerSection eyebrow="Payment" title="Terms and payment dates">
@@ -1495,6 +1558,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
               <div className="grid grid-cols-4 gap-2">
                 {[
                   ["Item value, excl. GST (live)", livePreview?.itemValue],
+                  [`Material GST @ ${formatNumberOrBlank(livePreview?.materialGstPct) || "0"}% (live)`, livePreview?.materialGstAmount],
+                  ["Invoice total, incl. GST (live)", livePreview?.invoiceTotal],
                   ["Landed cost total (live)", livePreview?.landedCostTotal],
                   ["Landed price / unit, Base UoM (live)", livePreview?.landedCostPerUnit],
                 ].map(([label, value]) => (
@@ -1508,6 +1573,49 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
           </div>
         )}
       </DrawerBase>
+      <ModalBase
+        visible={gstCorrectionReasonOpen}
+        eyebrow="AC01 · GST Correction"
+        title="Why is the GST % being changed?"
+        message="This reason is retained in the Accounts audit trail with the old and corrected GST percentage."
+        onEscape={() => setGstCorrectionReasonOpen(false)}
+        initialFocusRef={gstCorrectionReasonRef}
+        actions={
+          <>
+            <button
+              type="button"
+              onClick={() => setGstCorrectionReasonOpen(false)}
+              disabled={saving}
+              className="border border-slate-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={!draft?.gst_correction_reason?.trim() || saving}
+              onClick={() => {
+                setGstCorrectionReasonOpen(false);
+                void handleSave();
+              }}
+              className="border border-sky-700 bg-sky-700 px-4 py-1.5 text-[11px] font-semibold text-white disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              Continue to Save
+            </button>
+          </>
+        }
+      >
+        <label className="grid gap-1 text-sm font-medium text-slate-700">
+          GST correction reason <span className="text-rose-700">*</span>
+          <textarea
+            ref={gstCorrectionReasonRef}
+            value={draft?.gst_correction_reason ?? ""}
+            onChange={(event) => setDraft((current) => ({ ...current, gst_correction_reason: event.target.value }))}
+            rows={3}
+            placeholder="Example: GRN entry was 27%; supplier invoice confirms 18%"
+            className="min-h-[78px] border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 outline-none focus:border-sky-600"
+          />
+        </label>
+      </ModalBase>
     </>
   );
 }

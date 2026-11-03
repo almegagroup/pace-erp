@@ -1494,6 +1494,11 @@ export type PoLineInboundInput = {
   csns: Array<{ id?: string; csn_number: string; status: string; dispatch_qty: number | null; received_qty: number | null; eta: string | null; is_mother_with_children: boolean }>;
   lots: Array<{ lot_number: string; balance_qty: number; delivery_date: string | null }>; // PO unit
   /**
+   * HLD CSN quantity is intentionally removed before any normal inbound piece.
+   * This prevents an excluded CSN from reappearing as a PO remainder.
+   */
+  held_csn_base?: number;
+  /**
    * Base qty of this still-open line already promised to another company by Sub-CSNs
    * (owner 2026-10-20). Removed first; it is counted at the consignee instead.
    */
@@ -1529,6 +1534,7 @@ export function partitionPoLineInbound(line: PoLineInboundInput, asOf: string, w
     return piece;
   };
   take(Number(line.committed_transfer_base ?? 0));
+  take(Number(line.held_csn_base ?? 0));
   for (const gate of line.at_gate) {
     const qty = take(gate.qty_base);
     if (qty > EPSILON) events.push({ material_id: line.material_id, qty, date: asOf, kind: "AT_GATE", date_source: "GATE_ENTRY_AWAITING_GRN", reference: `${ref} · ${gate.reference}` });

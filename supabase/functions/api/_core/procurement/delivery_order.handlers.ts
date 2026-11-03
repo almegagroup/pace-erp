@@ -101,6 +101,15 @@ export async function listDOSourceDocumentsHandler(req: Request, ctx: Procuremen
     const sourceType = toUpperTrimmedString(url.searchParams.get("source_type"));
     const companyId = toTrimmedString(url.searchParams.get("company_id"));
     const search = toTrimmedString(url.searchParams.get("search"));
+    // Page 2 normally stays within the selling company chosen on Page 1.
+    // An External SO/Customer PO number, however, is often what the business
+    // user has in hand.  Permit that *exact* lookup across the caller's own
+    // companies only; never turn the ordinary browse list into a cross-company
+    // register.  The conservative token check also keeps the PostgREST `or`
+    // filter below from accepting filter syntax as a document number.
+    const exactExternalLookup = sourceType === "SALES_ORDER"
+      && url.searchParams.get("exact_external_lookup") === "true"
+      && /^[A-Za-z0-9][A-Za-z0-9/_-]{0,63}$/.test(search);
     if (!DO_SOURCE_TYPES.has(sourceType)) {
       return doErrorResponse(req, ctx, "DO_SOURCE_TYPE_INVALID", 400, "source_type must be SALES_ORDER or STO.");
     }
@@ -110,6 +119,8 @@ export async function listDOSourceDocumentsHandler(req: Request, ctx: Procuremen
       } catch {
         return doErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
       }
+    } else if (!exactExternalLookup) {
+      return doErrorResponse(req, ctx, "COMPANY_ID_REQUIRED", 400, "company_id is required when browsing source documents.");
     }
 
     if (sourceType === "SALES_ORDER") {
@@ -127,8 +138,12 @@ export async function listDOSourceDocumentsHandler(req: Request, ctx: Procuremen
         .in("status", ["CREATED", "ISSUED"])
         .order("created_at", { ascending: false })
         .limit(100);
-      if (companyId) query = query.eq("company_id", companyId);
-      if (search) query = query.or(`so_number.ilike.%${search}%,customer_po_number.ilike.%${search}%`);
+      if (exactExternalLookup) {
+        query = query.or(`so_number.eq.${search},customer_po_number.eq.${search}`);
+      } else {
+        query = query.eq("company_id", companyId);
+        if (search) query = query.or(`so_number.ilike.%${search}%,customer_po_number.ilike.%${search}%`);
+      }
       const { data, error } = await query;
       if (error) return doErrorResponse(req, ctx, "DO_SOURCE_LIST_FAILED", 500, "Unable to list source sales orders.");
 
@@ -142,7 +157,21 @@ export async function listDOSourceDocumentsHandler(req: Request, ctx: Procuremen
       // source path (direct or via so_map_allocation_id -- see
       // do_unified.handlers.ts's soLineId derivation), so a single
       // so_line_id-keyed drawn-qty check covers every dispatch type.
-      const soRows = (data ?? []) as JsonRecord[];
+      const rawSoRows = (data ?? []) as JsonRecord[];
+      // Even an exact external-number lookup must not disclose a document in
+      // a company outside the caller's scope.  The regular browse path was
+      // already guarded by its requested company; the exception above needs
+      // this row-level guard because it intentionally searches more than one.
+      const soRows = exactExternalLookup
+        ? (await Promise.all(rawSoRows.map(async (row) => {
+          try {
+            await assertCompanyScope(ctx, toTrimmedString(row.company_id));
+            return row;
+          } catch {
+            return null;
+          }
+        }))).filter((row): row is JsonRecord => Boolean(row))
+        : rawSoRows;
       const { data: candidateLines, error: linesError } = soRows.length
         ? await serviceRoleClient.schema("erp_procurement").from("sales_order_line")
             .select("id, so_id, base_qty, quantity").in("so_id", soRows.map((row) => String(row.id)))
@@ -184,6 +213,7 @@ export async function listDOSourceDocumentsHandler(req: Request, ctx: Procuremen
             document_number: row.so_number,
             document_date: row.so_date,
             status: row.status,
+            company_id: row.company_id,
             reference_display: row.customer_po_number ? `Customer PO ${row.customer_po_number}` : null,
             counterparty_display: customer ? `${customer.customer_code ?? ""} — ${customer.customer_name ?? ""}`.trim() : null,
           };
@@ -199,13 +229,30 @@ export async function listDOSourceDocumentsHandler(req: Request, ctx: Procuremen
       .select("id, sto_number, sto_date, receiving_company_id, sending_company_id, sto_type, status")
       .in("status", ["CREATED", "DISPATCHED"])
       .order("created_at", { ascending: false })
-      .limit(100);
+      .limit(300);
     if (companyId) query = query.eq("sending_company_id", companyId);
     if (search) query = query.or(`sto_number.ilike.%${search}%`);
     const { data, error } = await query;
     if (error) return doErrorResponse(req, ctx, "DO_SOURCE_LIST_FAILED", 500, "Unable to list source STOs.");
 
-    const rows = (data ?? []) as JsonRecord[];
+    // Same rule as the SO list above and as listDOSourceLinesHandler's STO branch: an STO whose
+    // every line is already on a live DO, knocked off, or has no balance left has nothing left to
+    // dispatch, so it must not be offered (a fully dispatched STO stays status DISPATCHED).
+    const candidateRows = (data ?? []) as JsonRecord[];
+    const stoLineRows = candidateRows.length
+      ? await fetchInChunks<JsonRecord>(candidateRows.map((row) => String(row.id)), (chunk) =>
+          serviceRoleClient.schema("erp_procurement").from("stock_transfer_order_line")
+            .select("id, sto_id, balance_qty, line_status").in("sto_id", chunk))
+      : [];
+    const lockedStoLineIds = await fetchLockedLineIds("sto_line_id", stoLineRows.map((row) => String(row.id)));
+    const stoHasOpenLine = new Set<string>();
+    for (const line of stoLineRows) {
+      if (lockedStoLineIds.has(String(line.id))) continue;
+      if (toUpperTrimmedString(line.line_status) === "KNOCKED_OFF") continue;
+      if ((parsePositiveNumber(line.balance_qty) ?? 0) <= 0) continue;
+      stoHasOpenLine.add(toTrimmedString(line.sto_id));
+    }
+    const rows = candidateRows.filter((row) => stoHasOpenLine.has(toTrimmedString(row.id))).slice(0, 100);
     const companyIds = [...new Set([
       ...rows.map((row) => toTrimmedString(row.sending_company_id)),
       ...rows.map((row) => toTrimmedString(row.receiving_company_id)),

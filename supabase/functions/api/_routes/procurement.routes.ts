@@ -21,6 +21,7 @@ import {
   getLCAlertCountHandler,
   getLCAlertListHandler,
   getTrackerHandler,
+  getCsnTrackerCapabilityHandler,
   getVesselBookingAlertCountHandler,
   getVesselBookingAlertListHandler,
   inlineUpdateCSNHandler,
@@ -29,6 +30,7 @@ import {
   listCSNsHandler,
   listTrackerLayoutsHandler,
   previewDispatchQtyAdjustmentHandler,
+  transitionCSNHoldHandler,
   updateCSNHandler,
 } from "../_core/procurement/csn.handlers.ts";
 import {
@@ -551,7 +553,11 @@ import {
   dispatchSTOHandler,
   knockOffSTOLineHandler,
   getSTOHandler,
+  listFgStosHandler,
+  getFgStoHandler,
+  cancelFgStoHandler,
   getLastStoPaymentTermHandler,
+  listFgStoReceivingCompaniesHandler,
   getStoLaneTransitHandler,
   createFgStoHandler,
   listFgStoMaterialsHandler,
@@ -594,6 +600,8 @@ export async function dispatchProcurementRoutes(
       return await getAllAlertCountsHandler(req, ctx);
     case "GET:/api/procurement/tracker":
       return await getTrackerHandler(req, ctx);
+    case "GET:/api/procurement/csn-tracker-capability":
+      return await getCsnTrackerCapabilityHandler(req, ctx);
     case "GET:/api/procurement/tracker/layouts":
       return await listTrackerLayoutsHandler(req, ctx);
     case "POST:/api/procurement/tracker/layouts":
@@ -1194,8 +1202,14 @@ export async function dispatchProcurementRoutes(
       return await getStoLaneTransitHandler(req, ctx);
     case "GET:/api/procurement/fg-stos/materials":
       return await listFgStoMaterialsHandler(req, ctx);
+    case "GET:/api/procurement/fg-stos/receiving-companies":
+      return await listFgStoReceivingCompaniesHandler(req, ctx);
+    case "GET:/api/procurement/fg-stos/last-payment-term":
+      return await getLastStoPaymentTermHandler(req, ctx);
     case "POST:/api/procurement/fg-stos":
       return await createFgStoHandler(req, ctx);
+    case "GET:/api/procurement/fg-stos":
+      return await listFgStosHandler(req, ctx);
     case "POST:/api/procurement/purchase-orders":
       return await createPOHandler(req, ctx);
     case "GET:/api/procurement/purchase-orders":
@@ -1251,6 +1265,10 @@ export async function dispatchProcurementRoutes(
     if (req.method === "PUT") {
       return await updateCSNHandler(req, ctx);
     }
+  }
+
+  if (/^\/api\/procurement\/csns\/[^/]+\/(hold|release)$/.test(pathname) && req.method === "POST") {
+    return await transitionCSNHoldHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/csns\/[^/]+\/sub-csns$/.test(pathname) && req.method === "POST") {
@@ -1817,6 +1835,14 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/sales-invoices\/[^/]+\/reverse$/.test(pathname) && req.method === "POST") {
     return await reverseSalesInvoiceHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/fg-stos\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
+    return await cancelFgStoHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/fg-stos\/[^/]+$/.test(pathname) && req.method === "GET") {
+    return await getFgStoHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/stos\/[^/]+$/.test(pathname)) {
