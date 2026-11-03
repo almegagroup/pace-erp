@@ -6078,7 +6078,7 @@
   },
   {
     "page": "frontend/src/pages/dashboard/procurement/sales/SO01Page.jsx",
-    "dependencyCount": 16,
+    "dependencyCount": 17,
     "deps": [
       {
         "fn": "listSalesOrderFgSkuOptions",
@@ -6206,6 +6206,14 @@
         "path": "/api/procurement/so-map/${allocationId}/unmap",
         "resourceCode": "PROC_SO_LIST",
         "action": "EDIT",
+        "skipAcl": false
+      },
+      {
+        "fn": "listFgStos",
+        "method": "GET",
+        "path": "/api/procurement/fg-stos",
+        "resourceCode": "PROC_SO_LIST",
+        "action": "VIEW",
         "skipAcl": false
       }
     ]

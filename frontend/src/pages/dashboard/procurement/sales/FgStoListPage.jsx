@@ -23,6 +23,7 @@ import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/opera
 import { listFgStos } from "../procurementApi.js";
 
 const LIMIT = 50;
+const EXPORT_PAGE = 200;
 
 function fgStoStatusTone(status) {
   switch (String(status || "").toUpperCase()) {
@@ -34,7 +35,7 @@ function fgStoStatusTone(status) {
   }
 }
 
-export default function FgStoListPage() {
+export default function FgStoListPage({ onCreate = null }) {
   const navigate = useNavigate();
   const { runtimeContext } = useMenu();
   const [companyId, setCompanyId] = useState("");
@@ -70,7 +71,67 @@ export default function FgStoListPage() {
   const endIndex = total === 0 ? 0 : Math.min(page * LIMIT, total);
   const loading = fgStoQuery.isLoading;
 
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
+
+  // One Excel row per STO LINE (header columns repeated), for every FG STO matching the current
+  // company / direction / status / search -- not just the visible page.
+  async function handleExport() {
+    if (!effectiveCompanyId || exporting) return;
+    setExporting(true);
+    setExportError("");
+    try {
+      const all = [];
+      for (let offset = 0; ; offset += EXPORT_PAGE) {
+        const res = await listFgStos({ ...params, limit: EXPORT_PAGE, offset });
+        const items = Array.isArray(res?.items) ? res.items : [];
+        all.push(...items);
+        if (items.length < EXPORT_PAGE || all.length >= Number(res?.total ?? 0)) break;
+      }
+      const exportRows = all.flatMap((sto) => {
+        const header = {
+          sto_number: sto.sto_number, sto_date: sto.sto_date, status: sto.status,
+          sending_company: sto.sending_company_display, receiving_company: sto.receiving_company_display,
+          created_at: sto.created_at,
+        };
+        const lines = Array.isArray(sto.lines) && sto.lines.length > 0 ? sto.lines : [{}];
+        return lines.map((line) => ({ ...header, ...line }));
+      });
+      const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
+      await downloadColoredExcelFile({
+        fileName: `fg_sto_${viewMode.toLowerCase()}_${new Date().toISOString().slice(0, 10)}.xlsx`,
+        sheetName: "FG STO",
+        columns: [
+          { key: "sto_number", label: "STO Number", width: "140px" },
+          { key: "sto_date", label: "STO Date", width: "110px" },
+          { key: "status", label: "Status", width: "110px" },
+          { key: "sending_company", label: "Sending Company", width: "220px" },
+          { key: "receiving_company", label: "Receiving Company", width: "220px" },
+          { key: "line_number", label: "Line", width: "60px" },
+          { key: "material_display", label: "SKU", width: "300px" },
+          { key: "quantity", label: "Qty", width: "100px" },
+          { key: "uom_code", label: "UOM", width: "70px" },
+          { key: "transfer_price", label: "Transfer Price", width: "120px" },
+          { key: "conversion_cost_per_unit", label: "Conversion Cost", width: "120px" },
+          { key: "balance_qty", label: "Balance Qty", width: "110px" },
+          { key: "line_status", label: "Line Status", width: "110px" },
+          { key: "created_at", label: "Created", width: "160px" },
+        ],
+        rows: exportRows,
+        getCellValue: (row, column) => row?.[column.key] ?? "",
+      });
+    } catch (error) {
+      setExportError(error instanceof Error ? error.message : "FG_STO_EXPORT_FAILED");
+    } finally {
+      setExporting(false);
+    }
+  }
+
   function openCreate() {
+    if (onCreate) {
+      onCreate();
+      return;
+    }
     openScreen(OPERATION_SCREENS.PROC_SO_CREATE.screen_code);
     navigate("/dashboard/procurement/sales-orders/fg-sto-create");
   }
@@ -86,9 +147,13 @@ export default function FgStoListPage() {
       title="FG STO Register"
       actions={[
         { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => fgStoQuery.refetch() },
+        { key: "export", label: exporting ? "Exporting..." : "Export Excel", tone: "neutral", onClick: () => void handleExport(), disabled: exporting || total === 0 },
         { key: "create", label: "Create FG STO", tone: "primary", onClick: openCreate },
       ]}
-      notices={fgStoQuery.error ? [{ key: "fg-sto-list-error", tone: "error", message: fgStoQuery.error instanceof Error ? fgStoQuery.error.message : "FG_STO_LIST_FAILED" }] : []}
+      notices={[
+        ...(fgStoQuery.error ? [{ key: "fg-sto-list-error", tone: "error", message: fgStoQuery.error instanceof Error ? fgStoQuery.error.message : "FG_STO_LIST_FAILED" }] : []),
+        ...(exportError ? [{ key: "fg-sto-export-error", tone: "error", message: exportError }] : []),
+      ]}
       filterSection={{
         eyebrow: "Search And Filter",
         title: "Finished-goods stock transfers between companies",

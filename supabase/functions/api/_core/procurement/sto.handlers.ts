@@ -1593,7 +1593,7 @@ export async function listFgStosHandler(
     const [lines, companies] = await Promise.all([
       fetchInChunks<JsonRecord>(pageIds, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("stock_transfer_order_line")
-          .select("sto_id, material_id, quantity, uom_code").in("sto_id", chunk)),
+          .select("sto_id, line_number, material_id, quantity, uom_code, transfer_price, conversion_cost_per_unit, balance_qty, line_status").in("sto_id", chunk)),
       fetchInChunks<JsonRecord>(
         [...new Set(pageRows.flatMap((row) => [toTrimmedString(row.sending_company_id), toTrimmedString(row.receiving_company_id)]).filter(Boolean))],
         (chunk) => serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", chunk)),
@@ -1614,9 +1614,24 @@ export async function listFgStosHandler(
     };
 
     const items = pageRows.map((row) => {
-      const stoLines = linesByStoId.get(toTrimmedString(row.id)) ?? [];
+      const stoLines = (linesByStoId.get(toTrimmedString(row.id)) ?? []).slice().sort((a, b) => Number(a.line_number ?? 0) - Number(b.line_number ?? 0));
       return {
         ...row,
+        // Line-level detail so the register (and its Excel export) shows the SKU, qty, price and
+        // balance of every line without opening each STO.
+        lines: stoLines.map((line) => {
+          const material = materialById.get(toTrimmedString(line.material_id));
+          return {
+            line_number: line.line_number,
+            material_display: material ? `${toTrimmedString(material.pace_code)} — ${toTrimmedString(material.material_name)}` : "—",
+            quantity: line.quantity,
+            uom_code: line.uom_code,
+            transfer_price: line.transfer_price,
+            conversion_cost_per_unit: line.conversion_cost_per_unit,
+            balance_qty: line.balance_qty,
+            line_status: line.line_status,
+          };
+        }),
         sending_company_display: companyLabel(row.sending_company_id),
         receiving_company_display: companyLabel(row.receiving_company_id),
         line_count: stoLines.length,
