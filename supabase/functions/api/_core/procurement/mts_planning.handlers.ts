@@ -770,7 +770,7 @@ export async function computePlanning(p: PlanningParams) {
   // Owner 2026-10-30: schedule check. Per family, move every not-yet-shipped order to its advised date (the joint schedule, or its own best date) and re-run
   // the family: for each day something lands, each level's Min / Max / cover and the pool left, so the advised dates can be verified against the method.
   type CheckLevel = { level_kind: "OWN" | "GROUP"; level_id: string; level_key: string; members: readonly string[]; cover_days: number | null; max_cover_days: number | null; min_days: number | null; max_days: number | null; reserve_qty: number };
-  type CheckDays = ReadonlyArray<{ day: string; pool_qty: number; levels: ReadonlyArray<CheckLevel> }>;
+  type CheckDays = ReadonlyArray<{ day: string; pool_qty: number; pool_by: ReadonlyArray<{ material_id: string; qty: number }>; levels: ReadonlyArray<CheckLevel> }>;
   type CheckLot = { ref: string; material_id: string; day: string; qty_base: number };
   type CheckAlloc = { ref: string; dest_kind: "OWN" | "GROUP"; dest_id: string; qty: number };
   type CheckFamily = {

@@ -246,7 +246,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         const d = days.find((x) => x.day === date);
         const l = d?.levels.find((x) => x.level_key === key);
         if (!d || !l) return null;
-        return { cover: l.cover_days, min: l.min_days, max: l.max_days, minD: whole(l.cover_days), maxD: whole(l.max_cover_days !== null && l.max_days !== null ? Math.min(l.max_cover_days, l.max_days) : l.max_cover_days), reserve: q(l.reserve_qty), excess: q(d.pool_qty) };
+        return { cover: l.cover_days, min: l.min_days, max: l.max_days, minD: whole(l.cover_days), maxD: whole(l.max_cover_days !== null && l.max_days !== null ? Math.min(l.max_cover_days, l.max_days) : l.max_cover_days), reserve: q(l.reserve_qty), excess: q(d.pool_qty), excess_split: d.pool_by.filter((p) => p.qty > 0.5).sort((x, y) => y.qty - x.qty).map((p) => `${nameOf(p.material_id)}: ${dq(p.material_id, p.qty)} ${uomOf(p.material_id) ?? ""}`.trim()).join("\n") };
       };
       const statusOf = (st: ReturnType<typeof stateAt>, without: boolean) => {
         if (!st || st.cover === null || st.min === null) return "";
@@ -290,7 +290,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
             kind: "Existing order", ref: `${a.reference}${ev?.csn_id ? "" : ""}`, material: nameOf(a.material_id), supplier: supplierOf(a.reference, ev?.csn_id) ?? "—", status: ev ? (arrivalStatus(ev.kind as never, ev.date_source as never) as string) : "",
             lot_qty: q(a.qty_base), existing_eta: a.recorded, action: cells.action, etd: cells.etd, port: cells.port, plant: cells.plant || a.advised, why: cells.why, absent: cells.absent,
             engine_eta: a.advised, to_level: q(toLevel), pct: a.qty_base > 0 ? toLevel / a.qty_base : null,
-            min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, level_status: statusOf(stB, false), reserve_after: stB?.reserve ?? null,
+            min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, excess_split: stB?.excess_split ?? null, level_status: statusOf(stB, false), reserve_after: stB?.reserve ?? null,
             arr_note: arr?.shared_note ?? "",
           });
         }
@@ -315,7 +315,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
             kind: "Projection", ref: "NEW (engine)", material: nameOf(lot.material_id), supplier: buy?.vendor_label ?? "—", status: "Projection", lot_qty: q(lot.qty_base), existing_eta: dayA, action,
             etd: lg.import_etd ?? "", port: lg.port_eta ?? "", plant: dayB ?? "", why: buy ? (buy.need_kind === "GROUP" ? `Triggered by group free stock${buy.trigger_group_id ? ` — ${groupLabel.get(buy.trigger_group_id) ?? ""}` : ""}` : "Triggered by its own use") : "", absent: "",
             engine_eta: dayB, to_level: q(toLevel), pct: lot.qty_base > 0 ? toLevel / lot.qty_base : null,
-            min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null,
+            min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, excess_split: stB?.excess_split ?? null,
             level_status: statusOf(stB, !b), reserve_after: stB?.reserve ?? null, flag,
             alternatives: buy ? altText(alternativesFor(buy, dayA ?? dayB)) : "",
           });
