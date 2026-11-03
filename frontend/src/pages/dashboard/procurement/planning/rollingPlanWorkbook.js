@@ -69,8 +69,6 @@ function addTable(sheet, columns, rows, { color } = {}) {
     if (tone) row.eachCell((cell) => { cell.font = { ...(cell.font ?? {}), color: { argb: tone } }; });
   }
 }
-/** Stable multi-key sort for the schedule-check tabs (each level's picture reads top to bottom by date). */
-const sortBy = (rows, keys) => [...rows].sort((a, b) => { for (const k of keys) { const x = String(a[k] ?? ""); const y = String(b[k] ?? ""); if (x !== y) return x.localeCompare(y); } return 0; });
 function widths(sheet, list) {
   list.forEach((w, i) => { sheet.getColumn(i + 1).width = w; });
 }
@@ -194,10 +192,97 @@ function bestColumns(r) {
   return [join("action"), join("etd"), join("port"), join("plant"), join("why") || (r.best_dates ?? []).filter(Boolean).join("\n"), join("absent")];
 }
 
-function writeBlocks(sheet, companies, kind) {
-  const list = companies.flatMap((c) => (c.blocks ?? []).filter((b) => b.kind === kind).map((b) => ({ ...b, company: c })))
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Group tab: one section per Exclusive / group (owner 2026-11-03). The sheet's own columns stay; the green ones show this level on that lot.
+// ─────────────────────────────────────────────────────────────────────────────
+const BAND_FILL = "FF17324D";
+const OLD_FILL = "FFEEF0F3";
+const NEW_FILL = "FFE1F1EE";
+const LEVEL_COLS = [
+  "Lot", "PO / CSN", "Supplier", "Status", "Lot qty", "Existing ETA", "What to do (engine)", "ETD (engine)", "ETA to Port (engine)", "ETA to Plant (engine)", "Why this date", "If another order does not come",
+  "Qty to this level", "% of lot", "Min d (Existing ETA)", "Max d (Existing ETA)", "Min d (Engine ETA)", "Max d (Engine ETA)", "Excess in pool (Engine ETA)", "Level status (Engine ETA)", "Level reserve after", "Other route / note",
+];
+function fill(cell, argb) { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb } }; }
+function writeLevelSections(sheet, b) {
+  const u = b.uom ?? "";
+  sheet.addRow([]);
+  const intro = sheet.addRow([`LEVELS of this family, one by one (Exclusive first, then groups, narrow first). Each lot appears under every level it feeds. Qty to this level = what that level consumes from the lot over the plan, from the engine's own source-by-source record. Min d = days the level's own reserve lasts; Max d = days that reserve plus the shared excess would last, up to the level's Max. On a projection row that disappears under the Engine ETA, the Engine ETA columns show the level on that date WITHOUT the order.`]);
+  intro.getCell(1).font = { italic: true };
+  let n = 0;
+  for (const sct of b.level_sections) {
+    n += 1;
+    sheet.addRow([]);
+    const t = sheet.addRow([`Level ${n}: ${sct.label}`]);
+    t.getCell(1).font = { bold: true, size: 12, color: { argb: "FFFFFFFF" } };
+    for (let i = 1; i <= LEVEL_COLS.length; i += 1) fill(t.getCell(i), BAND_FILL);
+    const facts = sheet.addRow([`Min ${days(sct.target_days) ?? "—"} d · Max ${days(sct.max_days) ?? "—"} d · Critical ${days(sct.critical_days) ?? "—"} d · reserve held ${num(sct.reserve_now) ?? 0} ${u} (covers ${days(sct.cover_now) ?? "—"} d) · feeds: ${sct.members.join(" + ")}`]);
+    facts.getCell(1).font = { bold: true };
+    const g = sheet.addRow(["Existing columns", "", "", "", "", "", "", "", "", "", "", "", "This level on that lot"]);
+    for (let i = 1; i <= 12; i += 1) fill(g.getCell(i), OLD_FILL);
+    for (let i = 13; i <= LEVEL_COLS.length; i += 1) fill(g.getCell(i), NEW_FILL);
+    g.getCell(1).font = { bold: true }; g.getCell(13).font = { bold: true };
+    const h = sheet.addRow(LEVEL_COLS);
+    styleHeader(h);
+    for (let i = 13; i <= LEVEL_COLS.length; i += 1) fill(h.getCell(i), "FFCDE8E2");
+    let lastKind = null;
+    for (const r of sct.rows) {
+      if (r.kind !== lastKind) {
+        const k = sheet.addRow([r.kind === "Stock today" ? "Stock today" : r.kind === "Existing order" ? "Existing orders (PO / CSN / STO)" : "Projection (new orders the engine proposes)"]);
+        k.getCell(1).font = { bold: true, color: { argb: "FF5D6B7C" } };
+        for (let i = 1; i <= LEVEL_COLS.length; i += 1) fill(k.getCell(i), OLD_FILL);
+        lastKind = r.kind;
+      }
+      const row = sheet.addRow([
+        r.kind === "Projection" ? (r.flag ?? "") : r.kind, r.ref ?? "", r.kind === "Existing order" ? `${r.supplier}\n${r.material ?? ""}` : r.kind === "Projection" ? `${r.supplier}\n${r.material ?? ""}` : r.supplier ?? "", r.status ?? "",
+        num(r.lot_qty), day(r.existing_eta), r.action ?? "", day(r.etd) || (r.etd ?? ""), day(r.port) || (r.port ?? ""), day(r.plant) || (r.plant ?? ""), r.why ?? "", r.absent ?? "",
+        num(r.to_level), r.pct === null || r.pct === undefined ? null : Math.round(r.pct * 1000) / 10, num(r.min_a), num(r.max_a), num(r.min_b), num(r.max_b), num(r.excess), r.level_status ?? "", num(r.reserve_after),
+        [r.arr_note, r.alternatives].filter(Boolean).join("\n"),
+      ]);
+      row.eachCell((cell, i) => {
+        cell.border = BORDER;
+        cell.alignment = { vertical: "top", wrapText: i === 3 || i === 7 || i === 11 || i === 12 || i === 22 || i === 20 };
+        if (i >= 13) fill(cell, NEW_FILL);
+        if ([5, 13, 15, 16, 17, 18, 19, 21].includes(i)) cell.numFmt = NUM;
+        if (i === 14) cell.numFmt = "0.0\"%\"";
+      });
+      const st = String(r.level_status ?? "");
+      if (st.startsWith("Below Min")) row.getCell(20).font = { bold: true, color: { argb: RED } };
+      else if (st.startsWith("Exactly at Min")) row.getCell(20).font = { bold: true, color: { argb: AMBER } };
+    }
+  }
+  // How each lot is split over the levels.
+  if ((b.lot_splits ?? []).length) {
+    sheet.addRow([]);
+    const t = sheet.addRow(["Where does each lot go? Its quantity split over the levels it feeds (sums to the lot qty; the rest stays in the pool as excess at the plan's end)"]);
+    t.getCell(1).font = { bold: true };
+    const labels = b.level_sections.map((x) => x.label);
+    styleHeader(sheet.addRow(["Lot", "Plant date", "Lot qty", ...labels, "Stays as excess", "Total"]));
+    for (const sp of b.lot_splits) {
+      const byLevel = new Map(sp.parts.map((x) => [x.level, x.qty]));
+      const row = sheet.addRow([sp.label, day(sp.date), num(sp.lot_qty), ...labels.map((l) => num(byLevel.get(l) ?? 0)), num(sp.left), num(sp.lot_qty)]);
+      row.eachCell((cell, i) => { cell.border = BORDER; if (i >= 3) cell.numFmt = NUM; cell.alignment = { vertical: "top", wrapText: i === 1 }; });
+    }
+  }
+  // All projection orders together.
+  if ((b.projection_total ?? []).length) {
+    sheet.addRow([]);
+    const t = sheet.addRow(["All projection orders together, with the same split by level"]);
+    t.getCell(1).font = { bold: true };
+    const labels = b.level_sections.map((x) => x.label);
+    styleHeader(sheet.addRow(["Order by", "Material", "Supplier", "Qty", "ETD", "ETA to Port", "ETA to Plant (Existing dates)", "ETA to Plant (Engine dates)", ...labels, "Other route (import ↔ local)"]));
+    for (const x of b.projection_total) {
+      const byLevel = new Map(x.parts.map((y) => [y.level, y.qty]));
+      const row = sheet.addRow([day(x.po_by), x.material, x.supplier, num(x.qty), day(x.etd), day(x.port), day(x.recorded_eta) || "not needed", day(x.engine_eta) || "not needed", ...labels.map((l) => num(byLevel.get(l) ?? 0)), x.alternatives ?? ""]);
+      row.eachCell((cell, i) => { cell.border = BORDER; if (i === 4 || (i > 8 && i <= 8 + labels.length)) cell.numFmt = NUM; cell.alignment = { vertical: "top", wrapText: i === 3 || i === 9 + labels.length }; });
+    }
+  }
+}
+
+function writeBlocks(sheet, companies, kind, { filter = () => true, sections = false, emptyText } = {}) {
+  const list = companies.flatMap((c) => (c.blocks ?? []).filter((b) => b.kind === kind && filter(b)).map((b) => ({ ...b, company: c })))
     .sort((a, b) => a.title.localeCompare(b.title) || companyLabel(a.company).localeCompare(companyLabel(b.company)));
-  if (list.length === 0) { sheet.addRow([`No ${kind} item with use, arrival or order in the horizon.`]); return; }
+  if (list.length === 0) { sheet.addRow([emptyText ?? `No ${kind} item with use, arrival or order in the horizon.`]); return; }
   for (const b of list) {
     const title = sheet.addRow([`${companyLabel(b.company)} — ${b.title}${b.is_family ? ` (family: ${b.members.join(", ")})` : ""}`]);
     title.getCell(1).font = { bold: true };
@@ -254,9 +339,11 @@ function writeBlocks(sheet, companies, kind) {
         row.getCell(19).alignment = { wrapText: true, vertical: "top" };
       }
     }
+    if (sections && (b.level_sections ?? []).length) writeLevelSections(sheet, b);
+    sheet.addRow([]);
     sheet.addRow([]);
   }
-  widths(sheet, [12, 12, 12, 14, 11, 12, 14, 9, 12, 9, 34, 11, 30, 16, 40, 12, 12, 12, 70, 50]);
+  widths(sheet, [16, 26, 24, 18, 13, 13, 38, 13, 13, 13, 42, 42, 13, 9, 10, 10, 10, 10, 14, 24, 14, 44]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -310,8 +397,11 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
   writePlan(wb.addWorksheet(sheetName("PLAN", used)), companies);
 
   // Planning blocks
-  writeBlocks(wb.addWorksheet(sheetName("RM_PLANNING", used)), companies, "RM");
-  writeBlocks(wb.addWorksheet(sheetName("PM_PLANNING", used)), companies, "PM");
+  // Owner 2026-11-03: RM and PM each get a Stand-alone tab (items in no group) and a Group tab (every group member, also one that is exclusive in some product).
+  writeBlocks(wb.addWorksheet(sheetName("RM Stand-alone", used)), companies, "RM", { filter: (b) => !b.is_family, emptyText: "No stand-alone RM item with use, arrival or order in the horizon." });
+  writeBlocks(wb.addWorksheet(sheetName("RM Group", used)), companies, "RM", { filter: (b) => b.is_family, sections: true, emptyText: "No RM group item with use, arrival or order in the horizon." });
+  writeBlocks(wb.addWorksheet(sheetName("PM Stand-alone", used)), companies, "PM", { filter: (b) => !b.is_family, emptyText: "No stand-alone PM item with use, arrival or order in the horizon." });
+  writeBlocks(wb.addWorksheet(sheetName("PM Group", used)), companies, "PM", { filter: (b) => b.is_family, sections: true, emptyText: "No PM group item with use, arrival or order in the horizon." });
 
   // Requirement per company
   for (const c of companies) {
@@ -407,51 +497,6 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
     { label: "Engine best date", value: (r) => day(r.engine_best_date) }, { label: "Vendor can move it?", key: "vendor_window" }, { label: "Why", key: "engine_reason" },
   ], companies.flatMap((c) => c.arrivals.map((a) => ({ ...a, company: companyLabel(c) }))), { color: (r) => (r.no_eta || r.overdue ? RED : null) });
   widths(arr, [26, 34, 44, 30, 18, 12, 7, 14, 14, 12, 16, 22, 60]);
-
-  // Owner 2026-10-30: schedule check — two simple tabs per company.
-  // 1 DATES = each not-yet-shipped consignment: existing ETA, engine ETA, the group that decided it, that group's Min / Max days on both dates.
-  // 2 LEVELS = each Exclusive and each group on its own: every lot that feeds it, what it keeps, Min / Max days on the existing and on the engine ETA, excess left.
-  // Min days = days the level's own reserve lasts; Max days = days that reserve plus the shared excess would last.
-  for (const c of companies) {
-    const sc = c.schedule_check ?? { date_rows: [], level_rows: [] };
-    const code = c.company_code ?? companyLabel(c);
-    const dates = wb.addWorksheet(sheetName(`${code} 1 DATES`, used));
-    addTable(dates, [
-      { label: "Family (groups)", key: "family" }, { label: "Consignment (not shipped)", key: "order" }, { label: "Qty", value: (r) => num(r.qty), num: true }, { label: "UoM", key: "uom" },
-      { label: "Existing ETA", value: (r) => day(r.recorded) }, { label: "Engine ETA", value: (r) => day(r.engine) }, { label: "Moved (days, + later)", value: (r) => num(r.shift_days), num: true },
-      { label: "Group", key: "group" },
-      { label: "Min days on Existing ETA", value: (r) => num(r.min_recorded), num: true }, { label: "Max days on Existing ETA (reserve + excess, up to Max)", value: (r) => num(r.max_recorded), num: true },
-      { label: "Min days on Engine ETA", value: (r) => num(r.min_engine), num: true }, { label: "Max days on Engine ETA (reserve + excess, up to Max)", value: (r) => num(r.max_engine), num: true },
-      { label: "Excess qty on Engine ETA", value: (r) => num(r.excess_engine), num: true },
-    ], sortBy(sc.date_rows, ["family", "engine", "order"]));
-    widths(dates, [34, 60, 11, 6, 13, 13, 10, 40, 12, 12, 12, 12, 14]);
-    dates.views = [{ state: "frozen", xSplit: 2, ySplit: 1 }];
-
-    const levels = wb.addWorksheet(sheetName(`${code} 2 LEVELS`, used));
-    const lcols = [
-      { label: "Lot", key: "kind" }, { label: "PO / CSN", key: "order" }, { label: "Material", key: "material" }, { label: "Lot qty", value: (r) => num(r.qty), num: true },
-      { label: "Kept for this level (qty)", value: (r) => num(r.kept), num: true },
-      { label: "Existing ETA", value: (r) => day(r.recorded) }, { label: "Engine ETA", value: (r) => day(r.engine) },
-      { label: "Min days (Existing ETA)", value: (r) => num(r.min_recorded), num: true }, { label: "Max days (Existing ETA, up to Max)", value: (r) => num(r.max_recorded), num: true },
-      { label: "Min days (Engine ETA)", value: (r) => num(r.min_engine), num: true }, { label: "Max days (Engine ETA, up to Max)", value: (r) => num(r.max_engine), num: true },
-      { label: "Excess qty (Engine ETA)", value: (r) => num(r.excess_engine), num: true },
-    ];
-    let lastKey = null;
-    for (const r of sc.level_rows) {
-      const key = `${r.family}§${r.level}`;
-      if (key !== lastKey) {
-        if (lastKey !== null) levels.addRow([]);
-        const t = levels.addRow([`${r.family}  ›  ${r.level}`]);
-        t.font = { bold: true, size: 12 };
-        t.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDDE7F5" } };
-        styleHeader(levels.addRow(lcols.map((x) => x.label)));
-        lastKey = key;
-      }
-      const row = levels.addRow(lcols.map((x) => (x.value ? x.value(r) : r[x.key]) ?? null));
-      lcols.forEach((x, k) => { const cell = row.getCell(k + 1); cell.border = BORDER; if (x.num) cell.numFmt = NUM; });
-    }
-    widths(levels, [20, 52, 36, 11, 14, 13, 13, 11, 11, 11, 11, 14]);
-  }
 
   writeWaterfall(wb, companies, used);
   writeExplain(wb, companies, used);

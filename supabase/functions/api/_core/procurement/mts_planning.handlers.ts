@@ -769,13 +769,38 @@ export async function computePlanning(p: PlanningParams) {
   };
   // Owner 2026-10-30: schedule check. Per family, move every not-yet-shipped order to its advised date (the joint schedule, or its own best date) and re-run
   // the family: for each day something lands, each level's Min / Max / cover and the pool left, so the advised dates can be verified against the method.
-  type CheckDays = ReadonlyArray<{ day: string; pool_qty: number; levels: ReadonlyArray<{ level_kind: "OWN" | "GROUP"; level_id: string; level_key: string; members: readonly string[]; cover_days: number | null; max_cover_days: number | null; min_days: number | null; max_days: number | null; reserve_qty: number }> }>;
-  type CheckFamily = { member_ids: string[]; arrivals: Array<{ source_key: string; material_id: string; reference: string; qty_base: number; recorded: string | null; advised: string | null; movable: boolean }>; engine_lots: Array<{ material_id: string; day: string; qty_base: number }>; days: CheckDays; days_recorded: CheckDays };
+  type CheckLevel = { level_kind: "OWN" | "GROUP"; level_id: string; level_key: string; members: readonly string[]; cover_days: number | null; max_cover_days: number | null; min_days: number | null; max_days: number | null; reserve_qty: number };
+  type CheckDays = ReadonlyArray<{ day: string; pool_qty: number; levels: ReadonlyArray<CheckLevel> }>;
+  type CheckLot = { ref: string; material_id: string; day: string; qty_base: number };
+  type CheckAlloc = { ref: string; dest_kind: "OWN" | "GROUP"; dest_id: string; qty: number };
+  type CheckFamily = {
+    member_ids: string[];
+    arrivals: Array<{ source_key: string; material_id: string; reference: string; qty_base: number; recorded: string | null; advised: string | null; movable: boolean }>;
+    /** Scenario A = every not-yet-shipped order on its recorded date. Scenario B = on the engine's advised date. Each plans its own new lots. */
+    lots_a: CheckLot[]; lots_b: CheckLot[]; days_a: CheckDays; days_b: CheckDays; alloc_a: CheckAlloc[]; alloc_b: CheckAlloc[];
+  };
+  // Owner 2026-11-03: schedule check for the Group tab. Per family the not-yet-shipped orders are placed (A) on their recorded dates and (B) on the engine's
+  // advised dates, the family planned again each time (so each scenario has its own new lots), with every level's cover / Min / Max / pool by day and
+  // the planner's own record of which source (opening stock, a PO / CSN, an engine lot) each level consumed.
   const scheduleChecks = (() => {
     if (!p.scheduleChecks) return [] as CheckFamily[];
     const seen = new Set<string>();
     const out: CheckFamily[] = [];
     const refByKey = new Map<string, string>(req.output.rows.flatMap((r) => r.inbound_events.map((event, index) => [`A|${r.material_id}|${index}|${event.reference}`, event.reference] as [string, string])));
+    const lotsOf = (res: ReturnType<typeof planFamily>): CheckLot[] => res.advisory_buys.flatMap((b) => (b.lots ?? []).map((l) => ({
+      ref: `Engine lot ${b.material_id} #${b.sequence}`, material_id: b.material_id, day: l.plant_eta, qty_base: l.qty_base,
+    })));
+    const allocOf = (res: ReturnType<typeof planFamily>): CheckAlloc[] => {
+      const agg = new Map<string, CheckAlloc>();
+      for (const r of res.allocation_rows) {
+        const destId = r.destination_kind === "OWN" ? r.material_id : String(r.group_id ?? "");
+        const key = `${r.source_reference}|${r.destination_kind}|${destId}`;
+        const cur = agg.get(key) ?? { ref: r.source_reference, dest_kind: r.destination_kind, dest_id: destId, qty: 0 };
+        cur.qty += r.qty_base;
+        agg.set(key, cur);
+      }
+      return [...agg.values()];
+    };
     for (const id of universe) {
       const input = familyInputFor(id);
       const members = Object.keys(input.opening_qty_by_material).sort();
@@ -802,26 +827,20 @@ export async function computePlanning(p: PlanningParams) {
         }
       }
       const movedArrivals = input.confirmed_arrivals.map((a) => (moves.has(a.source_key) ? { ...a, eta_to_plant: moves.get(a.source_key)! } : a));
-      const forcedLots = forced
-        ? forced.lots.flatMap((l) => { const mid = members.find((m) => text(req.materialRows.get(m)?.material_name) === l.material); return mid ? [{ material_id: mid, plant_eta: l.date, qty_base: l.qty }] : []; })
-        : [];
-      const res = planFamily({ ...input, plan_buys: !forced, trace: false, level_days: true, confirmed_arrivals: movedArrivals, manual_lots: [...(input.manual_lots ?? []), ...forcedLots] });
-      const engineLots = forced ? forcedLots.map((l) => ({ material_id: l.material_id, day: l.plant_eta, qty_base: l.qty_base })) : res.rows.filter((r) => r.planned_lot_qty_base > 0.000001).map((r) => ({ material_id: r.material_id, day: r.day, qty_base: r.planned_lot_qty_base }));
-      // The same new lots on the RECORDED plant dates, so the two pictures differ only by the not-yet-shipped orders' dates.
-      const resRecorded = planFamily({ ...input, plan_buys: false, trace: false, level_days: true, confirmed_arrivals: input.confirmed_arrivals,
-        manual_lots: [...(input.manual_lots ?? []), ...engineLots.map((l) => ({ material_id: l.material_id, plant_eta: l.day, qty_base: l.qty_base }))] });
-      const eventDays = new Set<string>([...movedArrivals.map((a) => String(a.eta_to_plant)), ...input.confirmed_arrivals.map((a) => String(a.eta_to_plant)), ...engineLots.map((l) => l.day)]);
-      const keep = new Set<string>([input.as_of]);
-      for (const d of eventDays) keep.add(d);
+      const resB = planFamily({ ...input, plan_buys: true, trace: false, level_days: true, confirmed_arrivals: movedArrivals });
+      const resA = planFamily({ ...input, plan_buys: true, trace: false, level_days: true });
+      const lotsA = lotsOf(resA);
+      const lotsB = lotsOf(resB);
+      const keep = new Set<string>([input.as_of, ...input.confirmed_arrivals.map((a) => String(a.eta_to_plant)), ...movedArrivals.map((a) => String(a.eta_to_plant)), ...lotsA.map((l) => l.day), ...lotsB.map((l) => l.day)]);
       out.push({
         member_ids: members,
         arrivals: input.confirmed_arrivals.map((a) => ({
           source_key: a.source_key, material_id: a.material_id, reference: refByKey.get(a.source_key) ?? a.source_key.split("|").slice(3).join("|"), qty_base: a.qty_base,
           recorded: a.eta_to_plant, advised: moves.get(a.source_key) ?? a.eta_to_plant, movable: movableSourceKeys.has(a.source_key),
         })),
-        engine_lots: engineLots,
-        days: res.level_days.filter((d) => keep.has(d.day)),
-        days_recorded: resRecorded.level_days.filter((d) => keep.has(d.day)),
+        lots_a: lotsA, lots_b: lotsB,
+        days_a: resA.level_days.filter((d) => keep.has(d.day)), days_b: resB.level_days.filter((d) => keep.has(d.day)),
+        alloc_a: allocOf(resA), alloc_b: allocOf(resB),
       });
     }
     return out;
