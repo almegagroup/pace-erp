@@ -83,6 +83,13 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         selected_any_month: [...selections.values()].some((set) => set.has(m)),
       });
     };
+    // Owner 2026-11-03: a group member the buyer never ticked in the monthly Selection can never get a new engine lot
+    // (planner rule); the sheet must say so instead of staying silent while the item runs out.
+    const selectionControlled = new Set(
+      [...reqData.masters.groupMembers.values()].flat()
+        .filter((member) => member.active && reqData.materials.get(member.material_id)?.status !== "INACTIVE")
+        .map((member) => member.material_id),
+    );
     const company = (companyRes.data ?? {}) as JsonRecord;
     const nameOf = (id: string) => text(reqData.materialRows.get(id)?.material_name) || "—";
     // Owner 2026-10-26: every quantity in the material's display (Order) UoM; calculations stay in base.
@@ -499,6 +506,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           if (r?.policy?.target_cov_days == null || r?.policy?.critical_cov_days == null) out.push(`${nameOf(m)}: no Target/Critical`);
           // Owner 2026-10-26: a group is bought through any member that has a vendor.
           if ((vendorOptions.get(m) ?? []).length === 0 && !memberIds.some((member) => (vendorOptions.get(member) ?? []).length > 0)) out.push(`${nameOf(m)}: no vendor`);
+          if (selectionControlled.has(m) && !memberIds.some((member) => [...selections.values()].some((set) => set.has(member)))) out.push(`${nameOf(m)}: no member of this family is ticked in the monthly Selection, so the engine may not place a new order`);
           return out;
         }),
         rows, prediction,
