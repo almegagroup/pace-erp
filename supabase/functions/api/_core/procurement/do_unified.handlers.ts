@@ -1946,6 +1946,8 @@ type ProcInvoiceGroup = {
   source_type: "SALES_ORDER" | "STO";
   dispatch_type: string | null;
   allows_backlog_tally_date: boolean;
+  is_fg_sto: boolean;
+  is_dependent_depot: boolean;
   so_id: string | null;
   sto_id: string | null;
   document_number: string | null;
@@ -2315,6 +2317,8 @@ export async function computeInvoiceGroups(dcId: string): Promise<{ dc: JsonReco
       // Client-side validation consumes this server-derived policy flag, so
       // the invoice form cannot drift from the authoritative PGI rule.
       allows_backlog_tally_date: allowsBacklogTallyDate,
+      is_fg_sto: isFgSto,
+      is_dependent_depot: dispatchType === "DEPENDENT_DEPOT",
       so_id: meta.so_id || null,
       sto_id: meta.sto_id || null,
       document_number: documentNumber,
@@ -3366,8 +3370,17 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
       } else if (backfillPhase === "PHASE_1") {
         resolvedPostingDate = tallyInvoiceDate;
       // Business-authorised, time-boxed recovery: Dependent Depot and FG STO
-      // PGI may retain their historical Tally date through 15 Nov 2026. It
-      // still posts stock today; from 16 Nov the Phase-3 rule resumes for both.
+      // PGI may retain their historical Tally date through 15 Nov 2026
+      // (allows_backlog_tally_date is only true inside that window). From 16 Nov
+      // the Phase-3 rule resumes for both.
+      // FG STO and Dependent Depot (business owner, 2026-11-03): within that
+      // window the stock PGI itself is posted ON the Tally Invoice Date (which
+      // equals LR/Dispatch date for these), not today.
+      } else if (backfillPhase === "PHASE_3" && (group.is_fg_sto || group.is_dependent_depot) && group.allows_backlog_tally_date) {
+        if (tallyInvoiceDate > today) {
+          return doErrorResponse(req, ctx, "PGI_TALLY_DATE_IN_FUTURE", 400, `Tally Invoice Date cannot be after today for ${group.document_number}.${alreadyPostedNote}`);
+        }
+        resolvedPostingDate = tallyInvoiceDate;
       } else if (backfillPhase === "PHASE_3" && !group.allows_backlog_tally_date) {
         try {
           assertPhase3PostingDateMatch(tallyInvoiceDate, today);
