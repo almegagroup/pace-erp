@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
+import { openConfirmPrompt } from "../../../../store/actionPrompt.js";
 import { cancelAplInvoiceCase, lookupAplInvoiceCase, saveAplInvoiceCase } from "../procurementApi.js";
 
 export default function AplInvoiceCaseDrawer({ companyId, onClose, onSaved }) {
@@ -41,7 +42,14 @@ export default function AplInvoiceCaseDrawer({ companyId, onClose, onSaved }) {
   }
   async function cancelPosting() {
     if (!selected || !reason.trim()) { setError("Cancellation reason is required."); return; }
-    if (!window.confirm(`Cancel invoice posting for DO ${selected.dc_number}? This cannot be undone.`)) return;
+    const confirmed = await openConfirmPrompt({
+      eyebrow: "APL Invoice Case",
+      title: "Cancel invoice posting?",
+      message: `DO ${selected.dc_number}${selected.invoice_number ? ` · Invoice ${selected.invoice_number}` : ""} will be cancelled. PGI, where applicable, and its reservation will also be reversed. This cannot be undone.\n\nReason: ${reason.trim()}`,
+      confirmLabel: "Cancel Posting",
+      cancelLabel: "Keep Posting",
+    });
+    if (!confirmed) return;
     setSaving(true); setError(""); setNotice("");
     try {
       await cancelAplInvoiceCase({ dc_id: selected.dc_id, company_id: companyId, reason: reason.trim() });
