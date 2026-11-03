@@ -229,13 +229,30 @@ export async function listDOSourceDocumentsHandler(req: Request, ctx: Procuremen
       .select("id, sto_number, sto_date, receiving_company_id, sending_company_id, sto_type, status")
       .in("status", ["CREATED", "DISPATCHED"])
       .order("created_at", { ascending: false })
-      .limit(100);
+      .limit(300);
     if (companyId) query = query.eq("sending_company_id", companyId);
     if (search) query = query.or(`sto_number.ilike.%${search}%`);
     const { data, error } = await query;
     if (error) return doErrorResponse(req, ctx, "DO_SOURCE_LIST_FAILED", 500, "Unable to list source STOs.");
 
-    const rows = (data ?? []) as JsonRecord[];
+    // Same rule as the SO list above and as listDOSourceLinesHandler's STO branch: an STO whose
+    // every line is already on a live DO, knocked off, or has no balance left has nothing left to
+    // dispatch, so it must not be offered (a fully dispatched STO stays status DISPATCHED).
+    const candidateRows = (data ?? []) as JsonRecord[];
+    const stoLineRows = candidateRows.length
+      ? await fetchInChunks<JsonRecord>(candidateRows.map((row) => String(row.id)), (chunk) =>
+          serviceRoleClient.schema("erp_procurement").from("stock_transfer_order_line")
+            .select("id, sto_id, balance_qty, line_status").in("sto_id", chunk))
+      : [];
+    const lockedStoLineIds = await fetchLockedLineIds("sto_line_id", stoLineRows.map((row) => String(row.id)));
+    const stoHasOpenLine = new Set<string>();
+    for (const line of stoLineRows) {
+      if (lockedStoLineIds.has(String(line.id))) continue;
+      if (toUpperTrimmedString(line.line_status) === "KNOCKED_OFF") continue;
+      if ((parsePositiveNumber(line.balance_qty) ?? 0) <= 0) continue;
+      stoHasOpenLine.add(toTrimmedString(line.sto_id));
+    }
+    const rows = candidateRows.filter((row) => stoHasOpenLine.has(toTrimmedString(row.id))).slice(0, 100);
     const companyIds = [...new Set([
       ...rows.map((row) => toTrimmedString(row.sending_company_id)),
       ...rows.map((row) => toTrimmedString(row.receiving_company_id)),
