@@ -510,6 +510,35 @@ function buildCompanyScopeOrFilter(companyIds: string[]): string {
   return `company_id.in.(${joined}),consignee_company_id.in.(${joined})`;
 }
 
+// READ-ONLY scope for the CSN Tracker list/drawer (business owner, 2026-11-03): on top of the normal
+// company scope, the SENDING company of an STO can also SEE that STO's CSN (the CSN itself belongs to
+// the receiving company -- company_id -- and the sender is stored as vendor_id, a company id for STO
+// CSNs only, hence the sto_id guard). Used ONLY by read handlers; every edit/alert/planning path keeps
+// buildCompanyScopeOrFilter, so the sender can see but never change the receiver's CSN.
+function buildCompanyViewScopeOrFilter(companyIds: string[]): string {
+  const normalized = [...new Set(companyIds.map((value) => toTrimmedString(value)).filter(Boolean))];
+  const base = buildCompanyScopeOrFilter(normalized);
+  if (!base) return "";
+  const list = normalized.length === 1 ? `eq.${normalized[0]}` : `in.(${normalized.join(",")})`;
+  return `${base},and(sto_id.not.is.null,vendor_id.${list})`;
+}
+
+async function getCsnByIdForView(id: string, companyId: string): Promise<CsnRow | null> {
+  const own = await getCsnById(id, companyId);
+  if (own) return own;
+  if (!companyId) return null;
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("consignment_note")
+    .select("*")
+    .eq("id", id)
+    .not("sto_id", "is", null)
+    .eq("vendor_id", companyId)
+    .maybeSingle();
+  if (error) throw new Error("PROCUREMENT_CSN_LOOKUP_FAILED");
+  return (data as CsnRow | null) ?? null;
+}
+
 // Found live 2026-08-19 (business owner, PO group approval throwing
 // PROCUREMENT_IMPORT_LEAD_TIME_LOOKUP_FAILED on every import PO confirm/
 // approve that reached this far): migration 20260623034143 deliberately
@@ -1540,7 +1569,7 @@ export async function listCSNsHandler(req: Request, ctx: ProcurementHandlerConte
       .order("created_at", { ascending: false });
     query = query.range(offset, offset + limit - 1);
 
-    const companyScopeFilter = buildCompanyScopeOrFilter(companyIds);
+    const companyScopeFilter = buildCompanyViewScopeOrFilter(companyIds);
     if (companyScopeFilter) {
       query = query.or(companyScopeFilter);
     }
@@ -1568,7 +1597,7 @@ export async function getCSNHandler(req: Request, ctx: ProcurementHandlerContext
   try {
     const id = getIdFromPath(req);
     const companyId = await getCompanyScopedCompanyId(ctx);
-    const csn = await getCsnById(id, companyId);
+    const csn = await getCsnByIdForView(id, companyId);
     if (!csn) {
       return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_NOT_FOUND", 404, "CSN not found");
     }
@@ -2210,7 +2239,7 @@ export async function getTrackerHandler(req: Request, ctx: ProcurementHandlerCon
       .order(sortBy, { ascending: sortDirection });
     query = query.range(offset, offset + limit - 1);
 
-    const companyScopeFilter = buildCompanyScopeOrFilter(companyIds);
+    const companyScopeFilter = buildCompanyViewScopeOrFilter(companyIds);
     if (companyScopeFilter) {
       query = query.or(companyScopeFilter);
     }
@@ -2302,7 +2331,17 @@ export async function listCsnFieldHistoryHandler(req: Request, ctx: ProcurementH
       try {
         await assertCompanyScope(ctx, toTrimmedString(csn.consignee_company_id));
       } catch {
-        return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+        // View-only: the sending company of an STO may read that STO CSN's history.
+        let senderCanView = false;
+        if (toTrimmedString(csn.sto_id)) {
+          try {
+            await assertCompanyScope(ctx, toTrimmedString(csn.vendor_id));
+            senderCanView = true;
+          } catch { /* fall through to the 403 below */ }
+        }
+        if (!senderCanView) {
+          return procurementErrorResponse(req, ctx, "COMPANY_SCOPE_VIOLATION", 403, "You do not have access to this company.");
+        }
       }
     }
 
