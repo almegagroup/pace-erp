@@ -987,6 +987,7 @@ async function createStoFromBody(
   ctx: ProcurementHandlerContext,
   presetBody: JsonRecord | null,
   conversionCostByLine?: Array<number | null>,
+  isFgSto = false,
 ): Promise<Response> {
   try {
     assertProcurementReadRole(ctx);
@@ -1085,7 +1086,10 @@ async function createStoFromBody(
     }
 
     const header = {
-      sto_number: isOpeningSto ? openingStoNumber : await generateCompanyDocNumber(receivingCompanyId, "STO"),
+      // FG STO is created and owned by the SENDING company (Stores/Accounts/Logistics),
+      // so its number comes from the sender's STO series (e.g. ASCS...), not the receiver's.
+      // RM/PM/INT STO keeps the receiving company's series as before.
+      sto_number: isOpeningSto ? openingStoNumber : await generateCompanyDocNumber(isFgSto ? sendingCompanyId : receivingCompanyId, "STO"),
       sto_date: stoDate, sto_type: stoType, sending_company_id: sendingCompanyId,
       receiving_company_id: receivingCompanyId, sending_cost_center_id: sendingCostCenterId,
       receiving_cost_center_id: receivingCostCenterId, related_csn_id: relatedCsnId,
@@ -1126,6 +1130,12 @@ async function createStoFromBody(
     }
 
     const sto = await persistSto(header, linePayload);
+
+    // FG STO needs no approval (business owner, 2026-11-03): confirm straight to CREATED so
+    // its CSNs are built and it is immediately pickable in the Delivery Order (SO03).
+    if (isFgSto) {
+      await transitionSto(await fetchSto(String(sto.id)), "CREATED", ctx.auth_user_id, "FG STO auto-confirmed (no approval required)");
+    }
 
     return okResponse(await hydrateSto(String(sto.id), ctx), ctx.request_id, req);
   } catch (error) {
@@ -1511,10 +1521,178 @@ export async function createFgStoHandler(
       req, ctx,
       { ...body, sto_type: "INTER_PLANT", is_opening_sto: false, sending_company_id: sendingCompanyId },
       conversionCostByLine,
+      true,
     );
   } catch (error) {
     const code = error instanceof Error ? error.message : "FG_STO_CREATE_FAILED";
     return stoErrorResponse(req, ctx, code, 500, code);
+  }
+}
+
+// ── FG STO register (SO01/SO02 ACL) ─────────────────────────────────────────
+// An FG STO is created, tracked and dispatched by Stores/Accounts/Logistics through the
+// SO01/SO02 ACL group -- they have no PROC_STO_LIST/DETAIL, so the procurement STO pages are
+// not available to them. These two read-only endpoints (gated PROC_SO_LIST) expose only
+// INTER_PLANT STOs whose every line is an FG material. FG STOs are few, so the FG filter
+// is applied in memory after one company-scoped fetch (pagination happens after the filter,
+// keeping `total` exact).
+async function loadFgStoIds(stoRows: JsonRecord[]): Promise<Set<string>> {
+  const ids = stoRows.map((row) => toTrimmedString(row.id)).filter(Boolean);
+  if (ids.length === 0) return new Set();
+  const lines = await fetchInChunks<JsonRecord>(ids, (chunk) =>
+    serviceRoleClient.schema("erp_procurement").from("stock_transfer_order_line")
+      .select("sto_id, material_id").in("sto_id", chunk));
+  const materialIds = [...new Set(lines.map((line) => toTrimmedString(line.material_id)).filter(Boolean))];
+  const materials = await fetchInChunks<JsonRecord>(materialIds, (chunk) =>
+    serviceRoleClient.schema("erp_master").from("material_master").select("id, material_type").in("id", chunk));
+  const typeById = new Map(materials.map((row) => [toTrimmedString(row.id), toUpperTrimmedString(row.material_type)]));
+  const state = new Map<string, boolean>();
+  for (const line of lines) {
+    const stoId = toTrimmedString(line.sto_id);
+    const isFg = typeById.get(toTrimmedString(line.material_id)) === "FG";
+    state.set(stoId, (state.get(stoId) ?? true) && isFg);
+  }
+  return new Set([...state.entries()].filter(([, allFg]) => allFg).map(([id]) => id));
+}
+
+export async function listFgStosHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    if (!companyId) return okResponse({ items: [], total: 0 }, ctx.request_id, req);
+    const direction = toUpperTrimmedString(url.searchParams.get("direction")) === "INBOUND" ? "INBOUND" : "OUTBOUND";
+    const status = toUpperTrimmedString(url.searchParams.get("status"));
+    const search = toTrimmedString(url.searchParams.get("search")).replace(/[%_,()]/g, "");
+    const limit = Math.min(parsePositiveInt(url.searchParams.get("limit"), 50), 200);
+    const offset = Math.max(Number(url.searchParams.get("offset")) || 0, 0);
+
+    const rows: JsonRecord[] = [];
+    for (let from = 0; ; from += 1000) {
+      let query = serviceRoleClient.schema("erp_procurement").from("stock_transfer_order")
+        .select("*").eq("sto_type", "INTER_PLANT").eq("is_opening_sto", false)
+        .eq(direction === "INBOUND" ? "receiving_company_id" : "sending_company_id", companyId)
+        .order("created_at", { ascending: false }).order("id", { ascending: true });
+      if (status && STO_STATUSES.has(status)) query = query.eq("status", status);
+      if (search) query = query.ilike("sto_number", `%${search}%`);
+      const { data, error } = await query.range(from, from + 999);
+      if (error) return stoErrorResponse(req, ctx, "FG_STO_LIST_FAILED", 500, "Unable to list FG STOs.");
+      const page = (data ?? []) as JsonRecord[];
+      rows.push(...page);
+      if (page.length < 1000) break;
+    }
+
+    const fgIds = await loadFgStoIds(rows);
+    const fgRows = rows.filter((row) => fgIds.has(toTrimmedString(row.id)));
+    const pageRows = fgRows.slice(offset, offset + limit);
+    const pageIds = pageRows.map((row) => toTrimmedString(row.id));
+
+    const [lines, companies] = await Promise.all([
+      fetchInChunks<JsonRecord>(pageIds, (chunk) =>
+        serviceRoleClient.schema("erp_procurement").from("stock_transfer_order_line")
+          .select("sto_id, material_id, quantity, uom_code").in("sto_id", chunk)),
+      fetchInChunks<JsonRecord>(
+        [...new Set(pageRows.flatMap((row) => [toTrimmedString(row.sending_company_id), toTrimmedString(row.receiving_company_id)]).filter(Boolean))],
+        (chunk) => serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", chunk)),
+    ]);
+    const materials = await fetchInChunks<JsonRecord>(
+      [...new Set(lines.map((line) => toTrimmedString(line.material_id)).filter(Boolean))],
+      (chunk) => serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, material_name").in("id", chunk));
+    const materialById = new Map(materials.map((row) => [toTrimmedString(row.id), row]));
+    const companyById = new Map(companies.map((row) => [toTrimmedString(row.id), row]));
+    const linesByStoId = new Map<string, JsonRecord[]>();
+    for (const line of lines) {
+      const key = toTrimmedString(line.sto_id);
+      linesByStoId.set(key, [...(linesByStoId.get(key) ?? []), line]);
+    }
+    const companyLabel = (id: unknown) => {
+      const row = companyById.get(toTrimmedString(id));
+      return row ? `${toTrimmedString(row.company_code)} — ${toTrimmedString(row.company_name)}` : "—";
+    };
+
+    const items = pageRows.map((row) => {
+      const stoLines = linesByStoId.get(toTrimmedString(row.id)) ?? [];
+      return {
+        ...row,
+        sending_company_display: companyLabel(row.sending_company_id),
+        receiving_company_display: companyLabel(row.receiving_company_id),
+        line_count: stoLines.length,
+        total_quantity: Number(stoLines.reduce((sum, line) => sum + Number(line.quantity ?? 0), 0).toFixed(4)),
+        uom_code: stoLines[0] ? toTrimmedString(stoLines[0].uom_code) : null,
+        materials_display: [...new Set(stoLines.map((line) => {
+          const material = materialById.get(toTrimmedString(line.material_id));
+          return material ? `${toTrimmedString(material.pace_code)} — ${toTrimmedString(material.material_name)}` : "";
+        }).filter(Boolean))].join(", "),
+      };
+    });
+    return okResponse({ items, total: fgRows.length }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "FG_STO_LIST_FAILED";
+    return stoErrorResponse(req, ctx, code, 500, code);
+  }
+}
+
+export async function getFgStoHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const stoId = getIdFromPath(req);
+    if (!stoId) return stoErrorResponse(req, ctx, "STO_ID_REQUIRED", 400, "STO id is required.");
+    const sto = await hydrateSto(stoId, ctx); // company scope (sending or receiving) enforced here
+    if (toUpperTrimmedString(sto.sto_type) !== "INTER_PLANT" || !(await loadFgStoIds([sto as JsonRecord])).has(stoId)) {
+      return stoErrorResponse(req, ctx, "STO_NOT_FOUND", 404, "FG STO not found.");
+    }
+    const lines = (sto.lines ?? []) as JsonRecord[];
+    const [csns, materials, locations, terms, companies] = await Promise.all([
+      serviceRoleClient.schema("erp_procurement").from("consignment_note")
+        .select("id, csn_number, status, material_id, dispatch_qty, received_qty, lr_number, lr_date, vehicle_number, eta_to_plant_calculated, gate_entry_date, grn_date, invoice_number, invoice_date")
+        .eq("sto_id", stoId).order("csn_number", { ascending: true }),
+      fetchInChunks<JsonRecord>([...new Set(lines.map((line) => toTrimmedString(line.material_id)).filter(Boolean))], (chunk) =>
+        serviceRoleClient.schema("erp_master").from("material_master").select("id, pace_code, external_code, material_name, document_name").in("id", chunk)),
+      fetchInChunks<JsonRecord>([...new Set(lines.flatMap((line) => [toTrimmedString(line.sending_storage_location_id), toTrimmedString(line.receiving_storage_location_id)]).filter(Boolean))], (chunk) =>
+        serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code, name").in("id", chunk)),
+      getPaymentTermRowsByIds(lines.map((line) => toTrimmedString(line.payment_term_id))),
+      fetchInChunks<JsonRecord>([toTrimmedString(sto.sending_company_id), toTrimmedString(sto.receiving_company_id)].filter(Boolean), (chunk) =>
+        serviceRoleClient.schema("erp_master").from("companies").select("id, company_code, company_name").in("id", chunk)),
+    ]);
+    if (csns.error) return stoErrorResponse(req, ctx, "FG_STO_CSN_FETCH_FAILED", 500, "Unable to load FG STO CSNs.");
+    const materialById = new Map(materials.map((row) => [toTrimmedString(row.id), row]));
+    const locationById = new Map(locations.map((row) => [toTrimmedString(row.id), row]));
+    const companyById = new Map(companies.map((row) => [toTrimmedString(row.id), row]));
+    const matLabel = (id: unknown) => {
+      const row = materialById.get(toTrimmedString(id));
+      return row ? `${toTrimmedString(row.pace_code)} — ${toTrimmedString(row.document_name) || toTrimmedString(row.material_name)}` : "—";
+    };
+    const locLabel = (id: unknown) => {
+      const row = locationById.get(toTrimmedString(id));
+      return row ? `${toTrimmedString(row.code)} — ${toTrimmedString(row.name)}` : "—";
+    };
+    const companyLabel = (id: unknown) => {
+      const row = companyById.get(toTrimmedString(id));
+      return row ? `${toTrimmedString(row.company_code)} — ${toTrimmedString(row.company_name)}` : "—";
+    };
+    return okResponse({
+      ...sto,
+      sending_company_display: companyLabel(sto.sending_company_id),
+      receiving_company_display: companyLabel(sto.receiving_company_id),
+      lines: lines.map((line) => ({
+        ...line,
+        material_display: matLabel(line.material_id),
+        sending_location_display: locLabel(line.sending_storage_location_id),
+        receiving_location_display: locLabel(line.receiving_storage_location_id),
+        payment_term_display: terms.get(toTrimmedString(line.payment_term_id))?.name ?? "—",
+      })),
+      csns: ((csns.data ?? []) as JsonRecord[]).map((row) => ({ ...row, material_display: matLabel(row.material_id) })),
+    }, ctx.request_id, req);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "FG_STO_FETCH_FAILED";
+    const status = code === "STO_NOT_FOUND" ? 404 : code === "STO_SCOPE_VIOLATION" ? 403 : 500;
+    return stoErrorResponse(req, ctx, code, status, code);
   }
 }
 

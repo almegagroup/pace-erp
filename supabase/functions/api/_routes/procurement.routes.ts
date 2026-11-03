@@ -552,6 +552,8 @@ import {
   dispatchSTOHandler,
   knockOffSTOLineHandler,
   getSTOHandler,
+  listFgStosHandler,
+  getFgStoHandler,
   getLastStoPaymentTermHandler,
   listFgStoReceivingCompaniesHandler,
   getStoLaneTransitHandler,
@@ -1202,6 +1204,8 @@ export async function dispatchProcurementRoutes(
       return await getLastStoPaymentTermHandler(req, ctx);
     case "POST:/api/procurement/fg-stos":
       return await createFgStoHandler(req, ctx);
+    case "GET:/api/procurement/fg-stos":
+      return await listFgStosHandler(req, ctx);
     case "POST:/api/procurement/purchase-orders":
       return await createPOHandler(req, ctx);
     case "GET:/api/procurement/purchase-orders":
@@ -1827,6 +1831,10 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/sales-invoices\/[^/]+\/reverse$/.test(pathname) && req.method === "POST") {
     return await reverseSalesInvoiceHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/fg-stos\/[^/]+$/.test(pathname) && req.method === "GET") {
+    return await getFgStoHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/stos\/[^/]+$/.test(pathname)) {

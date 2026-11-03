@@ -598,6 +598,13 @@ export default function StoCreateFormPage({ openingMode = false, fgMode = false 
       // the DRAFT review step and the "Confirm STO" button entirely --
       // caught live 2026-07-30 when it silently jumped straight to
       // PENDING_APPROVAL with no chance to review/edit first.
+      if (fgMode) {
+        // FG STO is created by SO01/SO02 users, who have no PROC_STO_DETAIL access, and it is
+        // already CREATED (auto-confirmed, no approval) -- land on the FG STO detail page.
+        openScreen(OPERATION_SCREENS.PROC_FG_STO_DETAIL.screen_code, { context: { id: created?.id } });
+        navigate(`/dashboard/procurement/sales-orders/fg-sto/${encodeURIComponent(created?.id)}`);
+        return;
+      }
       openScreen(OPERATION_SCREENS.PROC_STO_DETAIL.screen_code);
       navigate(`/dashboard/procurement/stos/${encodeURIComponent(created?.id)}`);
     } catch (saveError) {

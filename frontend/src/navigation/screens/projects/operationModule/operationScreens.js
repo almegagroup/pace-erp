@@ -589,6 +589,22 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROC_FG_STO_LIST: {
+    screen_code: "PROC_FG_STO_LIST",
+    route: "/dashboard/procurement/sales-orders/fg-sto",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  PROC_FG_STO_DETAIL: {
+    screen_code: "PROC_FG_STO_DETAIL",
+    route: "/dashboard/procurement/sales-orders/fg-sto/:id",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROC_SO_DETAIL: {
     screen_code: "PROC_SO_DETAIL",
     route: "/dashboard/procurement/sales-orders/:id",
