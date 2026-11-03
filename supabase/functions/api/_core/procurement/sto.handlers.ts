@@ -1696,6 +1696,32 @@ export async function getFgStoHandler(
   }
 }
 
+// Cancel an FG STO through the SO01/SO02 ACL (PROC_SO_CREATE:EDIT) -- Stores/Accounts/Logistics
+// have no PROC_STO_CREATE. Only the SENDING company may cancel; the RPC itself blocks an STO that
+// still has an active Delivery Order (cancel the DO first) or a CSN already at gate entry/GRN.
+export async function cancelFgStoHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const stoId = getIdFromPath(req);
+    const sto = await fetchSto(stoId);
+    try {
+      await assertCompanyScope(ctx, toTrimmedString(sto.sending_company_id));
+    } catch {
+      return stoErrorResponse(req, ctx, "STO_SCOPE_VIOLATION", 403, "Only the sending company can cancel an FG STO.");
+    }
+    if (toUpperTrimmedString(sto.sto_type) !== "INTER_PLANT" || !(await loadFgStoIds([sto as JsonRecord])).has(stoId)) {
+      return stoErrorResponse(req, ctx, "STO_NOT_FOUND", 404, "FG STO not found.");
+    }
+    return await cancelSTOHandler(req, ctx);
+  } catch (error) {
+    const code = error instanceof Error ? error.message : "FG_STO_CANCEL_FAILED";
+    return stoErrorResponse(req, ctx, code, code === "STO_NOT_FOUND" ? 404 : 500, code);
+  }
+}
+
 export async function getLastStoPaymentTermHandler(
   req: Request,
   ctx: ProcurementHandlerContext,

@@ -7,12 +7,14 @@
  * Authority: Frontend
  */
 
+import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpFieldPreview, ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { popScreen } from "../../../../navigation/screenStackEngine.js";
-import { getFgSto } from "../procurementApi.js";
+import { openActionPrompt } from "../../../../store/actionPrompt.js";
+import { cancelFgSto, getFgSto } from "../procurementApi.js";
 
 const dash = (value) => (value === null || value === undefined || value === "" ? "—" : value);
 
@@ -23,7 +25,25 @@ export default function FgStoDetailPage() {
     queryFn: () => getFgSto(id),
     enabled: Boolean(id),
   });
+  const [saving, setSaving] = useState(false);
+  const [actionError, setActionError] = useState("");
   const sto = stoQuery.data ?? null;
+  const canCancel = Boolean(sto) && ["DRAFT", "CREATED"].includes(String(sto.status || "").toUpperCase());
+
+  async function handleCancel() {
+    const reason = await openActionPrompt({ eyebrow: "FG STO", title: `Cancel ${sto?.sto_number || "this FG STO"}?`, label: "Cancellation reason", required: true });
+    if (!reason) return;
+    setSaving(true);
+    setActionError("");
+    try {
+      await cancelFgSto(id, { cancellation_reason: reason });
+      await stoQuery.refetch();
+    } catch (error) {
+      setActionError(error instanceof Error ? error.message : "FG_STO_CANCEL_FAILED");
+    } finally {
+      setSaving(false);
+    }
+  }
   const loading = stoQuery.isLoading;
   const lines = Array.isArray(sto?.lines) ? sto.lines : [];
   const csns = Array.isArray(sto?.csns) ? sto.csns : [];
@@ -33,10 +53,14 @@ export default function FgStoDetailPage() {
     <ErpScreenScaffold
       eyebrow="Procurement / Sales"
       title="FG STO Detail"
-      notices={stoQuery.error ? [{ key: "fg-sto-detail-error", tone: "error", message: stoQuery.error instanceof Error ? stoQuery.error.message : "FG_STO_FETCH_FAILED" }] : []}
+      notices={[
+        ...(stoQuery.error ? [{ key: "fg-sto-detail-error", tone: "error", message: stoQuery.error instanceof Error ? stoQuery.error.message : "FG_STO_FETCH_FAILED" }] : []),
+        ...(actionError ? [{ key: "fg-sto-action-error", tone: "error", message: actionError }] : []),
+      ]}
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
         { key: "refresh", label: "Refresh", tone: "neutral", onClick: () => stoQuery.refetch() },
+        ...(canCancel ? [{ key: "cancel", label: "Cancel FG STO", tone: "danger", onClick: () => void handleCancel(), disabled: saving }] : []),
       ]}
     >
       {loading || !sto ? (

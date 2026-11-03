@@ -1395,6 +1395,10 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
 
   // ── STO ───────────────────────────────────────────────────────────────────
   {
+    pattern: /^\/api\/procurement\/fg-stos\/[^/]+\/cancel$/,
+    methods: { POST: { skipAcl: false, resourceCode: "PROC_SO_CREATE", action: "EDIT" } },
+  },
+  {
     pattern: /^\/api\/procurement\/fg-stos\/[^/]+$/,
     methods: {
       GET: { skipAcl: false, resourceCode: "PROC_SO_LIST", action: "VIEW" },

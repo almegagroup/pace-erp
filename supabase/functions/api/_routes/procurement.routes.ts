@@ -554,6 +554,7 @@ import {
   getSTOHandler,
   listFgStosHandler,
   getFgStoHandler,
+  cancelFgStoHandler,
   getLastStoPaymentTermHandler,
   listFgStoReceivingCompaniesHandler,
   getStoLaneTransitHandler,
@@ -1831,6 +1832,10 @@ export async function dispatchProcurementRoutes(
 
   if (/^\/api\/procurement\/sales-invoices\/[^/]+\/reverse$/.test(pathname) && req.method === "POST") {
     return await reverseSalesInvoiceHandler(req, ctx);
+  }
+
+  if (/^\/api\/procurement\/fg-stos\/[^/]+\/cancel$/.test(pathname) && req.method === "POST") {
+    return await cancelFgStoHandler(req, ctx);
   }
 
   if (/^\/api\/procurement\/fg-stos\/[^/]+$/.test(pathname) && req.method === "GET") {
