@@ -714,6 +714,18 @@ export function createFgSto(data) {
   return fetchProcurement("POST", "/api/procurement/fg-stos", data);
 }
 
+export function listFgStos(params) {
+  return fetchProcurement("GET", "/api/procurement/fg-stos", undefined, params);
+}
+
+export function cancelFgSto(id, data) {
+  return fetchProcurement("POST", `/api/procurement/fg-stos/${encodeURIComponent(id)}/cancel`, data);
+}
+
+export function getFgSto(id) {
+  return fetchProcurement("GET", `/api/procurement/fg-stos/${encodeURIComponent(id)}`);
+}
+
 export function createSTO(data) {
   return fetchProcurement("POST", "/api/procurement/stos", data);
 }

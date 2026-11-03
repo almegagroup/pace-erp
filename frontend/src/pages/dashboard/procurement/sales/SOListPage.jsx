@@ -120,6 +120,11 @@ export default function SOListPage() {
     navigate("/dashboard/procurement/sales-orders/create");
   }
 
+  function openFgStoRegister() {
+    openScreen(OPERATION_SCREENS.PROC_FG_STO_LIST.screen_code);
+    navigate("/dashboard/procurement/sales-orders/fg-sto");
+  }
+
   function openSoMap() {
     openScreen(OPERATION_SCREENS.PROC_SO_MAP.screen_code);
     navigate("/dashboard/procurement/sales-orders/map");
@@ -163,6 +168,7 @@ export default function SOListPage() {
         { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => soQuery.refetch() },
         { key: "create", label: "Create SO", tone: "primary", onClick: openCreateSO },
         { key: "so-map", label: "SO Map", tone: "neutral", onClick: openSoMap },
+        { key: "fg-sto-register", label: "FG STO Register", tone: "neutral", onClick: openFgStoRegister },
         { key: "draft-excel-upload", label: "Draft SO & Excel Upload", tone: "neutral", onClick: openDraftExcelUpload },
         { key: "export", label: "Export Excel", tone: "neutral", onClick: handleExport, disabled: rows.length === 0 },
       ]}

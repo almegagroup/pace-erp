@@ -9539,5 +9539,41 @@
         "skipAcl": false
       }
     ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/sales/FgStoListPage.jsx",
+    "dependencyCount": 1,
+    "deps": [
+      {
+        "fn": "listFgStos",
+        "method": "GET",
+        "path": "/api/procurement/fg-stos",
+        "resourceCode": "PROC_SO_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/procurement/sales/FgStoDetailPage.jsx",
+    "dependencyCount": 2,
+    "deps": [
+      {
+        "fn": "getFgSto",
+        "method": "GET",
+        "path": "/api/procurement/fg-stos/${encodeURIComponent(id)}",
+        "resourceCode": "PROC_SO_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "cancelFgSto",
+        "method": "POST",
+        "path": "/api/procurement/fg-stos/${encodeURIComponent(id)}/cancel",
+        "resourceCode": "PROC_SO_CREATE",
+        "action": "EDIT",
+        "skipAcl": false
+      }
+    ]
   }
 ]

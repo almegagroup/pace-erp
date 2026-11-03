@@ -188,6 +188,8 @@ import SOListPage from "../pages/dashboard/procurement/sales/SOListPage.jsx";
 import SO01Page from "../pages/dashboard/procurement/sales/SO01Page.jsx";
 import DraftSoExcelUploadPage from "../pages/dashboard/procurement/sales/DraftSoExcelUploadPage.jsx";
 import SODetailPage from "../pages/dashboard/procurement/sales/SODetailPage.jsx";
+import FgStoListPage from "../pages/dashboard/procurement/sales/FgStoListPage.jsx";
+import FgStoDetailPage from "../pages/dashboard/procurement/sales/FgStoDetailPage.jsx";
 import SO05ListPage from "../pages/dashboard/procurement/sales/SO05ListPage.jsx";
 import SO05CreatePage from "../pages/dashboard/procurement/sales/SO05CreatePage.jsx";
 import SO05InvoicePostingPage from "../pages/dashboard/procurement/sales/SO05InvoicePostingPage.jsx";
@@ -879,6 +881,18 @@ export default function AppRouter() {
                   <Route
                     path="procurement/sales-orders/draft-excel-upload"
                     element={<DraftSoExcelUploadPage />}
+                  />
+                  <Route
+                    path="procurement/sales-orders/fg-sto"
+                    element={<FgStoListPage />}
+                  />
+                  <Route
+                    path="procurement/sales-orders/fg-sto-create"
+                    element={<SO01Page initialTab="fg_sto" />}
+                  />
+                  <Route
+                    path="procurement/sales-orders/fg-sto/:id"
+                    element={<FgStoDetailPage />}
                   />
                   <Route
                     path="procurement/sales-orders/:id"
