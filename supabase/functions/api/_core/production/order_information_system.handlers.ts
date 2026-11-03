@@ -315,13 +315,14 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
 
     let linkedPackingOrders: JsonRecord[] = [...packingOrdersDirect];
     if (showLinkedPacking && processOrderIds.length > 0) {
-      const { data: linked, error: linkedErr } = await serviceRoleClient
-        .schema("erp_production").from("packing_order")
-        .select("id, company_id, po_number, po_type, process_order_id, batch_number, status, num_packs, fill_qty_per_pack")
-        .in("process_order_id", processOrderIds);
-      if (linkedErr) throw new Error("PROD_OIS_LOOKUP_FAILED");
+      const linked = await fetchInChunks<JsonRecord>(processOrderIds, (idChunk) =>
+        serviceRoleClient.schema("erp_production").from("packing_order")
+          .select("id, company_id, po_number, po_type, process_order_id, batch_number, status, num_packs, fill_qty_per_pack")
+          .in("process_order_id", idChunk)
+          .order("id", { ascending: true }),
+      ).catch(() => { throw new Error("PROD_OIS_LOOKUP_FAILED"); });
       const seen = new Set(linkedPackingOrders.map((r) => String(r.id)));
-      for (const row of (linked ?? []) as JsonRecord[]) {
+      for (const row of linked) {
         if (!seen.has(String(row.id))) {
           linkedPackingOrders.push(row);
           seen.add(String(row.id));
@@ -369,7 +370,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
             lq = (lq as unknown as { gte: (c: string, v: string) => typeof lq }).gte("posting_date", dateFrom);
             lq = (lq as unknown as { lte: (c: string, v: string) => typeof lq }).lte("posting_date", dateTo);
           }
-          return lq;
+          return lq.order("posting_date", { ascending: true }).order("id", { ascending: true });
         });
       } catch {
         throw new Error("PROD_OIS_LEDGER_FETCH_FAILED");
@@ -378,17 +379,30 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
     }
 
     if (batchNumbers.length > 0) {
-      let lq = serviceRoleClient.schema("erp_inventory").from("stock_ledger")
-        .select("id, stock_document_id, posting_date, company_id, storage_location_id, material_id, batch_number, movement_type_code, direction, quantity, posted_quantity, base_uom_code, value, posted_value, valuation_rate, created_at")
-        .in("batch_number", batchNumbers)
-        .in("company_id", companyIdsInScope);
-      if (!bypassDateRange) {
-        lq = (lq as unknown as { gte: (c: string, v: string) => typeof lq }).gte("posting_date", dateFrom);
-        lq = (lq as unknown as { lte: (c: string, v: string) => typeof lq }).lte("posting_date", dateTo);
+      // Found live 2026-11-03 (CMP005): this was a single unchunked, unpaginated
+      // query. PostgREST silently caps one response at 1000 rows (error: null), and
+      // with no ORDER BY the oldest rows come first -- so a busy company's report
+      // stopped at an early date and everything after it vanished. Chunked +
+      // paginated via fetchInChunks, with a stable order for the .range() pages.
+      let batchRows: JsonRecord[];
+      try {
+        batchRows = await fetchInChunks<JsonRecord>(batchNumbers, (batchChunk) => {
+          let lq = serviceRoleClient.schema("erp_inventory").from("stock_ledger")
+            .select("id, stock_document_id, posting_date, company_id, storage_location_id, material_id, batch_number, movement_type_code, direction, quantity, posted_quantity, base_uom_code, value, posted_value, valuation_rate, created_at")
+            .in("batch_number", batchChunk)
+            .in("company_id", companyIdsInScope)
+            .order("posting_date", { ascending: true })
+            .order("id", { ascending: true });
+          if (!bypassDateRange) {
+            lq = (lq as unknown as { gte: (c: string, v: string) => typeof lq }).gte("posting_date", dateFrom);
+            lq = (lq as unknown as { lte: (c: string, v: string) => typeof lq }).lte("posting_date", dateTo);
+          }
+          return lq;
+        });
+      } catch {
+        throw new Error("PROD_OIS_LEDGER_FETCH_FAILED");
       }
-      const { data, error } = await lq;
-      if (error) throw new Error("PROD_OIS_LEDGER_FETCH_FAILED");
-      for (const row of (data ?? []) as JsonRecord[]) ledgerRowsById.set(String(row.id), row);
+      for (const row of batchRows) ledgerRowsById.set(String(row.id), row);
     }
 
     const ledgerRows = [...ledgerRowsById.values()].sort((a, b) => {
