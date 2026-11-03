@@ -25,6 +25,7 @@ import {
   getAllAlertCounts,
   getCSNFieldHistory,
   getCSNTracker,
+  getCsnTrackerCapability,
   holdCSN,
   listCHAs,
   listCSNTrackerLayouts,
@@ -994,6 +995,23 @@ export default function CSNTrackerPage() {
   }
 
   const currentRow = rows.find((row) => row.id === expandedRowId) || null;
+  // View-only users (CAP_*_VIEW, or a sending company looking at the receiver's CSN) get the drawer
+  // read-only: no inputs, Save, Hold/Release or Sub CSN. Safe default until the capability is known.
+  const rowCapabilityQuery = useQuery({
+    queryKey: ["procurement", "csn-tracker-capability", currentRow?.company_id],
+    queryFn: () => getCsnTrackerCapability(currentRow.company_id),
+    enabled: Boolean(currentRow?.company_id) && !currentRow?.read_only_for_viewer,
+    select: (d) => d?.data ?? d ?? {},
+  });
+  const canEditCurrentRow = Boolean(currentRow) && !currentRow.read_only_for_viewer && rowCapabilityQuery.data?.can_edit === true;
+  const layoutCapabilityQuery = useQuery({
+    queryKey: ["procurement", "csn-tracker-capability", effectiveCompanyId],
+    queryFn: () => getCsnTrackerCapability(effectiveCompanyId),
+    enabled: Boolean(effectiveCompanyId),
+    select: (d) => d?.data ?? d ?? {},
+  });
+  const canWriteLayouts = layoutCapabilityQuery.data?.can_write === true;
+  const canDeleteLayouts = layoutCapabilityQuery.data?.can_delete === true;
   const currentGroupOptions = currentRow?.material_group_options || [];
   const subCsnsForCurrentRow = useMemo(
     () => rows.filter((entry) => entry.mother_csn_id === expandedRowId),
@@ -1009,6 +1027,10 @@ export default function CSNTrackerPage() {
     if (event.key === "Escape") {
       event.preventDefault();
       resetDraft(null);
+      return;
+    }
+    if (event.ctrlKey && event.key.toLowerCase() === "s" && !canEditCurrentRow) {
+      event.preventDefault(); // view-only: swallow the browser Save dialog, do nothing
       return;
     }
     if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === "s" && currentRowSupportsSubCsn) {
@@ -1082,7 +1104,7 @@ export default function CSNTrackerPage() {
                 </div>
                 <div className="flex items-center gap-1">
                   <IconActionButton glyph="CL" title="Columns" onClick={() => setShowColumns(true)} />
-                  <IconActionButton glyph="LY" title="Save layout" onClick={() => setShowSaveLayout(true)} />
+                  {canWriteLayouts ? <IconActionButton glyph="LY" title="Save layout" onClick={() => setShowSaveLayout(true)} /> : null}
                   <IconActionButton
                     glyph={exporting ? "..." : "XLS"}
                     title={exporting ? "Exporting" : "Export Excel (the rows the grid shows)"}
@@ -1217,7 +1239,7 @@ export default function CSNTrackerPage() {
                     <button
                       type="button"
                       onClick={() => void removeSelectedLayout()}
-                      disabled={!selectedLayoutId}
+                      disabled={!selectedLayoutId || !canDeleteLayouts}
                       className="inline-flex h-[26px] items-center border border-rose-300 bg-rose-50 px-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-rose-900 disabled:opacity-50"
                     >
                       Delete
@@ -1277,7 +1299,7 @@ export default function CSNTrackerPage() {
         actions={
           currentRow ? (
             <>
-              {!currentRow.mother_csn_id ? (
+              {canEditCurrentRow && !currentRow.mother_csn_id ? (
                 <IconActionButton
                   glyph="+"
                   title="Create Sub CSN (Ctrl+Shift+S)"
@@ -1287,7 +1309,7 @@ export default function CSNTrackerPage() {
                 />
               ) : null}
               <IconActionButton glyph="OP" title="Open full detail (Ctrl+O)" onClick={() => openDetail(currentRow)} />
-              {(["ORD", "TRN", "HLD"].includes(toText(currentRow.status).toUpperCase())) ? (
+              {canEditCurrentRow && (["ORD", "TRN", "HLD"].includes(toText(currentRow.status).toUpperCase())) ? (
                 <IconActionButton
                   glyph={toText(currentRow.status).toUpperCase() === "HLD" ? "RL" : "HD"}
                   title={toText(currentRow.status).toUpperCase() === "HLD" ? "Release CSN from Hold" : "Put CSN on Hold"}
@@ -1296,20 +1318,27 @@ export default function CSNTrackerPage() {
                   tone={toText(currentRow.status).toUpperCase() === "HLD" ? "primary" : "danger"}
                 />
               ) : null}
-              <IconActionButton
-                glyph="SV"
-                title={savingRowId === currentRow.id ? "Saving" : "Save (Ctrl+S)"}
-                onClick={() => void saveExpandedRow(currentRow)}
-                disabled={savingRowId === currentRow.id}
-                tone="primary"
-              />
+              {canEditCurrentRow ? (
+                <IconActionButton
+                  glyph="SV"
+                  title={savingRowId === currentRow.id ? "Saving" : "Save (Ctrl+S)"}
+                  onClick={() => void saveExpandedRow(currentRow)}
+                  disabled={savingRowId === currentRow.id}
+                  tone="primary"
+                />
+              ) : null}
               <IconActionButton glyph="X" title="Close (Esc)" onClick={() => resetDraft(null)} />
             </>
           ) : null
         }
       >
         {currentRow && draft ? (
-          <div className="grid gap-2">
+          <fieldset disabled={!canEditCurrentRow} className="grid min-w-0 gap-2 border-0 p-0 disabled:opacity-90">
+            {!canEditCurrentRow && !rowCapabilityQuery.isLoading ? (
+              <p className="border border-amber-200 bg-amber-50 px-3 py-1.5 text-[11px] text-amber-800">
+                View only — {currentRow.read_only_for_viewer ? "this consignment belongs to the receiving company." : "your access does not permit editing the CSN Tracker."}
+              </p>
+            ) : null}
             <TrackerSection eyebrow="Allocation" title="Dispatch balance and commercial flags">
               <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))" }}>
                 <EditField label="Dispatch Qty" rowId={currentRow.id} fieldName="dispatch_qty" activeHistoryKey={activeHistoryKey} histories={histories} loadingHistoryKey={loadingHistoryKey} onToggleHistory={toggleHistory}>
@@ -1670,7 +1699,7 @@ export default function CSNTrackerPage() {
                 {currentRow.mother_csn_display_number || "-"}
               </span>
             </div>
-          </div>
+          </fieldset>
         ) : (
           <p className="p-6 text-center text-sm text-slate-400">Loading...</p>
         )}

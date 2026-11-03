@@ -45,6 +45,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/csns":                        { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
   "GET:/api/procurement/csns/available-for-sto":      { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
   "GET:/api/procurement/tracker":                     { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
+  "GET:/api/procurement/csn-tracker-capability":      { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
   "GET:/api/procurement/tracker/layouts":             { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "VIEW" },
   "POST:/api/procurement/tracker/layouts":            { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "WRITE" },
   "GET:/api/procurement/alerts/lc-count":             { skipAcl: false, resourceCode: "PROC_CSN_ALERTS",  action: "VIEW" },

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Link, useParams } from "react-router-dom";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpDenseFormRow from "../../../../components/forms/ErpDenseFormRow.jsx";
@@ -12,6 +13,7 @@ import { useErpScreenHotkeys } from "../../../../hooks/useErpScreenHotkeys.js";
 import { getActiveScreenContext, popScreen } from "../../../../navigation/screenStackEngine.js";
 import {
   getCSN,
+  getCsnTrackerCapability,
   listCSNs,
   listPorts,
   listTransporters,
@@ -297,8 +299,18 @@ export default function CSNDetailPage() {
     }));
   }
 
+  // View-only (no EDIT on the CSN Tracker, or a sending company looking at the receiver's CSN): hide Save
+  // and disable the form instead of letting the user hit a 403. Safe default until the capability is known.
+  const capabilityQuery = useQuery({
+    queryKey: ["procurement", "csn-tracker-capability", detail?.company_id],
+    queryFn: () => getCsnTrackerCapability(detail.company_id),
+    enabled: Boolean(detail?.company_id) && !detail?.read_only_for_viewer,
+    select: (d) => d?.data ?? d ?? {},
+  });
+  const canEdit = Boolean(detail) && !detail.read_only_for_viewer && capabilityQuery.data?.can_edit === true;
+
   async function handleSave() {
-    if (!detail?.id || !detail?.company_id) {
+    if (!canEdit || !detail?.id || !detail?.company_id) {
       return;
     }
     setSaving(true);
@@ -328,7 +340,7 @@ export default function CSNDetailPage() {
       ]}
       actions={[
         { key: "back", label: "Back", tone: "neutral", onClick: () => popScreen() },
-        { key: "save", label: saving ? "Saving..." : "Save CSN", tone: "primary", onClick: () => void handleSave(), disabled: saving || loading || !detail },
+        ...(canEdit ? [{ key: "save", label: saving ? "Saving..." : "Save CSN", tone: "primary", onClick: () => void handleSave(), disabled: saving || loading || !detail }] : []),
       ]}
     >
       {loading || !detail ? (
@@ -336,7 +348,12 @@ export default function CSNDetailPage() {
           {loading ? "Loading consignment detail..." : "Consignment detail is unavailable."}
         </div>
       ) : (
-        <div className="grid gap-4">
+        <fieldset disabled={!canEdit} className="grid min-w-0 gap-4 border-0 p-0">
+          {!canEdit && !capabilityQuery.isLoading ? (
+            <div className="border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              View only — {detail.read_only_for_viewer ? "this consignment belongs to the receiving company." : "your access does not permit editing the CSN Tracker."}
+            </div>
+          ) : null}
           <div className="border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
             Use the CSN Tracker expanded row for split-dispatch, Sub-CSN, and bulk field-edit work. This detail screen stays available for document review and lifecycle follow-up.
           </div>
@@ -505,7 +522,7 @@ export default function CSNDetailPage() {
               emptyMessage="No gate entry lines linked yet."
             />
           </ErpSectionCard>
-        </div>
+        </fieldset>
       )}
     </ErpScreenScaffold>
   );

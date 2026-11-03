@@ -2945,7 +2945,7 @@
   },
   {
     "page": "frontend/src/pages/dashboard/procurement/csn/CSNDetailPage.jsx",
-    "dependencyCount": 5,
+    "dependencyCount": 6,
     "deps": [
       {
         "fn": "listPorts",
@@ -2986,12 +2986,20 @@
         "resourceCode": "PROC_CSN_TRACKER",
         "action": "EDIT",
         "skipAcl": false
+      },
+      {
+        "fn": "getCsnTrackerCapability",
+        "method": "GET",
+        "path": "/api/procurement/csn-tracker-capability",
+        "resourceCode": "PROC_CSN_TRACKER",
+        "action": "VIEW",
+        "skipAcl": false
       }
     ]
   },
   {
     "page": "frontend/src/pages/dashboard/procurement/csn/CSNTrackerPage.jsx",
-    "dependencyCount": 15,
+    "dependencyCount": 16,
     "deps": [
       {
         "fn": "listPorts",
@@ -3112,6 +3120,14 @@
         "resourceCode": "UNRESOLVED",
         "action": "?",
         "skipAcl": true
+      },
+      {
+        "fn": "getCsnTrackerCapability",
+        "method": "GET",
+        "path": "/api/procurement/csn-tracker-capability",
+        "resourceCode": "PROC_CSN_TRACKER",
+        "action": "VIEW",
+        "skipAcl": false
       }
     ]
   },

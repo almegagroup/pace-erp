@@ -21,6 +21,7 @@ import {
   getLCAlertCountHandler,
   getLCAlertListHandler,
   getTrackerHandler,
+  getCsnTrackerCapabilityHandler,
   getVesselBookingAlertCountHandler,
   getVesselBookingAlertListHandler,
   inlineUpdateCSNHandler,
@@ -599,6 +600,8 @@ export async function dispatchProcurementRoutes(
       return await getAllAlertCountsHandler(req, ctx);
     case "GET:/api/procurement/tracker":
       return await getTrackerHandler(req, ctx);
+    case "GET:/api/procurement/csn-tracker-capability":
+      return await getCsnTrackerCapabilityHandler(req, ctx);
     case "GET:/api/procurement/tracker/layouts":
       return await listTrackerLayoutsHandler(req, ctx);
     case "POST:/api/procurement/tracker/layouts":
