@@ -16,6 +16,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
+import QuickFilterInput from "../../../../components/inputs/QuickFilterInput.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import { useMenu } from "../../../../context/useMenu.js";
@@ -128,6 +129,7 @@ export default function DraftSoExcelUploadPage() {
   const [uploading, setUploading] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [reviewRows, setReviewRows] = useState(null);
+  const [search, setSearch] = useState("");
   const fileInputRef = useRef(null);
 
   const draftQuery = useQuery({
@@ -136,6 +138,14 @@ export default function DraftSoExcelUploadPage() {
     enabled: Boolean(effectiveCompanyId),
   });
   const rows = useMemo(() => (Array.isArray(draftQuery.data?.items) ? draftQuery.data.items : []), [draftQuery.data]);
+  // Draft SOs have many useful identifiers (vendor code, External SO,
+  // Parent/VDC and totals). Search every row value rather than only the
+  // visibly rendered columns, so a user can paste any available reference.
+  const filteredRows = useMemo(() => {
+    const normalizedSearch = search.trim().toLowerCase();
+    if (!normalizedSearch) return rows;
+    return rows.filter((row) => Object.values(row).some((value) => String(value ?? "").toLowerCase().includes(normalizedSearch)));
+  }, [rows, search]);
   const loading = draftQuery.isLoading;
 
   function openEnterSo(row) {
@@ -145,11 +155,11 @@ export default function DraftSoExcelUploadPage() {
   }
 
   function handleExport() {
-    if (rows.length === 0) return;
+    if (filteredRows.length === 0) return;
     downloadCsvFile({
       fileName: `draft_so_excel_upload_${effectiveCompanyId || "all"}.csv`,
       columns: DRAFT_LIST_COLUMNS.map(({ key, label }) => ({ key, label })),
-      rows: rows.map((row) => ({ ...row, excel_uploaded: row.excel_uploaded ? "YES" : "NO" })),
+      rows: filteredRows.map((row) => ({ ...row, excel_uploaded: row.excel_uploaded ? "YES" : "NO" })),
     });
   }
 
@@ -242,7 +252,7 @@ export default function DraftSoExcelUploadPage() {
           { key: "refresh", label: loading ? "Refreshing..." : "Refresh", tone: "neutral", onClick: () => draftQuery.refetch() },
           { key: "template", label: "Template Download", tone: "neutral", onClick: () => void downloadTemplate() },
           { key: "upload", label: uploading ? "Parsing..." : "Upload", tone: "primary", disabled: uploading || !effectiveCompanyId, onClick: () => fileInputRef.current?.click() },
-          { key: "export", label: "Export Excel", tone: "neutral", onClick: handleExport, disabled: rows.length === 0 },
+          { key: "export", label: "Export Excel", tone: "neutral", onClick: handleExport, disabled: filteredRows.length === 0 },
         ]}
         notices={[
           ...(error ? [{ key: "draft-so-error", tone: "error", message: error }] : []),
@@ -253,15 +263,22 @@ export default function DraftSoExcelUploadPage() {
           eyebrow: "Company",
           title: "Only Excel-Upload Draft SOs — confirmed SOs disappear from this list",
           children: (
-            <div className="grid gap-3 xl:grid-cols-[220px]">
+            <div className="grid gap-3 xl:grid-cols-[220px_minmax(320px,1fr)]">
               <TransactionCompanySelector runtimeContext={runtimeContext} value={companyId} onChange={setCompanyId} label="Company" hint="" />
+              <QuickFilterInput
+                label="Search All Columns"
+                value={search}
+                onChange={setSearch}
+                primaryFocus
+                placeholder="Search SO, External SO, vendor, parent, VDC, status, totals..."
+              />
               <input ref={fileInputRef} type="file" accept=".xlsx" className="hidden" onChange={(event) => void handleFileChosen(event)} />
             </div>
           ),
         }}
         listSection={{
           eyebrow: "Draft SO Register",
-          title: loading ? "Loading draft sales orders" : `${rows.length} draft sales order row${rows.length === 1 ? "" : "s"}`,
+          title: loading ? "Loading draft sales orders" : search.trim() ? `${filteredRows.length} of ${rows.length} draft sales order row${rows.length === 1 ? "" : "s"}` : `${rows.length} draft sales order row${rows.length === 1 ? "" : "s"}`,
           children: !effectiveCompanyId ? (
             <p className="text-slate-400 text-sm py-6 text-center">Select a company to view draft sales orders.</p>
           ) : (
@@ -276,9 +293,9 @@ export default function DraftSoExcelUploadPage() {
                   </button>
                 ) },
               ]}
-              rows={rows}
+              rows={filteredRows}
               rowKey={(row) => row.id}
-              emptyMessage={loading ? "Loading draft sales orders..." : "No draft Excel-Upload sales orders for this company."}
+              emptyMessage={loading ? "Loading draft sales orders..." : search.trim() ? "No draft sales order matches the current all-column search." : "No draft Excel-Upload sales orders for this company."}
             />
           ),
         }}
