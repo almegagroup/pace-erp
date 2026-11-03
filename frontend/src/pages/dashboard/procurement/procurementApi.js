@@ -440,6 +440,10 @@ export function updateCSN(id, data) {
   return fetchProcurement("PUT", `/api/procurement/csns/${encodeURIComponent(id)}`, data);
 }
 
+export function getCsnTrackerCapability(companyId) {
+  return fetchProcurement("GET", "/api/procurement/csn-tracker-capability", undefined, { company_id: companyId });
+}
+
 export function holdCSN(id, data) {
   return fetchProcurement("POST", `/api/procurement/csns/${encodeURIComponent(id)}/hold`, { ...data, action: "HOLD" });
 }

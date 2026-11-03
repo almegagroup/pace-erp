@@ -14,6 +14,7 @@ import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { todayIsoInKolkata } from "../../_shared/dateUtils.ts";
 import { errorResponse, okResponse } from "../response.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
+import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
 import { listPagination, parseListSearchPage } from "../../_shared/list_pagination.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -437,6 +438,33 @@ export async function generateProcurementDocNumber(docType: string): Promise<str
   }
 
   return String(data);
+}
+
+// True when the viewer can see this CSN ONLY through the sending-company read scope (it is neither
+// their own company's CSN nor one they are the consignee of), so the UI must not offer any edit.
+function isCsnReadOnlyForViewer(row: { company_id?: unknown; consignee_company_id?: unknown }, viewerCompanyIds: string[]): boolean {
+  const own = new Set(viewerCompanyIds.map((id) => toTrimmedString(id)).filter(Boolean));
+  return !own.has(toTrimmedString(row.company_id)) && !own.has(toTrimmedString(row.consignee_company_id));
+}
+
+// GET /api/procurement/csn-tracker-capability?company_id= -- what the caller may DO in the CSN Tracker at
+// that company (VIEW is already implied by reaching the screen). The frontend hides edit controls from a
+// view-only user instead of letting them hit a 403. Read-only; the write routes still enforce their own ACL.
+export async function getCsnTrackerCapabilityHandler(req: Request, ctx: ProcurementHandlerContext): Promise<Response> {
+  try {
+    const companyId = toTrimmedString(new URL(req.url).searchParams.get("company_id") ?? "");
+    if (!companyId) return procurementErrorResponse(req, ctx, "PROCUREMENT_CSN_COMPANY_REQUIRED", 400, "company_id is required");
+    await assertCompanyScope(ctx, companyId);
+    const [canEdit, canWrite, canDelete] = await Promise.all([
+      canMaintainCompanyResource(ctx, companyId, "PROC_CSN_TRACKER", "EDIT"),
+      canMaintainCompanyResource(ctx, companyId, "PROC_CSN_TRACKER", "WRITE"),
+      canMaintainCompanyResource(ctx, companyId, "PROC_CSN_TRACKER", "DELETE"),
+    ]);
+    return okResponse({ can_edit: canEdit, can_write: canWrite, can_delete: canDelete }, ctx.request_id, req);
+  } catch (err) {
+    const code = (err as Error).message || "PROCUREMENT_CSN_CAPABILITY_FAILED";
+    return procurementErrorResponse(req, ctx, code, code === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, "CSN tracker capability lookup failed");
+  }
 }
 
 export async function getCsnById(id: string, companyId?: string): Promise<CsnRow | null> {
@@ -1634,6 +1662,7 @@ export async function getCSNHandler(req: Request, ctx: ProcurementHandlerContext
     return okResponse({
       data: {
         ...(enriched ?? csn),
+        read_only_for_viewer: isCsnReadOnlyForViewer(csn, companyId ? [companyId] : []),
         gate_entry_lines: gateEntryLineResult.data ?? [],
         gate_entries: gateEntryResult.data ?? [],
         grn: grnResult.data ?? null,
@@ -2295,7 +2324,10 @@ export async function getTrackerHandler(req: Request, ctx: ProcurementHandlerCon
       throw new Error(`PROCUREMENT_TRACKER_LIST_FAILED: ${error.message}`);
     }
 
-    const enriched = await enrichTrackerRows((data as CsnRow[] | null) ?? []);
+    const enriched = (await enrichTrackerRows((data as CsnRow[] | null) ?? [])).map((row) => ({
+      ...row,
+      read_only_for_viewer: isCsnReadOnlyForViewer(row, companyIds),
+    }));
     return okResponse({ data: enriched, total: count ?? 0, pagination: listPagination(page, limit, count ?? 0) }, ctx.request_id, req);
   } catch (err) {
     console.error("CSN_TRACKER_LIST_HANDLER_ERROR", err);
