@@ -148,6 +148,17 @@ export function buildRouteIndex(menuSnapshot) {
     ["/dashboard/procurement/transfer",                           "/dashboard/procurement/accounts/bulk-component-map"],
     ["/dashboard/procurement/sales-orders",            "/dashboard/procurement/sales-orders/:id"],
     ["/dashboard/procurement/sales-orders/create",     "/dashboard/procurement/sales-orders/:id"],
+    // FG STO register + detail (SO01/SO02 ACL, no menu row of its own). The register is embedded as a tab
+    // of SO01 (/sales-orders/create) and also a page (/sales-orders/fg-sto); the detail is reached from
+    // both, and straight after "Create FG STO". Without these, opening a row bounced to the dashboard
+    // (found live 2026-11-04, business owner) -- same companion-route gap as AC06/§129.8/§119.4 above.
+    ["/dashboard/procurement/sales-orders",            "/dashboard/procurement/sales-orders/fg-sto"],
+    ["/dashboard/procurement/sales-orders/create",     "/dashboard/procurement/sales-orders/fg-sto"],
+    ["/dashboard/procurement/sales-orders/create",     "/dashboard/procurement/sales-orders/fg-sto/:id"],
+    ["/dashboard/procurement/sales-orders/fg-sto",     "/dashboard/procurement/sales-orders/fg-sto/:id"],
+    ["/dashboard/procurement/sales-orders/fg-sto",     "/dashboard/procurement/sales-orders/fg-sto-create"],
+    ["/dashboard/procurement/sales-orders/fg-sto-create", "/dashboard/procurement/sales-orders/fg-sto"],
+    ["/dashboard/procurement/sales-orders/fg-sto-create", "/dashboard/procurement/sales-orders/fg-sto/:id"],
     ["/dashboard/procurement/delivery-orders",         "/dashboard/procurement/delivery-orders/:id"],
     ["/dashboard/procurement/delivery-orders/create",  "/dashboard/procurement/delivery-orders/:id"],
     // Edit DO (§133.12, 2026-09-03) reopens DO01CreatePage at .../:id/edit —
