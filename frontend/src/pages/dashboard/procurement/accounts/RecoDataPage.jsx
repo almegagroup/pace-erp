@@ -256,6 +256,9 @@ export default function RecoDataPage() {
     return [...values].sort();
   }, [rows]);
   const hasActiveSearch = globalSearch.trim().length > 0;
+  // Rows left after the grid's own per-column header filters (funnel icons) -- null until the grid reports.
+  const [shownRows, setShownRows] = useState(null);
+  const [shownSummaryRows, setShownSummaryRows] = useState(null);
   const filteredRows = useMemo(() => {
     const needle = globalSearch.trim().toLowerCase();
     if (!needle) return rows;
@@ -347,7 +350,8 @@ export default function RecoDataPage() {
 
   const [exporting, setExporting] = useState(false);
   async function handleExport() {
-    if (filteredRows.length === 0) return;
+    const exportRows = shownRows ?? filteredRows;
+    if (exportRows.length === 0) return;
     setExporting(true);
     try {
       const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
@@ -355,7 +359,7 @@ export default function RecoDataPage() {
         fileName: `reco_data_${filters.dateFrom}_${filters.dateTo}.xlsx`,
         sheetName: "Reco Data",
         columns: GRID_COLUMNS,
-        rows: filteredRows,
+        rows: exportRows,
         getCellValue: (row, column) =>
           typeof column.excelValue === "function" ? column.excelValue(row)
             : typeof column.copyValue === "function" ? column.copyValue(row) : (row?.[column.key] ?? ""),
@@ -367,7 +371,8 @@ export default function RecoDataPage() {
     }
   }
   async function handleExportSummary() {
-    if (filteredSummaryRows.length === 0) return;
+    const exportRows = shownSummaryRows ?? filteredSummaryRows;
+    if (exportRows.length === 0) return;
     setExporting(true);
     try {
       const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
@@ -375,7 +380,7 @@ export default function RecoDataPage() {
         fileName: `reco_summary_data_${filters.dateFrom}_${filters.dateTo}.xlsx`,
         sheetName: "Reco Summary Data",
         columns: SUMMARY_COLUMNS,
-        rows: filteredSummaryRows,
+        rows: exportRows,
         getCellValue: (row, column) =>
           typeof column.excelValue === "function" ? column.excelValue(row)
             : typeof column.copyValue === "function" ? column.copyValue(row) : (row?.[column.key] ?? ""),
@@ -441,6 +446,8 @@ export default function RecoDataPage() {
               rowKey={(row) => row.key}
               virtualize
               rangeSelect
+              columnFilter
+              onFilteredRowsChange={setShownSummaryRows}
               maxHeight="calc(100vh - 260px)"
               emptyMessage={reportQ.isLoading ? "Loading..." : "No rows in this range."}
             />
@@ -564,7 +571,7 @@ export default function RecoDataPage() {
                 Back to Filters
               </button>
               <span className="text-xs text-slate-500">
-                {reportQ.isLoading ? "Loading..." : `${filteredRows.length} row${filteredRows.length === 1 ? "" : "s"}`}
+                {reportQ.isLoading ? "Loading..." : (() => { const shown = (shownRows ?? filteredRows).length; return `${shown} row${shown === 1 ? "" : "s"}`; })()}
               </span>
             </div>
             <div className="mb-2 flex items-center gap-2">
@@ -594,6 +601,8 @@ export default function RecoDataPage() {
               rowKey={(row, index) => `${row.group_key || "row"}-${row.material_id}-${row.row_kind}-${index}`}
               virtualize
               rangeSelect
+              columnFilter
+              onFilteredRowsChange={setShownRows}
               maxHeight="calc(100vh - 260px)"
               getRowProps={(row) => ({ className: rowClassName(row) })}
               emptyMessage={
