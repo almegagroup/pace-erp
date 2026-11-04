@@ -1,7 +1,7 @@
 /*
  * File-Path: frontend/src/pages/dashboard/procurement/sales/SO01Page.jsx
  * Domain: PROCUREMENT / Sales
- * Purpose: SO01's 3-tab landing shell (Create SO | SO Map | Create FG STO) —
+ * Purpose: SO01's 3-tab landing shell (Create SO | SO Map | Create FG STO | FG STO List) —
  *          feasibility §133.7/§133.16. Wraps the already-built SO01CreatePage
  *          and SO01MapPage as tabs of one page rather than two disconnected
  *          screens; "Create FG STO" is the STO create form in FG mode (MTS FG SKUs,
@@ -13,11 +13,13 @@ import { useState } from "react";
 import SO01CreatePage from "./SO01CreatePage.jsx";
 import SO01MapPage from "./SO01MapPage.jsx";
 import StoCreateFormPage from "../sto/StoCreateFormPage.jsx";
+import FgStoListPage from "./FgStoListPage.jsx";
 
 const TABS = [
   { key: "create", label: "Create SO" },
   { key: "map", label: "SO Map" },
   { key: "fg_sto", label: "Create FG STO" },
+  { key: "fg_sto_list", label: "FG STO List" },
 ];
 
 export default function SO01Page({ initialTab = "create" }) {
@@ -45,6 +47,7 @@ export default function SO01Page({ initialTab = "create" }) {
       {tab === "create" ? <SO01CreatePage /> : null}
       {tab === "map" ? <SO01MapPage /> : null}
       {tab === "fg_sto" ? <StoCreateFormPage fgMode /> : null}
+      {tab === "fg_sto_list" ? <FgStoListPage onCreate={() => setTab("fg_sto")} /> : null}
     </div>
   );
 }
