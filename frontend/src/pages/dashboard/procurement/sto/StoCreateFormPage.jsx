@@ -57,6 +57,11 @@ function createEmptyLine(defaultPaymentTermId = "", defaultExpectedDeliveryDate 
     quantity: "",
     uom_code: "",
     rate: "",
+    // FG STO only: the unit the user typed the quantity (and so the Rate) in, and how many base UoM
+    // (KG) one of it is. 1 / "" = the base UoM itself. The Rate is per THIS unit; the saved
+    // transfer_price is always per base UoM (rate / uom_factor).
+    entered_uom_code: "",
+    uom_factor: 1,
     currency_code: "INR",
     payment_term_id: defaultPaymentTermId,
     freight_term: "FOR",
@@ -67,6 +72,14 @@ function createEmptyLine(defaultPaymentTermId = "", defaultExpectedDeliveryDate 
     rebate_remarks: "",
     expected_delivery_date: defaultExpectedDeliveryDate,
   };
+}
+
+// Price per BASE unit (KG) of a line whose Rate was typed per the unit the quantity was entered in
+// (BAG -> factor 20 => 380.14 / BAG = 19.007 / KG). Non-FG lines always have factor 1.
+function ratePerBaseUnit(line) {
+  const rate = Number(line.rate || 0) || 0;
+  const factor = Number(line.uom_factor) > 0 ? Number(line.uom_factor) : 1;
+  return rate / factor;
 }
 
 function LineMoreDrawer({ line, visible, onClose, onChange }) {
@@ -202,7 +215,13 @@ function FgQtyCell({ materialId, baseUomCode, onBaseQty }) {
     <UomQuantityInput
       baseUomCode={baseUomCode}
       conversions={Array.isArray(conversionsQuery.data) ? conversionsQuery.data : []}
-      onChange={(baseQty) => onBaseQty(baseQty)}
+      onChange={(baseQty, meta) => {
+        const enteredUom = meta?.enteredUomCode ?? baseUomCode;
+        const conversion = (Array.isArray(conversionsQuery.data) ? conversionsQuery.data : []).find((row) =>
+          row.from_uom_code === enteredUom && row.to_uom_code === baseUomCode && !row.variable_conversion && Number(row.conversion_factor) > 0);
+        const factor = enteredUom === baseUomCode ? 1 : Number(conversion?.conversion_factor) || 1;
+        onBaseQty(baseQty, { enteredUomCode: enteredUom === baseUomCode ? "" : enteredUom, factor });
+      }}
     />
   );
 }
@@ -563,7 +582,7 @@ export default function StoCreateFormPage({ openingMode = false, fgMode = false 
           source_csn_id: line.source_csn_id || null,
           quantity: Number(line.quantity),
           uom_code: line.uom_code || null,
-          transfer_price: Number(line.rate),
+          transfer_price: Number(ratePerBaseUnit(line).toFixed(6)),
           currency_code: line.currency_code || "INR",
           payment_term_id: line.payment_term_id,
           freight_term: line.freight_term,
@@ -614,7 +633,7 @@ export default function StoCreateFormPage({ openingMode = false, fgMode = false 
     }
   }
 
-  const netTotal = lines.reduce((sum, line) => sum + (Number(line.quantity || 0) || 0) * (Number(line.rate || 0) || 0), 0);
+  const netTotal = lines.reduce((sum, line) => sum + (Number(line.quantity || 0) || 0) * ratePerBaseUnit(line), 0);
   const activeLineForDrawer = lineMoreIndex != null ? lines[lineMoreIndex] : null;
   const lineRows = lines.map((line, index) => ({ ...line, __index: index }));
 
@@ -641,7 +660,11 @@ export default function StoCreateFormPage({ openingMode = false, fgMode = false 
           key={lines[index].material_id || `blank-${index}`}
           materialId={lines[index].material_id}
           baseUomCode={lines[index].uom_code}
-          onBaseQty={(qty) => updateLine(index, { quantity: qty === null ? "" : String(qty) })}
+          onBaseQty={(qty, meta) => updateLine(index, {
+            quantity: qty === null ? "" : String(qty),
+            entered_uom_code: meta?.enteredUomCode ?? "",
+            uom_factor: meta?.factor ?? 1,
+          })}
         />
       ) : (
         <input
@@ -668,18 +691,29 @@ export default function StoCreateFormPage({ openingMode = false, fgMode = false 
     },
     {
       key: "rate",
-      label: "Rate",
-      width: "100px",
-      render: (_row, index) => (
-        <input
-          type="number"
-          min="0"
-          step="0.0001"
-          value={lines[index].rate}
-          onChange={(event) => updateLine(index, { rate: event.target.value })}
-          className="h-8 w-full border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
-        />
-      ),
+      label: fgMode ? "Rate (per entered unit)" : "Rate",
+      width: fgMode ? "190px" : "100px",
+      render: (_row, index) => {
+        const line = lines[index];
+        const perUnitLabel = line.entered_uom_code || line.uom_code;
+        return (
+          <div className="flex items-center gap-1">
+            <input
+              type="number"
+              min="0"
+              step="0.0001"
+              value={line.rate}
+              onChange={(event) => updateLine(index, { rate: event.target.value })}
+              className="h-8 w-full min-w-[80px] border border-slate-300 bg-[#fffef7] px-2 text-xs text-slate-900 outline-none focus:border-sky-500"
+            />
+            {fgMode && perUnitLabel ? (
+              <span className="whitespace-nowrap text-[10px] text-slate-500">
+                / {perUnitLabel}{line.entered_uom_code && Number(line.rate) > 0 ? ` = ${ratePerBaseUnit(line).toFixed(4)} / ${line.uom_code}` : ""}
+              </span>
+            ) : null}
+          </div>
+        );
+      },
     },
     {
       key: "currency_code",
@@ -748,7 +782,7 @@ export default function StoCreateFormPage({ openingMode = false, fgMode = false 
       label: "Net Value",
       width: "110px",
       align: "right",
-      render: (_row, index) => ((Number(lines[index].quantity || 0) || 0) * (Number(lines[index].rate || 0) || 0)).toFixed(2),
+      render: (_row, index) => ((Number(lines[index].quantity || 0) || 0) * ratePerBaseUnit(lines[index])).toFixed(2),
     },
     {
       key: "actions",
