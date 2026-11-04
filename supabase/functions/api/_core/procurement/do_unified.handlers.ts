@@ -1204,10 +1204,11 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
         const sourceLine = stoLineMap.get(stoLineId);
         if (!sourceLine) throw new Error("DO_SOURCE_LINE_NOT_FOUND");
         // STO commercial values use the same base-UOM snapshot as SO lines.
-        // FG STO: invoice/DO rate = transfer price + AC04 conversion cost (NULL on RM/PM/INT lines).
+        // The sender's DO / invoice rate is the transfer price the user entered, nothing more. The AC04
+        // conversion cost (conversion_cost_per_unit) belongs to the RECEIVER's valuation only (GRN).
         salesSourceLine = {
           ...sourceLine,
-          rate: Number((Number(sourceLine.transfer_price ?? 0) + Number(sourceLine.conversion_cost_per_unit ?? 0)).toFixed(6)),
+          rate: Number(Number(sourceLine.transfer_price ?? 0).toFixed(6)),
           rate_basis: "BASE_UOM",
         };
         materialId = toTrimmedString(sourceLine.material_id);
