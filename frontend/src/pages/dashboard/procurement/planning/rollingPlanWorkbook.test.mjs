@@ -24,14 +24,14 @@ const company = (id, name, extra = {}) => ({
 test("rolling plan workbook: every tab, both companies, PLAN totals per group", async () => {
   const wb = buildRollingPlanWorkbook({ companies: [company("a", "Almeha Coatings"), company("b", "Jayashree Industries")], asOf: "2026-10-21" });
   const names = wb.worksheets.map((s) => s.name);
-  assert.deepEqual(names, ["SUMMARY", "PLAN", "RM_PLANNING", "PM_PLANNING", "Almeha Coatings RM_PM", "Jayashree Industries RM_PM", "BUY_PLAN", "STORE_INSTRUCTIONS", "STORE_EXCESS", "STORE_TRANSFERS", "STORE_DETAIL", "ARRIVALS", "Almeha Coatings 1 DATES", "Almeha Coatings 2 LEVELS", "Jayashree Industries 1 DATES", "Jayashree Industries 2 LEVELS", "WATERFALL_SUMMARY", "WATERFALL_LEVELS", "WATERFALL_FLOW", "WATERFALL_WHO_HOLDS"]);
+  assert.deepEqual(names, ["SUMMARY", "PLAN", "RM Stand-alone", "RM Group", "RM MHEC", "RM RDP", "PM Stand-alone", "PM Group", "Almeha Coatings RM_PM", "Jayashree Industries RM_PM", "BUY_PLAN", "STORE_INSTRUCTIONS", "STORE_EXCESS", "STORE_TRANSFERS", "STORE_DETAIL", "ARRIVALS", "WATERFALL_SUMMARY", "WATERFALL_LEVELS", "WATERFALL_FLOW", "WATERFALL_WHO_HOLDS"]);
   const buffer = await wb.xlsx.writeBuffer();
   assert.ok(buffer.byteLength > 5000, "valid xlsx written");
-  const rm = wb.getWorksheet("RM_PLANNING");
+  const rm = wb.getWorksheet("RM RDP");
   const texts = [];
   rm.eachRow((row) => texts.push(String(row.getCell(1).value ?? "")));
   assert.ok(texts.includes("Almeha Coatings — RDP (family: VAE A, VAE B)") && texts.includes("Jayashree Industries — RDP (family: VAE A, VAE B)"), "one block per company");
-  assert.ok(texts.includes("Prediction"), "prediction under the block");
+  assert.ok(texts.includes("1. ALL ORDERS AT A GLANCE — what to do"), "orders at a glance under the block");
 });
 
 test("PLAN matrix: company × month columns, empty SKUs dropped", () => {
@@ -135,17 +135,16 @@ test("STORE tabs: items by period with the child groups of one parent on ONE row
   await wb.xlsx.writeBuffer();
 });
 
-test("RM_PLANNING family block: whole-family note and each level (Exclusive and groups) with its own Min / Max / Critical", async () => {
+test("RM RDP family block: each level (Exclusive and groups) with its own Min / Max / Critical", async () => {
   const base = company("a", "Almeha Coatings");
   const waterfall = { levels: [
     { level_kind: "OWN", label: "Exclusive — Gabrosa", members: ["Gabrosa"], target_days: 30, critical_days: 20, max_days: 60, cover_days_now: 60, reserve_now: 6670, next_min_day: "2026-11-27" },
     { level_kind: "GROUP", label: "MHEC", members: ["Gabrosa", "Combizell"], target_days: 30, critical_days: 15, max_days: 60, cover_days_now: 60, reserve_now: 84390, next_min_day: null }], events: [], matrix: [] };
   const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], waterfall }] }], asOf: "2026-10-28" });
   const lines = [];
-  wb.getWorksheet("RM_PLANNING").eachRow((row) => lines.push(String(row.getCell(1).value ?? "")));
-  assert.ok(lines.some((l) => l.includes("WHOLE family")), "the whole-family note");
-  assert.ok(lines.some((l) => l.includes("Exclusive — Gabrosa: Min 30 / Max 60 / Critical 20 d · reserve 6670 KG (covers 60 d) · next Min 2026-11-27")), "the Exclusive level line");
-  assert.ok(lines.some((l) => l.includes("MHEC: Min 30 / Max 60 / Critical 15 d") && l.includes("not in horizon")), "the group level line");
+  wb.getWorksheet("RM RDP").eachRow((row) => lines.push(String(row.getCell(1).value ?? "")));
+  assert.ok(lines.some((l) => l.includes("Exclusive — Gabrosa: Min 30 / Max 60 / Critical 20 d · reserve 6,670 KG · next Min 2026-11-27")), "the Exclusive level line");
+  assert.ok(lines.some((l) => l.includes("MHEC: Min 30 / Max 60 / Critical 15 d") && l.includes("next Min —")), "the group level line");
   await wb.xlsx.writeBuffer();
 });
 
@@ -192,9 +191,10 @@ test("STORE_INSTRUCTIONS: every company gets its rows, also when only another co
   await wb.xlsx.writeBuffer();
 });
 
-test("RM_PLANNING: the engine's ETD / port / plant dates and the reason are separate columns", () => {
-  const wb = buildRollingPlanWorkbook({ companies: [company("a", "Almeha Coatings")], asOf: "2026-10-21" });
-  const rm = wb.getWorksheet("RM_PLANNING");
+test("RM Stand-alone: the engine's ETD / port / plant dates and the reason are separate columns", () => {
+  const base = company("a", "Almeha Coatings");
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], is_family: false }] }], asOf: "2026-10-21" });
+  const rm = wb.getWorksheet("RM Stand-alone");
   let head = null; let arrival = null;
   rm.eachRow((row) => { const v = row.values; if (v.includes("ETD (engine)")) head = v; if (v.includes("PO ACP/PO80/2026-27/1")) arrival = v; });
   const at = (label) => head.indexOf(label);
@@ -203,4 +203,26 @@ test("RM_PLANNING: the engine's ETD / port / plant dates and the reason are sepa
   assert.equal(arrival[at("ETA to Port (engine)")], "2026-10-26");
   assert.equal(arrival[at("ETA to Plant (engine)")], "2026-10-30");
   assert.equal(arrival[at("Why this date — Min / Max by group")], "Now 2026-11-06 is too late.");
+});
+
+test("Group tabs: MHEC and RDP families sit on their own tabs; the lean block shows CSN Tracker ATD / ATA, the pool diary and folds the long text", () => {
+  const base = company("a", "Almeha Coatings");
+  const rec = { etd: "2026-09-24", etd_actual: true, port: "2026-11-06", port_actual: true, plant: "2026-11-12", type: "IMPORT" };
+  const lot = { kind: "Existing order", ref: "PO ASC/PO123/2026-27/1 · CSN 3000000229 (TRN)", material: "TS U2121", supplier: "SHANDONG", status: "IN_TRANSIT", lot_qty: 25000, existing_eta: "2026-11-12", engine_eta: "2026-11-12", action: "", etd: "", port: "", plant: "2026-11-12", why: "Long reason. More words.", absent: "If PO X · CSN 3000000239 (ORD) (2026-12-24) does not come: this order must land at plant by 2026-11-30 (24 d before its recorded date)", to_level: 25000, pct: 1, min_a: 51, max_a: 60, min_b: 51, max_b: 60, excess: 100, excess_split: "TS U2121: 100 KG", level_status: "Above Min", rec };
+  const mhec = { ...base.blocks[0], title: "MHEC", members: ["Gabrosa", "TS U2121"], level_sections: [{ label: "MHEC", kind: "GROUP", members: ["Gabrosa", "TS U2121"], target_days: 30, max_days: 60, critical_days: 15, rows: [{ kind: "Stock today", min_a: 60, max_a: null }, lot] }],
+    level_today: [{ label: "MHEC", opening: [{ material: "TS U2121", qty: 26000 }], reserve: [{ material: "TS U2121", qty: 25000 }], left: [{ material: "TS U2121", qty: 1000 }] }], excess_after: [{ material: "TS U2121", qty: 1000 }],
+    pool_diary: [{ day: "2026-11-12", lands_a: ["+ TS U2121 25,000 (ASC/PO123/2026-27)"], pool_a: { total: 100, by: [{ material: "TS U2121", qty: 100 }] }, lands_b: [], pool_b: null, notes: [] }], projection_total: [], prediction: [] };
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [mhec] }], asOf: "2026-10-21" });
+  const names = wb.worksheets.map((x) => x.name);
+  assert.ok(names.includes("RM MHEC") && names.includes("RM RDP"));
+  const sheet = wb.getWorksheet("RM MHEC");
+  const cells = [];
+  sheet.eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
+  assert.ok(cells.some((t) => t.includes("2. POOL DIARY")), "pool diary");
+  assert.ok(cells.some((t) => t.includes("(ATD)") && t.includes("(ATA)")), "CSN Tracker ATD / ATA shown when they exist");
+  assert.ok(cells.some((t) => t === "If CSN 3000000239 does not come → land by 2026-11-30"), "short form of the 'if another order does not come' text");
+  let hidden = 0;
+  sheet.eachRow((row) => { if (row.hidden) hidden += 1; });
+  assert.ok(hidden >= 2, "the full wording is folded away, not dropped");
+  assert.equal(wb.getWorksheet("RM Group").rowCount, 1, "no other RM group family -> only the empty-text row");
 });

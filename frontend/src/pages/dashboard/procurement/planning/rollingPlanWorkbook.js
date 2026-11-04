@@ -69,8 +69,6 @@ function addTable(sheet, columns, rows, { color } = {}) {
     if (tone) row.eachCell((cell) => { cell.font = { ...(cell.font ?? {}), color: { argb: tone } }; });
   }
 }
-/** Stable multi-key sort for the schedule-check tabs (each level's picture reads top to bottom by date). */
-const sortBy = (rows, keys) => [...rows].sort((a, b) => { for (const k of keys) { const x = String(a[k] ?? ""); const y = String(b[k] ?? ""); if (x !== y) return x.localeCompare(y); } return 0; });
 function widths(sheet, list) {
   list.forEach((w, i) => { sheet.getColumn(i + 1).width = w; });
 }
@@ -146,7 +144,7 @@ function writePlan(sheet, companies) {
 // ─────────────────────────────────────────────────────────────────────────────
 // Planning blocks: one per family / item per company — today + arrival rows, then Prediction.
 // ─────────────────────────────────────────────────────────────────────────────
-const BLOCK_HEAD = ["Date", "Opening", "ETA to Plant", "Quantity to Dispatch", "Pro-rata", "Closing", "Excess (not needed yet)", "Max Days", "Min Stk", "Min Days", "PO / CSN", "Qty", "Supplier", "ST", "What to do (engine)", "ETD (engine)", "ETA to Port (engine)", "ETA to Plant (engine)", "Why this date — Min / Max by group", "If another order does not come"];
+const BLOCK_HEAD = ["Date", "Opening", "ETA to Plant", "Quantity to Dispatch", "Pro-rata", "Closing", "Excess (not needed yet)", "Max Days", "Min Stk", "Min Days", "PO / CSN", "Qty", "Supplier", "ST", "What to do (engine)", "ETD (engine)", "ETA to Port (engine)", "ETA to Plant (engine)", "Why this date — Min / Max by group", "If another order does not come", "Recorded (CSN Tracker): ETD / Port / Plant"];
 /** Owner 2026-10-29: name the group(s) whose free stock triggered the order, not just "Group free stock". */
 const triggeredBy = (x) => {
   const also = Array.isArray(x.trigger_also_groups) && x.trigger_also_groups.length ? ` (same lot also feeds: ${x.trigger_also_groups.join(", ")})` : "";
@@ -194,10 +192,207 @@ function bestColumns(r) {
   return [join("action"), join("etd"), join("port"), join("plant"), join("why") || (r.best_dates ?? []).filter(Boolean).join("\n"), join("absent")];
 }
 
-function writeBlocks(sheet, companies, kind) {
-  const list = companies.flatMap((c) => (c.blocks ?? []).filter((b) => b.kind === kind).map((b) => ({ ...b, company: c })))
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Group tabs (owner 2026-11-04): one lean block per family — orders at a glance, the pool diary, level by level, and the day-by-day table folded.
+// Every fact appears once; the long engine wording and the day-by-day table are folded (click [+] at the left edge), nothing is dropped.
+// ─────────────────────────────────────────────────────────────────────────────
+const L_BLUE = "FFDCE6F1";
+const L_GREY = "FFF2F2F2";
+const L_AMBER = "FFFFF2CC";
+const L_GREEN = "FFE2EFDA";
+const L_DGREY = "FFD9D9D9";
+const LEAN_WIDTHS = [36, 22, 16, 18, 22, 20, 34, 22, 44, 44, 38, 46];
+const LEAN_COLS = LEAN_WIDTHS.length;
+function fill(cell, argb) { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb } }; }
+const qty = (n) => (n === null || n === undefined || !Number.isFinite(Number(n)) ? "—" : Math.round(Number(n)).toLocaleString("en-US"));
+const estLines = (text, width) => (text === null || text === undefined ? 1 : String(text).split("\n").reduce((sum, l) => sum + Math.max(1, Math.ceil(l.length / Math.max(1, width * 1.05))), 0));
+const minMax = (mn, mx) => (mn === null || mn === undefined ? "—" : `${mn} d${mx ? ` / ${mx} d` : ""}`);
+const matLines = (list) => {
+  const items = (list ?? []).filter((x) => x.qty > 0.5);
+  return items.length ? `${items.map((x) => `${x.material}: ${qty(x.qty)}`).join("\n")}\nTotal: ${qty(items.reduce((sum, x) => sum + x.qty, 0))}` : "—";
+};
+const poolLine = (p) => (p ? `Pool: ${p.by.map((x) => `${x.material} ${qty(x.qty)}`).join(", ") || "—"} = ${qty(p.total)}` : "—");
+const splitLines = (text) => String(text ?? "").split("\n").filter(Boolean).map((l) => l.replace(/(-?\d+(\.\d+)?)( [A-Za-z]+)?$/, (_m, n, _f, unit) => `${qty(Number(n))}${unit ?? ""}`)).join("\n");
+/** "If CSN 3000000239 does not come → land by 2026-11-30" instead of the full paragraph (the full wording stays in the folded rows). */
+const shortAbsent = (text) => {
+  if (!text) return "—";
+  return String(text).split("\n").map((l) => {
+    const m = /CSN (\d+)[^:]*does not come: this order must land at plant by (\d{4}-\d\d-\d\d)/.exec(l);
+    return m ? `If CSN ${m[1]} does not come → land by ${m[2]}` : l.slice(0, 90);
+  }).join("\n");
+};
+const shortWhy = (text) => {
+  if (!text) return "—";
+  const t = String(text).trim();
+  const i = t.indexOf(". ");
+  const first = i < 0 ? t : t.slice(0, i + 1);
+  return first.length <= 170 ? first : `${first.slice(0, 167)}…`;
+};
+const legsText = (etd, port, plant) => `ETD ${day(etd) || "—"}\nPort ${day(port) || "—"}\nPlant ${day(plant) || "—"}`;
+/** The CSN Tracker's own legs: ATD (BL date) when shipped else ETD; ATA at port when arrived else ETA; ETA to plant. */
+const recordedText = (rec, fallbackPlant) => (rec
+  ? `ETD ${day(rec.etd) || "—"}${rec.etd_actual ? " (ATD)" : ""}\nPort ${day(rec.port) || "—"}${rec.port_actual ? " (ATA)" : ""}\nPlant ${day(rec.plant) || day(fallbackPlant) || "—"}`
+  : (fallbackPlant ? `Plant ${day(fallbackPlant)}` : "—"));
+/** The plan's as-of day (for "order-by already passed"): the first row of the family's day table. */
+const asOfOf = (b) => (b.rows?.[0]?.day ?? "0000-00-00");
+
+function writeLeanFamily(sheet, b, company) {
+  const row = (vals, { bold = false, fillArgb = null, color = null, spans = {} } = {}) => {
+    const r = sheet.addRow(vals);
+    let maxLines = 1;
+    let col = 1;
+    while (col <= vals.length) {
+      const end = spans[col] ?? col;
+      const cell = r.getCell(col);
+      cell.alignment = { vertical: "top", wrapText: true };
+      cell.border = BORDER;
+      if (bold || color) cell.font = { bold, color: color ? { argb: color } : undefined };
+      if (fillArgb) for (let c = col; c <= end; c += 1) fill(r.getCell(c), fillArgb);
+      for (let c = col + 1; c <= end; c += 1) r.getCell(c).border = BORDER;
+      if (end > col) sheet.mergeCells(r.number, col, r.number, end);
+      const width = LEAN_WIDTHS.slice(col - 1, end).reduce((sum, w) => sum + w, 0);
+      maxLines = Math.max(maxLines, estLines(vals[col - 1], width));
+      col = end + 1;
+    }
+    if (maxLines > 1) r.height = 15 * maxLines;
+    return r;
+  };
+  const title = (text, { size = 11, fillArgb = null, bold = true, italic = false, color = null } = {}) => {
+    const r = sheet.addRow([text]);
+    const cell = r.getCell(1);
+    cell.font = { bold, italic, size, color: color ? { argb: color } : undefined };
+    cell.alignment = { vertical: "top", wrapText: true };
+    if (fillArgb) for (let c = 1; c <= LEAN_COLS; c += 1) fill(r.getCell(c), fillArgb);
+    sheet.mergeCells(r.number, 1, r.number, LEAN_COLS);
+    const lines = estLines(text, LEAN_WIDTHS.reduce((a, w) => a + w, 0));
+    if (lines > 1) r.height = 15 * lines;
+    return r;
+  };
+  const fold = (fromRow, toRow) => { for (let n = fromRow; n <= toRow; n += 1) { const r = sheet.getRow(n); r.outlineLevel = 1; r.hidden = true; } };
+  const u = b.uom ?? "";
+
+  // ── header
+  title(`${companyLabel(company)} — ${b.title} (family: ${b.members.join(", ")})`, { size: 13, fillArgb: TITLE_FILL });
+  const policyFacts = (b.members_policy ?? []).length ? `Target / Critical — ${b.members_policy.join(" · ")}` : `Target ${b.target_days ?? "—"} d · Critical ${b.critical_days ?? "—"} d`;
+  const alarm = Boolean(b.first_shortage_day || (b.gaps ?? []).length);
+  const facts = [`Unit ${u || "—"}`, policyFacts, b.first_shortage_day ? `RUNS OUT ${b.first_shortage_day}` : "", (b.gaps ?? []).length ? `ENGINE CANNOT PLAN — ${b.gaps.join("; ")}` : ""].filter(Boolean).join(" · ");
+  title(facts, { bold: alarm, color: alarm ? RED : null });
+  if ((b.members_stock ?? []).length) title(`Member stock: ${b.members_stock.join(" · ")}`, { bold: false, italic: true });
+  for (const l of b.waterfall?.levels ?? []) {
+    title(`  ${l.label}: Min ${days(l.target_days) ?? "—"} / Max ${days(l.max_days) ?? "—"} / Critical ${days(l.critical_days) ?? "—"} d · reserve ${qty(l.reserve_now)} ${u} · next Min ${l.next_min_day ?? "—"}`, { bold: false, italic: true });
+  }
+  if (b.together_note) title(b.together_note, { bold: false, italic: true });
+  title('How to read: stock is shared level by level, narrow level first; what nobody needs yet is EXCESS in the shared pool. A landed lot sits in the pool until a level falls to its own Min. "Recorded" = the dates in the PO / CSN (CSN Tracker: ATD / ATA when they exist, else ETD / ETA). "Engine date" = the date the engine advises. In the recorded-date view every order lands on its recorded date; in the engine-date view on the engine date. Grey = exists only in the recorded-date view.', { bold: false, italic: true });
+  sheet.addRow([]);
+
+  // ── 1. all orders at a glance
+  title("1. ALL ORDERS AT A GLANCE — what to do", { size: 12, fillArgb: L_BLUE });
+  row(["Order", "Material", `Qty (${u})`, "Status", "Recorded (CSN Tracker)", "Engine date", "What to do (engine)", "ETD / Port / Plant (engine)", "Why this date", "If another order does not come", "Triggered by / Min dip", "Other route (ETD · Port · Plant · MOQ)"], { bold: true, fillArgb: L_GREY });
+  const seen = new Map();
+  for (const sct of b.level_sections ?? []) for (const r of sct.rows) if (r.kind === "Existing order" && !seen.has(r.ref)) seen.set(r.ref, r);
+  const fullWording = [];
+  const existing = [...seen.values()].sort((x, y) => String(x.existing_eta ?? "").localeCompare(String(y.existing_eta ?? "")));
+  const refName = (ref) => String(ref).split(" · ").pop().replace(" (ORD)", "").replace(" (TRN)", " (in transit)");
+  for (const r of existing) {
+    const en = r.engine_eta ?? "";
+    const act = r.action || `In transit — cannot be moved; lands ${day(r.existing_eta)}. Nothing to do.`;
+    const out = row([refName(r.ref), r.material ?? "", num(r.lot_qty), STATUS_LABEL[r.status] ?? r.status ?? "", recordedText(r.rec, r.existing_eta), day(en),
+      act, (r.etd || r.plant) ? legsText(r.etd, r.port, r.plant) : "—", shortWhy(r.why), shortAbsent(r.absent), "—", "—"]);
+    out.getCell(3).numFmt = NUM;
+    if (en && r.existing_eta && en < r.existing_eta) out.getCell(7).font = { bold: true, color: { argb: RED } };
+    fullWording.push([refName(r.ref), r.why || "—", r.absent || "—"]);
+  }
+  for (const p of b.projection_total ?? []) {
+    const pred = (b.prediction ?? []).find((x) => x.po_by === p.po_by && x.material === p.material);
+    const en = p.engine_eta;
+    const passed = p.po_by && p.po_by < asOfOf(b) ? ", already passed" : "";
+    const act = en ? `NEW ORDER — place it. Order by ${day(p.po_by) || "—"}.`
+      : `NEW ORDER only while the existing orders stay on their recorded dates (order by ${day(p.po_by) || "—"}${passed}). If they follow the engine dates: NOT needed.`;
+    let trig = "";
+    if (pred) {
+      trig = pred.trigger_kind === "GROUP" ? `Group free stock — ${pred.trigger_group ?? ""}` : "Its own use";
+      const dp = pred.min_dip;
+      if (dp) trig += `\n${dp.level_label} fell to ${Math.round(dp.lowest_cover_days)} d (Min ${Math.round(dp.min_days)} d); asked pool ${qty(dp.ask_wanted_qty)}, got ${qty(dp.ask_got_qty)}.`;
+    }
+    const alts = (pred?.alternatives ?? []).map((a) => `${a.route === "DOMESTIC" ? "LOCAL" : "IMPORT"} · ${a.material} · ${String(a.vendor).split(" — ").pop()}\nETD ${a.etd ?? "—"} · Port ${a.port ?? "—"} · Plant ${a.plant ?? "—"} · MOQ ${a.moq ? qty(a.moq) : "—"}`).join("\n") || "—";
+    const out = row(["NEW (engine)", `${p.material}\n${String(p.supplier).split(" — ").pop()}`, num(p.qty), "Projection", p.recorded_eta ? `Plant ${day(p.recorded_eta)}` : "—", en ? day(en) : "Not needed", act, legsText(p.etd, p.port, en || p.recorded_eta), "—", "—", trig || "—", alts], { fillArgb: en ? null : L_DGREY });
+    out.getCell(3).numFmt = NUM;
+  }
+  sheet.addRow([]);
+  if (fullWording.length) {
+    title("Full engine wording of every order above   ▶ click [+] at the left edge to open", { bold: false, italic: true });
+    const from = sheet.rowCount + 1;
+    row(["Order", "Why this date (full)", "", "", "", "", "If another order does not come (full)", "", "", "", "", ""], { bold: true, fillArgb: L_GREY, spans: { 2: 6, 7: 12 } });
+    for (const [nm, why, absent] of fullWording) row([nm, why, "", "", "", "", absent, "", "", "", "", ""], { spans: { 2: 6, 7: 12 } });
+    fold(from, sheet.rowCount);
+    sheet.addRow([]);
+  }
+
+  // ── 2. pool diary
+  if ((b.pool_diary ?? []).length) {
+    title("2. POOL DIARY — the dates that matter, both views side by side", { size: 12, fillArgb: L_BLUE });
+    row(["Date", "Recorded-date view: what lands → pool after", "", "", "Engine-date view: what lands → pool after", "", "", "What happened", "", "", "", ""], { bold: true, fillArgb: L_GREY, spans: { 2: 4, 5: 7, 8: 12 } });
+    for (const d of b.pool_diary) {
+      const hasDip = d.notes.some((n) => n.includes("falls to"));
+      row([d.day, [...d.lands_a, poolLine(d.pool_a)].join("\n"), "", "", [...d.lands_b, poolLine(d.pool_b)].join("\n"), "", "", d.notes.join("\n"), "", "", "", ""], { spans: { 2: 4, 5: 7, 8: 12 }, fillArgb: hasDip ? L_AMBER : null });
+    }
+    sheet.addRow([]);
+  }
+
+  // ── 3. level by level
+  title("3. LEVEL BY LEVEL — what each level holds today and what each order gives it", { size: 12, fillArgb: L_BLUE });
+  const levelCount = (b.level_sections ?? []).length;
+  (b.level_sections ?? []).forEach((sct, idx) => {
+    const today = (b.level_today ?? []).find((x) => x.label === sct.label);
+    title(`Level ${idx + 1} — ${sct.label}   (${sct.members.join(" + ")})   —   Min ${days(sct.target_days) ?? "—"} d · Max ${days(sct.max_days) ?? "—"} d`, { size: 12, fillArgb: L_BLUE });
+    const stock = sct.rows.find((r) => r.kind === "Stock today");
+    row(["TODAY", "Available to this level", "", "This level keeps as reserve", "", "Left over → next level", "", "Reserve covers / Max days", "", "", "", ""], { bold: true, fillArgb: L_GREY, spans: { 2: 3, 4: 5, 6: 7, 8: 9 } });
+    row(["", matLines(today?.opening), "", matLines(today?.reserve), "", matLines(today?.left), "", `${stock?.min_a ?? "—"} d  /  ${stock?.max_a ? `${stock.max_a} d` : "Full (beyond the plan)"}`, "", "", "", ""], { spans: { 2: 3, 4: 5, 6: 7, 8: 9 } });
+    if (idx === levelCount - 1 && (b.excess_after ?? []).length) {
+      row(["After the last level → the EXCESS in the pool", "", "", matLines(b.excess_after), "", "", "", "", "", "", "", ""], { bold: true, fillArgb: L_GREEN, spans: { 4: 5 } });
+    }
+    row(["Order", `Qty (${u})`, "Recorded date", "Engine date", `Level takes (${u} · % of lot)`, "Min / Max days: recorded → engine", "Excess in pool at end of the day the lot lands", "Break-up of that excess", "", "", "", ""], { bold: true, fillArgb: L_GREY, spans: { 8: 9 } });
+    for (const r of sct.rows) {
+      if (r.kind === "Stock today") continue;
+      const proj = r.kind === "Projection";
+      const en = r.engine_eta ?? "";
+      const nm = proj ? `NEW (engine) — ${r.material}` : `${r.material} — ${refName(r.ref)}`;
+      const out = row([nm, num(r.lot_qty), proj ? "—" : day(r.existing_eta) || "—", en ? day(en) : "Not needed", `${qty(r.to_level)} · ${r.pct === null || r.pct === undefined ? "—" : Math.round(r.pct * 100)}%`,
+        `${minMax(r.min_a, r.max_a)}  →  ${minMax(r.min_b, r.max_b)}`, num(r.excess), splitLines(r.excess_split), "", "", "", ""], { spans: { 8: 9 }, fillArgb: proj && !en ? L_DGREY : null });
+      out.getCell(2).numFmt = NUM; out.getCell(7).numFmt = NUM;
+      const st = String(r.level_status ?? "");
+      if (st && !st.startsWith("Above Min")) fill(out.getCell(6), L_AMBER);
+    }
+    sheet.addRow([]);
+  });
+
+  // ── 4. day by day (folded)
+  if ((b.rows ?? []).length) {
+    title("4. FAMILY DAY BY DAY — whole family on every date something lands   ▶ click [+] at the left edge to open (all data is here, folded to keep the page short)", { size: 12, fillArgb: L_BLUE });
+    const from = sheet.rowCount + 1;
+    row(["Date", "Opening", "ETA to Plant", "Quantity to Dispatch", "Pro-rata", "Closing", "Excess (not needed yet)", "Max Days", "Min Stk", "Min Days", "PO / CSN · Qty · Supplier · Status · Recorded (CSN Tracker)", ""], { bold: true, fillArgb: L_GREY });
+    for (const r of b.rows) {
+      const refs = (r.references ?? []).map((ref, i) => `${ref} · ${r.qtys?.[i] ?? ""} · ${r.suppliers?.[i] ?? ""} · ${STATUS_LABEL[r.statuses?.[i]] ?? r.statuses?.[i] ?? ""}${r.rec_cells?.[i] ? ` · ${recordedText(r.rec_cells[i], null).replace(/\n/g, " ")}` : ""}`).join("\n");
+      const out = row([day(r.day), num(r.opening), num(r.arrivals) || null, num(r.dispatch), num(r.use), num(r.closing), num(r.excess), coverCell(r.max_days, r.max_days_est, r.closing, b.plan_end), num(r.min_stock), coverCell(r.min_days, r.min_days_est, r.closing, b.plan_end), refs, ""]);
+      for (const c of [2, 3, 4, 5, 6, 7, 9]) out.getCell(c).numFmt = NUM;
+    }
+    fold(from, sheet.rowCount);
+  }
+  sheet.addRow([]);
+  sheet.addRow([]);
+}
+
+function writeBlocks(sheet, companies, kind, { filter = () => true, sections = false, emptyText } = {}) {
+  const list = companies.flatMap((c) => (c.blocks ?? []).filter((b) => b.kind === kind && filter(b)).map((b) => ({ ...b, company: c })))
     .sort((a, b) => a.title.localeCompare(b.title) || companyLabel(a.company).localeCompare(companyLabel(b.company)));
-  if (list.length === 0) { sheet.addRow([`No ${kind} item with use, arrival or order in the horizon.`]); return; }
+  if (list.length === 0) { sheet.addRow([emptyText ?? `No ${kind} item with use, arrival or order in the horizon.`]); return; }
+  if (sections) {
+    sheet.properties.outlineProperties = { summaryBelow: false };
+    for (const b of list) writeLeanFamily(sheet, b, b.company);
+    widths(sheet, LEAN_WIDTHS);
+    return;
+  }
   for (const b of list) {
     const title = sheet.addRow([`${companyLabel(b.company)} — ${b.title}${b.is_family ? ` (family: ${b.members.join(", ")})` : ""}`]);
     title.getCell(1).font = { bold: true };
@@ -233,6 +428,7 @@ function writeBlocks(sheet, companies, kind) {
         r.references.join("\n"), r.qtys.join("\n"), r.suppliers.join("\n"),
         r.statuses.map((s) => STATUS_LABEL[s] ?? s).join("\n"),
         ...bestColumns(r),
+        (r.rec_cells ?? []).map((rec) => recordedText(rec, null)).filter((t) => t !== "—").join("\n"),
       ]);
       row.eachCell((cell, i) => { cell.border = BORDER; if (i >= 2 && i <= 10) cell.numFmt = NUM; cell.alignment = { vertical: "top", wrapText: i >= 11 }; });
       if (r.closing < 0) row.getCell(6).font = { bold: true, color: { argb: RED } };
@@ -255,8 +451,9 @@ function writeBlocks(sheet, companies, kind) {
       }
     }
     sheet.addRow([]);
+    sheet.addRow([]);
   }
-  widths(sheet, [12, 12, 12, 14, 11, 12, 14, 9, 12, 9, 34, 11, 30, 16, 40, 12, 12, 12, 70, 50]);
+  widths(sheet, [16, 26, 24, 18, 13, 13, 38, 13, 13, 13, 42, 42, 13, 9, 10, 10, 10, 10, 14, 24, 14, 44, 40]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -321,8 +518,15 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
   writePlan(wb.addWorksheet(sheetName("PLAN", used)), companies);
 
   // Planning blocks
-  writeBlocks(wb.addWorksheet(sheetName("RM_PLANNING", used)), companies, "RM");
-  writeBlocks(wb.addWorksheet(sheetName("PM_PLANNING", used)), companies, "PM");
+  // Owner 2026-11-03: RM and PM each get a Stand-alone tab (items in no group) and a Group tab (every group member, also one that is exclusive in some product).
+  writeBlocks(wb.addWorksheet(sheetName("RM Stand-alone", used)), companies, "RM", { filter: (b) => !b.is_family, emptyText: "No stand-alone RM item with use, arrival or order in the horizon." });
+  // Owner 2026-11-04: the MHEC and RDP families (the two big shared-pool groups) get their own tabs; "RM Group" keeps every other group.
+  const familyTab = (b) => (/MHEC/i.test(b.title) ? "MHEC" : /RDP/i.test(b.title) ? "RDP" : "OTHER");
+  writeBlocks(wb.addWorksheet(sheetName("RM Group", used)), companies, "RM", { filter: (b) => b.is_family && familyTab(b) === "OTHER", sections: true, emptyText: "No RM group item with use, arrival or order in the horizon." });
+  writeBlocks(wb.addWorksheet(sheetName("RM MHEC", used)), companies, "RM", { filter: (b) => b.is_family && familyTab(b) === "MHEC", sections: true, emptyText: "No MHEC family with use, arrival or order in the horizon." });
+  writeBlocks(wb.addWorksheet(sheetName("RM RDP", used)), companies, "RM", { filter: (b) => b.is_family && familyTab(b) === "RDP", sections: true, emptyText: "No RDP family with use, arrival or order in the horizon." });
+  writeBlocks(wb.addWorksheet(sheetName("PM Stand-alone", used)), companies, "PM", { filter: (b) => !b.is_family, emptyText: "No stand-alone PM item with use, arrival or order in the horizon." });
+  writeBlocks(wb.addWorksheet(sheetName("PM Group", used)), companies, "PM", { filter: (b) => b.is_family, sections: true, emptyText: "No PM group item with use, arrival or order in the horizon." });
 
   // Requirement per company
   for (const c of companies) {
@@ -418,51 +622,6 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
     { label: "Engine best date", value: (r) => day(r.engine_best_date) }, { label: "Vendor can move it?", key: "vendor_window" }, { label: "Why", key: "engine_reason" },
   ], companies.flatMap((c) => c.arrivals.map((a) => ({ ...a, company: companyLabel(c) }))), { color: (r) => (r.no_eta || r.overdue ? RED : null) });
   widths(arr, [26, 34, 44, 30, 18, 12, 7, 14, 14, 12, 16, 22, 60]);
-
-  // Owner 2026-10-30: schedule check — two simple tabs per company.
-  // 1 DATES = each not-yet-shipped consignment: existing ETA, engine ETA, the group that decided it, that group's Min / Max days on both dates.
-  // 2 LEVELS = each Exclusive and each group on its own: every lot that feeds it, what it keeps, Min / Max days on the existing and on the engine ETA, excess left.
-  // Min days = days the level's own reserve lasts; Max days = days that reserve plus the shared excess would last.
-  for (const c of companies) {
-    const sc = c.schedule_check ?? { date_rows: [], level_rows: [] };
-    const code = c.company_code ?? companyLabel(c);
-    const dates = wb.addWorksheet(sheetName(`${code} 1 DATES`, used));
-    addTable(dates, [
-      { label: "Family (groups)", key: "family" }, { label: "Consignment (not shipped)", key: "order" }, { label: "Qty", value: (r) => num(r.qty), num: true }, { label: "UoM", key: "uom" },
-      { label: "Existing ETA", value: (r) => day(r.recorded) }, { label: "Engine ETA", value: (r) => day(r.engine) }, { label: "Moved (days, + later)", value: (r) => num(r.shift_days), num: true },
-      { label: "Group", key: "group" },
-      { label: "Min days on Existing ETA", value: (r) => num(r.min_recorded), num: true }, { label: "Max days on Existing ETA (reserve + excess, up to Max)", value: (r) => num(r.max_recorded), num: true },
-      { label: "Min days on Engine ETA", value: (r) => num(r.min_engine), num: true }, { label: "Max days on Engine ETA (reserve + excess, up to Max)", value: (r) => num(r.max_engine), num: true },
-      { label: "Excess qty on Engine ETA", value: (r) => num(r.excess_engine), num: true },
-    ], sortBy(sc.date_rows, ["family", "engine", "order"]));
-    widths(dates, [34, 60, 11, 6, 13, 13, 10, 40, 12, 12, 12, 12, 14]);
-    dates.views = [{ state: "frozen", xSplit: 2, ySplit: 1 }];
-
-    const levels = wb.addWorksheet(sheetName(`${code} 2 LEVELS`, used));
-    const lcols = [
-      { label: "Lot", key: "kind" }, { label: "PO / CSN", key: "order" }, { label: "Material", key: "material" }, { label: "Lot qty", value: (r) => num(r.qty), num: true },
-      { label: "Kept for this level (qty)", value: (r) => num(r.kept), num: true },
-      { label: "Existing ETA", value: (r) => day(r.recorded) }, { label: "Engine ETA", value: (r) => day(r.engine) },
-      { label: "Min days (Existing ETA)", value: (r) => num(r.min_recorded), num: true }, { label: "Max days (Existing ETA, up to Max)", value: (r) => num(r.max_recorded), num: true },
-      { label: "Min days (Engine ETA)", value: (r) => num(r.min_engine), num: true }, { label: "Max days (Engine ETA, up to Max)", value: (r) => num(r.max_engine), num: true },
-      { label: "Excess qty (Engine ETA)", value: (r) => num(r.excess_engine), num: true },
-    ];
-    let lastKey = null;
-    for (const r of sc.level_rows) {
-      const key = `${r.family}§${r.level}`;
-      if (key !== lastKey) {
-        if (lastKey !== null) levels.addRow([]);
-        const t = levels.addRow([`${r.family}  ›  ${r.level}`]);
-        t.font = { bold: true, size: 12 };
-        t.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: "FFDDE7F5" } };
-        styleHeader(levels.addRow(lcols.map((x) => x.label)));
-        lastKey = key;
-      }
-      const row = levels.addRow(lcols.map((x) => (x.value ? x.value(r) : r[x.key]) ?? null));
-      lcols.forEach((x, k) => { const cell = row.getCell(k + 1); cell.border = BORDER; if (x.num) cell.numFmt = NUM; });
-    }
-    widths(levels, [20, 52, 36, 11, 14, 13, 13, 11, 11, 11, 11, 14]);
-  }
 
   writeWaterfall(wb, companies, used);
   writeExplain(wb, companies, used);

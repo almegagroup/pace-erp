@@ -1640,6 +1640,8 @@ export type ConfiguredLeadTime = {
   route_days?: number;
   /** IMPORT only: port-to-plant days (the port's inland days); undefined = not configured. */
   inland_days?: number;
+  /** IMPORT only: clearance + the port's inland days = days from the vessel reaching the port to the plant (= the CSN Tracker's ETA-to-port to ETA-to-plant gap). */
+  port_to_plant_days?: number;
 };
 export type LeadTimeResult = {
   configured_min: number | null;
