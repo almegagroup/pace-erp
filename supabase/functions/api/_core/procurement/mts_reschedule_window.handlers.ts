@@ -14,6 +14,10 @@ export type ReschedulePieceFacts = {
   route: RescheduleRoute | null;
   etd: string | null;
   vendor_id: string | null;
+  /** CSN Tracker legs: ATD (BL date) else ETD; ATA at port else ETA at port; ETA to plant. */
+  rec_etd: string | null;
+  rec_port: string | null;
+  rec_plant: string | null;
 };
 
 export type RescheduleContext = {
@@ -36,7 +40,7 @@ export async function loadRescheduleContext(companyId: string, pieces: ReadonlyA
   const [windowRes, csnRows, poRows] = await Promise.all([
     serviceRoleClient.schema("erp_planning").from("company_reschedule_window").select("import_min_days, domestic_min_days").eq("company_id", companyId).maybeSingle(),
     csnIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(csnIds, (chunk) => serviceRoleClient.schema("erp_procurement")
-      .from("consignment_note").select("id, csn_type, etd, vendor_id").in("id", chunk)),
+      .from("consignment_note").select("id, csn_type, etd, bl_date, eta_at_port, ata_at_port, eta_to_plant_calculated, vendor_id").in("id", chunk)),
     poNumbers.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(poNumbers, (chunk) => serviceRoleClient.schema("erp_procurement")
       .from("purchase_order").select("po_number, import_trade_type, vendor_id").eq("company_id", companyId).in("po_number", chunk)),
   ]);
@@ -56,6 +60,9 @@ export async function loadRescheduleContext(companyId: string, pieces: ReadonlyA
         route: routeOfPo(po?.import_trade_type, csn?.csn_type),
         etd: etd || null,
         vendor_id: text(csn?.vendor_id) || text(po?.vendor_id) || null,
+        rec_etd: (csn ? text(csn.bl_date).slice(0, 10) || etd : "") || null,
+        rec_port: (csn ? text(csn.ata_at_port).slice(0, 10) || text(csn.eta_at_port).slice(0, 10) : "") || null,
+        rec_plant: (csn ? text(csn.eta_to_plant_calculated).slice(0, 10) : "") || null,
       };
     },
   };

@@ -119,7 +119,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     const [poRows, csnRows, heldCsnRows, historyCsns, groupRows] = await Promise.all([
       serviceRoleClient.schema("erp_procurement").from("purchase_order").select("po_number, vendor_id").eq("company_id", companyId).eq("status", "CONFIRMED").limit(10000),
       csnIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(csnIds, (chunk) => serviceRoleClient
-        .schema("erp_procurement").from("consignment_note").select("id, vendor_id").in("id", chunk)),
+        .schema("erp_procurement").from("consignment_note").select("id, vendor_id, csn_type, etd, bl_date, eta_at_port, ata_at_port, eta_to_plant_calculated").in("id", chunk)),
       serviceRoleClient.schema("erp_procurement").from("consignment_note")
         .select("csn_number, material_id, vendor_id, dispatch_qty, po_qty, po_uom_code, hold_reason, inactive_from_status, inactive_at, eta_to_plant_calculated")
         .or(`company_id.eq.${companyId},consignee_company_id.eq.${companyId}`).eq("status", "HLD").order("inactive_at", { ascending: false }).limit(10000),
@@ -139,6 +139,13 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     const vendorName = new Map(vendorRows.map((v) => [text(v.id), text(v.vendor_name) || "—"]));
     const vendorByPo = new Map(pos.map((p) => [text(p.po_number), vendorName.get(text(p.vendor_id)) ?? null]));
     const vendorByCsn = new Map(csnRows.map((c) => [text(c.id), vendorName.get(text(c.vendor_id)) ?? null]));
+    // CSN Tracker legs of every inbound piece: ATD (BL date) else ETD, ATA at port else ETA at port, ETA to plant (owner 2026-11-04).
+    const recordedByCsn = new Map(csnRows.map((c) => {
+      const d = (v: unknown) => text(v).slice(0, 10) || null;
+      const atd = d(c.bl_date); const ata = d(c.ata_at_port);
+      return [text(c.id), { etd: atd ?? d(c.etd), etd_actual: Boolean(atd), port: ata ?? d(c.eta_at_port), port_actual: Boolean(ata), plant: d(c.eta_to_plant_calculated), type: text(c.csn_type) }];
+    }));
+    const recOf = (csnId?: string | null) => (csnId ? recordedByCsn.get(csnId) ?? null : null);
     const held_csns = heldCsns.map((c) => ({
       csn_number: text(c.csn_number), material: nameOf(text(c.material_id)), supplier: vendorName.get(text(c.vendor_id)) ?? "—",
       qty: Number(c.dispatch_qty ?? c.po_qty ?? 0), uom: text(c.po_uom_code), previous_status: text(c.inactive_from_status),
@@ -216,7 +223,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
             if (r.route === chosenRoute || r.route_days === undefined || option.lead_time_days === null) continue;
             const etd = addDaysIso2(plantDate, -r.route_days);
             if (etd < calendar.asOf) continue; // ordered from today it would land after the need date: it would not connect
-            const port = r.route === "IMPORT" && r.inland_days !== undefined ? addDaysIso2(plantDate, -r.inland_days) : null;
+            const port = r.route === "IMPORT" && (r.port_to_plant_days ?? r.inland_days) !== undefined ? addDaysIso2(plantDate, -((r.port_to_plant_days ?? r.inland_days) as number)) : null;
             out.push({ route: r.route, material: nameOf(m), vendor: r.vendor_label, etd, port, plant: plantDate, moq: option.moq_qty_base ?? null });
           }
         }
@@ -230,7 +237,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     type Row = Record<string, unknown>;
     const altText = (list: Array<{ route: string; material: string; vendor: string; etd: string; port: string | null; plant: string; moq: number | null }>) => list.map((x) => `${x.route === "IMPORT" ? "IMPORT" : "LOCAL"} · ${x.material} · ${x.vendor}: ETD ${x.etd}${x.port ? ` · Port ${x.port}` : ""} · Plant ${x.plant}`).join("\n");
     const cmpDay = (a: string | null, b: string | null) => String(a ?? "9999").localeCompare(String(b ?? "9999"));
-    const buildSections = (memberIds: string[], fu: { base_per_unit: number } | null, legs: (m: string, vendorId: string | null | undefined, date: string | null) => { port_eta: string | null; import_etd: string | null }, events: Array<{ member: string; reference: string; kind: string; date_source?: string; csn_id?: string; reschedule_key?: string; qty: number }>, waterfallLevels: Array<{ label: string; target_days: number | null; max_days: number | null; critical_days: number | null; reserve_now: number; cover_days_now: number | null }>) => {
+    const buildSections = (memberIds: string[], fu: { base_per_unit: number } | null, legs: (m: string, vendorId: string | null | undefined, date: string | null) => { port_eta: string | null; import_etd: string | null }, events: Array<{ member: string; reference: string; kind: string; date_source?: string; csn_id?: string; reschedule_key?: string; qty: number }>, wfv: { levels?: Array<{ label: string; target_days: number | null; max_days: number | null; critical_days: number | null; reserve_now: number; cover_days_now: number | null }>; events?: Array<{ day: string; kind: string; level: string; qty: number; by_material?: Array<{ material: string; qty: number }> }>; matrix?: Array<{ day: string; levels: Array<{ level: string; by_material: Array<{ material: string; qty: number }> }>; pool: Array<{ material: string; qty: number }>; closing: Array<{ material: string; qty: number }> }> }) => {
+      const waterfallLevels = wfv.levels ?? [];
       const fam = (plan.schedule_checks ?? []).find((f) => f.member_ids.some((m) => memberIds.includes(m)));
       if (!fam) return null;
       const q = (n: number) => inUnit(fu, n) ?? 0;
@@ -246,7 +254,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         const d = days.find((x) => x.day === date);
         const l = d?.levels.find((x) => x.level_key === key);
         if (!d || !l) return null;
-        return { cover: l.cover_days, min: l.min_days, max: l.max_days, minD: whole(l.cover_days), maxD: whole(l.max_cover_days !== null && l.max_days !== null ? Math.min(l.max_cover_days, l.max_days) : l.max_cover_days), reserve: q(l.reserve_qty), excess: q(d.pool_qty) };
+        return { cover: l.cover_days, min: l.min_days, max: l.max_days, minD: whole(l.cover_days), maxD: whole(l.max_cover_days !== null && l.max_days !== null ? Math.min(l.max_cover_days, l.max_days) : l.max_cover_days), reserve: q(l.reserve_qty), excess: q(d.pool_qty), excess_split: d.pool_by.filter((p) => p.qty > 0.5).sort((x, y) => y.qty - x.qty).map((p) => `${nameOf(p.material_id)}: ${dq(p.material_id, p.qty)} ${uomOf(p.material_id) ?? ""}`.trim()).join("\n") };
       };
       const statusOf = (st: ReturnType<typeof stateAt>, without: boolean) => {
         if (!st || st.cover === null || st.min === null) return "";
@@ -290,8 +298,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
             kind: "Existing order", ref: `${a.reference}${ev?.csn_id ? "" : ""}`, material: nameOf(a.material_id), supplier: supplierOf(a.reference, ev?.csn_id) ?? "—", status: ev ? (arrivalStatus(ev.kind as never, ev.date_source as never) as string) : "",
             lot_qty: q(a.qty_base), existing_eta: a.recorded, action: cells.action, etd: cells.etd, port: cells.port, plant: cells.plant || a.advised, why: cells.why, absent: cells.absent,
             engine_eta: a.advised, to_level: q(toLevel), pct: a.qty_base > 0 ? toLevel / a.qty_base : null,
-            min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, level_status: statusOf(stB, false), reserve_after: stB?.reserve ?? null,
-            arr_note: arr?.shared_note ?? "",
+            min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, excess_split: stB?.excess_split ?? null, level_status: statusOf(stB, false), reserve_after: stB?.reserve ?? null,
+            arr_note: arr?.shared_note ?? "", rec: recOf(ev?.csn_id),
           });
         }
         for (const ref of lotRefs) {
@@ -315,7 +323,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
             kind: "Projection", ref: "NEW (engine)", material: nameOf(lot.material_id), supplier: buy?.vendor_label ?? "—", status: "Projection", lot_qty: q(lot.qty_base), existing_eta: dayA, action,
             etd: lg.import_etd ?? "", port: lg.port_eta ?? "", plant: dayB ?? "", why: buy ? (buy.need_kind === "GROUP" ? `Triggered by group free stock${buy.trigger_group_id ? ` — ${groupLabel.get(buy.trigger_group_id) ?? ""}` : ""}` : "Triggered by its own use") : "", absent: "",
             engine_eta: dayB, to_level: q(toLevel), pct: lot.qty_base > 0 ? toLevel / lot.qty_base : null,
-            min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null,
+            min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, excess_split: stB?.excess_split ?? null,
             level_status: statusOf(stB, !b), reserve_after: stB?.reserve ?? null, flag,
             alternatives: buy ? altText(alternativesFor(buy, dayA ?? dayB)) : "",
           });
@@ -346,7 +354,44 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           parts: levels.map((l) => ({ level: labelOf(l), qty: q(allocOf(alloc, ref, l.level_kind, l.level_id)) })).filter((x) => x.qty > 0.5),
         };
       }).sort((x, y) => cmpDay(x.recorded_eta ?? x.engine_eta, y.recorded_eta ?? y.engine_eta));
-      return { level_sections: sections, lot_splits: splits, projection_total: projectionTotal };
+      // Owner 2026-11-04: what each level holds TODAY, narrow level first. "Available" = the stock of the level's members after the narrower
+      // levels kept theirs; the stock left after the last level is the pool EXCESS. Taken from the engine's own Material x Level matrix.
+      const snap = (wfv.matrix ?? []).find((m) => m.pool.length > 0) ?? null;
+      const left = new Map<string, number>((snap?.closing ?? []).map((x) => [x.material, x.qty]));
+      const lines = (m: Map<string, number> | Array<[string, number]>) => [...(m instanceof Map ? m.entries() : m)].filter(([, v]) => v > 0.5).map(([material, v]) => ({ material, qty: q(v) }));
+      const levelToday = snap ? levels.map((lv) => {
+        const wf = waterfallLevels.find((w) => w.label === (lv.level_kind === "OWN" ? baseLabel(lv) : groupLabel.get(lv.level_id)));
+        const mine = snap.levels.find((x) => x.level === wf?.label);
+        const take = new Map<string, number>((mine?.by_material ?? []).map((x) => [x.material, x.qty]));
+        const memberNames = new Set(lv.members.map(nameOf));
+        const opening = new Map([...left].filter(([m]) => memberNames.has(m)));
+        for (const [m, v] of take) left.set(m, Math.max(0, (left.get(m) ?? 0) - v));
+        const remaining = new Map([...left].filter(([m]) => memberNames.has(m)));
+        return { label: labelOf(lv), opening: lines(opening), reserve: lines(take), left: lines(remaining) };
+      }) : [];
+      const excessAfter = snap ? lines(left) : [];
+      // Pool diary: on every date something lands, what lands and the pool by material in each date set; plus the engine's own top-ups and dips.
+      const fmt = (n: number) => Math.round(n).toLocaleString("en-US");
+      const dipByDay = new Map<string, string[]>();
+      for (const b of advisory.filter((x) => memberIds.includes(x.material_id) && x.min_dip)) {
+        const dp = b.min_dip!;
+        const lab = dp.level_kind === "GROUP" ? groupLabel.get(dp.level_label_id) ?? "group" : nameOf(dp.level_label_id);
+        const day = dp.ask_day ?? dp.from;
+        dipByDay.set(day, [...(dipByDay.get(day) ?? []), `${lab} falls to ${Math.round(dp.lowest_cover_days)} d (Min ${Math.round(dp.min_days)} d, Critical ${dp.critical_days === null ? "—" : Math.round(dp.critical_days)} d) for ${dp.days_below_min} d; asks the pool for ${fmt(q(dp.ask_wanted_qty ?? 0))}, gets ${fmt(q(dp.ask_got_qty ?? 0))} (pool held ${fmt(q(dp.pool_qty_at_ask ?? 0))}). The engine therefore adds a new lot (recorded-date view).`]);
+      }
+      const poolOf = (days: typeof fam.days_a, dt: string) => { const d = days.find((x) => x.day === dt); return d ? { total: q(d.pool_qty), by: d.pool_by.filter((p) => p.qty > 0.5).map((p) => ({ material: nameOf(p.material_id), qty: q(p.qty) })) } : null; };
+      const landsOf = (view: "A" | "B", dt: string) => [
+        ...fam.arrivals.filter((a) => a.qty_base > 0 && (view === "A" ? a.recorded : a.advised) === dt).map((a) => `+ ${nameOf(a.material_id)} ${fmt(q(a.qty_base))} (${poNumberOfReference(a.reference) ?? a.reference})`),
+        ...(view === "A" ? fam.lots_a : fam.lots_b).filter((l) => l.day === dt).map((l) => `+ NEW ${nameOf(l.material_id)} ${fmt(q(l.qty_base))} (engine lot)`),
+      ];
+      const poolDiary = [...new Set([...fam.days_a.map((d) => d.day), ...fam.days_b.map((d) => d.day)])].sort().map((dt) => ({
+        day: dt, lands_a: landsOf("A", dt), pool_a: poolOf(fam.days_a, dt), lands_b: landsOf("B", dt), pool_b: poolOf(fam.days_b, dt),
+        notes: [
+          ...(wfv.events ?? []).filter((e) => e.day === dt && e.kind === "TOP_UP" && e.qty > 0.5).map((e) => `${e.level} refilled ${fmt(q(e.qty))} (${(e.by_material ?? []).filter((x) => x.qty > 0.5).map((x) => `${x.material} ${fmt(q(x.qty))}`).join(", ")}) [recorded-date view]`),
+          ...(dipByDay.get(dt) ?? []),
+        ],
+      }));
+      return { level_sections: sections, lot_splits: splits, projection_total: projectionTotal, level_today: levelToday, excess_after: excessAfter, pool_diary: poolDiary };
     };
 
     // ── Family / item planning blocks: every item with use, arrival or lot in the horizon ──
@@ -407,6 +452,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           suppliers: today.map((e) => supplierOf(e.reference, e.csn_id) ?? "—"),
           statuses: today.map((e) => arrivalStatus(e.kind, e.date_source)),
           best_dates: today.map((e) => bestText(e.reschedule_key, e.original_date !== undefined ? e.original_date : e.date, fu, fu?.uom_code ?? uomOf(e.member) ?? "KG")),
+          rec_cells: today.map((e) => recOf(e.csn_id)),
           best_cells: today.map((e) => bestCells(e.reschedule_key, e.original_date !== undefined ? e.original_date : e.date, fu, fu?.uom_code ?? uomOf(e.member) ?? "KG")),
         };
       });
@@ -417,9 +463,10 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         const transit = option && option.lead_time_days !== null ? option.lead_time_days : null;
         // Port-to-plant days: the median of this material's received CSNs, else the lead-time master's inland days for this vendor's IMPORT route.
         const masterInland = (rowById.get(m)?.lead_time?.configured_routes ?? [])
-          .filter((r) => r.route === "IMPORT" && r.inland_days !== undefined && (!vendorId || r.vendor_id === vendorId))
-          .map((r) => r.inland_days as number);
-        const p2p = portToPlant.get(m) ?? (masterInland.length ? Math.max(...masterInland) : null);
+          .filter((r) => r.route === "IMPORT" && (r.port_to_plant_days ?? r.inland_days) !== undefined && (!vendorId || r.vendor_id === vendorId))
+          .map((r) => (r.port_to_plant_days ?? r.inland_days) as number);
+        // Lead-time master first (clearance + road); the median of received CSNs only when the master has no port-to-plant time.
+        const p2p = masterInland.length ? Math.max(...masterInland) : portToPlant.get(m) ?? null;
         return { port_eta: p2p !== null ? addDaysIso(date, -p2p) : null, import_etd: transit !== null ? addDaysIso(date, -transit) : null };
       };
       const prediction = [
@@ -465,7 +512,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           critical_days_now: togetherRaw.critical_days_now, critical_days_moved: togetherRaw.critical_days_moved, uom: fu?.uom_code ?? uomOf(id) ?? "KG",
         })
         : null;
-      const sections = buildSections(memberIds, fu, legs, events as never, (buildWaterfallView({ projection, asOf: calendar.asOf, memberSet, groupSet, groupLabel: (g) => groupLabel.get(g) ?? "—", materialLabel: (m) => nameOf(m), uomOf: (m) => uomOf(m) }).levels ?? []) as never);
+      const sections = buildSections(memberIds, fu, legs, events as never, buildWaterfallView({ projection, asOf: calendar.asOf, memberSet, groupSet, groupLabel: (g) => groupLabel.get(g) ?? "—", materialLabel: (m) => nameOf(m), uomOf: (m) => uomOf(m) }) as never);
       blocks.push({
         kind, together_note: togetherNote, ...(family.is_family ? (sections ?? {}) : {}),
         waterfall: buildWaterfallView({
