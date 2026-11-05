@@ -1,7 +1,9 @@
-import { useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useEffectEvent, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
+import { layoutDrawerProps, useColumnLayouts } from "../../../../shared/columnLayouts/useColumnLayouts.js";
+import { pushToast } from "../../../../store/uiToast.js";
 import ErpComboboxField from "../../../../components/forms/ErpComboboxField.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
@@ -19,16 +21,13 @@ import { useCompaniesQuery } from "../../../../hooks/queries/useProcurementMaste
 import {
   confirmCSNDispatchQty,
   createSubCSN,
-  createCSNTrackerLayout,
   deleteSubCSN,
-  deleteCSNTrackerLayout,
   getAllAlertCounts,
   getCSNFieldHistory,
   getCSNTracker,
   getCsnTrackerCapability,
   holdCSN,
   listCHAs,
-  listCSNTrackerLayouts,
   listPorts,
   listTransporters,
   previewCSNDispatchQty,
@@ -500,10 +499,6 @@ export default function CSNTrackerPage() {
   const [draft, setDraft] = useState(null);
   const [savingRowId, setSavingRowId] = useState("");
   const [showColumns, setShowColumns] = useState(false);
-  const [visibleColumnKeys, setVisibleColumnKeys] = useState(() => buildColumnDefs().map((column) => column.key));
-  const [layoutDraft, setLayoutDraft] = useState({ name: "", scope: "USER" });
-  const [showSaveLayout, setShowSaveLayout] = useState(false);
-  const [selectedLayoutId, setSelectedLayoutId] = useState("");
   const [dispatchDialog, setDispatchDialog] = useState(null);
   const [holdDialog, setHoldDialog] = useState(null);
   const [activeHistoryKey, setActiveHistoryKey] = useState("");
@@ -554,11 +549,6 @@ export default function CSNTrackerPage() {
     },
   });
 
-  const layoutsQuery = useQuery({
-    queryKey: ["csn-tracker-layouts"],
-    queryFn: () => listCSNTrackerLayouts(),
-  });
-
   const transportersQuery = useQuery({
     queryKey: ["csn-transporters"],
     queryFn: () => listTransporters({ is_active: "true", limit: 500 }),
@@ -592,10 +582,10 @@ export default function CSNTrackerPage() {
   const total = Number(trackerQuery.data?.total ?? 0);
   // What the grid shows after its own search / column filters — the Excel export takes exactly these.
   const [shownRows, setShownRows] = useState(null);
-  const visibleColumns = useMemo(
-    () => columns.filter((column) => visibleColumnKeys.includes(column.key)),
-    [columns, visibleColumnKeys]
-  );
+  // Common column picker (visibility + order, up to 3 saved layouts per user for this page).
+  const layoutMessage = useCallback((message, tone) => pushToast({ message, tone }), []);
+  const layout = useColumnLayouts("CSN_TRACKER", columns, layoutMessage);
+  const visibleColumns = layout.columns;
 
   const transporterOptions = useMemo(() => {
     const raw = Array.isArray(transportersQuery.data) ? transportersQuery.data : [];
@@ -628,8 +618,6 @@ export default function CSNTrackerPage() {
       label: `${row.company_code || ""}${row.company_name ? ` | ${row.company_name}` : ""}` || row.id,
     }));
   }, [companiesQuery.data]);
-
-  const savedLayouts = Array.isArray(layoutsQuery.data) ? layoutsQuery.data : [];
 
   function openAlerts(tab) {
     openScreen(OPERATION_SCREENS.PROC_CSN_ALERTS.screen_code);
@@ -871,54 +859,6 @@ export default function CSNTrackerPage() {
     } finally { setSavingRowId(""); }
   }
 
-  async function saveLayout() {
-    try {
-      setError("");
-      await createCSNTrackerLayout({
-        name: layoutDraft.name,
-        scope: layoutDraft.scope,
-        visible_columns: visibleColumnKeys,
-      });
-      await queryClient.invalidateQueries({ queryKey: ["csn-tracker-layouts"] });
-      setNotice("Layout saved.");
-      setShowSaveLayout(false);
-      setLayoutDraft({ name: "", scope: "USER" });
-    } catch (layoutError) {
-      setError(layoutError instanceof Error ? layoutError.message : "PROCUREMENT_CSN_LAYOUT_CREATE_FAILED");
-    }
-  }
-
-  async function removeSelectedLayout() {
-    if (!selectedLayoutId) {
-      return;
-    }
-    try {
-      setError("");
-      await deleteCSNTrackerLayout(selectedLayoutId);
-      await queryClient.invalidateQueries({ queryKey: ["csn-tracker-layouts"] });
-      setSelectedLayoutId("");
-      setVisibleColumnKeys(columns.map((column) => column.key));
-      setNotice("Layout deleted.");
-    } catch (layoutError) {
-      setError(layoutError instanceof Error ? layoutError.message : "PROCUREMENT_CSN_LAYOUT_DELETE_FAILED");
-    }
-  }
-
-  function applyLayout(layoutId) {
-    setSelectedLayoutId(layoutId);
-    if (!layoutId) {
-      setVisibleColumnKeys(columns.map((column) => column.key));
-      return;
-    }
-    const layout = savedLayouts.find((entry) => entry.id === layoutId);
-    const next = Array.isArray(layout?.visible_columns)
-      ? layout.visible_columns.filter((key) => columns.some((column) => column.key === key))
-      : [];
-    if (next.length > 0) {
-      setVisibleColumnKeys(next);
-    }
-  }
-
   function renderCell(row, column) {
     const redFields = evaluateRedFields(row);
     const textClass = redFields.has(column.key) ? "text-rose-700 font-semibold" : "text-slate-700";
@@ -1004,14 +944,6 @@ export default function CSNTrackerPage() {
     select: (d) => d?.data ?? d ?? {},
   });
   const canEditCurrentRow = Boolean(currentRow) && !currentRow.read_only_for_viewer && rowCapabilityQuery.data?.can_edit === true;
-  const layoutCapabilityQuery = useQuery({
-    queryKey: ["procurement", "csn-tracker-capability", effectiveCompanyId],
-    queryFn: () => getCsnTrackerCapability(effectiveCompanyId),
-    enabled: Boolean(effectiveCompanyId),
-    select: (d) => d?.data ?? d ?? {},
-  });
-  const canWriteLayouts = layoutCapabilityQuery.data?.can_write === true;
-  const canDeleteLayouts = layoutCapabilityQuery.data?.can_delete === true;
   const currentGroupOptions = currentRow?.material_group_options || [];
   const subCsnsForCurrentRow = useMemo(
     () => rows.filter((entry) => entry.mother_csn_id === expandedRowId),
@@ -1104,7 +1036,6 @@ export default function CSNTrackerPage() {
                 </div>
                 <div className="flex items-center gap-1">
                   <IconActionButton glyph="CL" title="Columns" onClick={() => setShowColumns(true)} />
-                  {canWriteLayouts ? <IconActionButton glyph="LY" title="Save layout" onClick={() => setShowSaveLayout(true)} /> : null}
                   <IconActionButton
                     glyph={exporting ? "..." : "XLS"}
                     title={exporting ? "Exporting" : "Export Excel (the rows the grid shows)"}
@@ -1219,32 +1150,6 @@ export default function CSNTrackerPage() {
                     }}
                     className="h-[26px] border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500"
                   />
-                </label>
-
-                <label className="grid min-w-0 gap-1 text-[11px] font-medium text-slate-600">
-                  Layout
-                  <div className="grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-                    <select
-                      value={selectedLayoutId}
-                      onChange={(event) => applyLayout(event.target.value)}
-                      className="h-[26px] min-w-0 flex-1 border border-slate-300 bg-white px-2 text-[11px] text-slate-900 outline-none focus:border-sky-500"
-                    >
-                      <option value="">Default (All Columns)</option>
-                      {savedLayouts.map((layout) => (
-                        <option key={layout.id} value={layout.id}>
-                          {layout.name} [{layout.scope}]
-                        </option>
-                      ))}
-                    </select>
-                    <button
-                      type="button"
-                      onClick={() => void removeSelectedLayout()}
-                      disabled={!selectedLayoutId || !canDeleteLayouts}
-                      className="inline-flex h-[26px] items-center border border-rose-300 bg-rose-50 px-2 text-[10px] font-semibold uppercase tracking-[0.08em] text-rose-900 disabled:opacity-50"
-                    >
-                      Delete
-                    </button>
-                  </div>
                 </label>
               </div>
             </div>
@@ -1707,51 +1612,9 @@ export default function CSNTrackerPage() {
 
       <ErpColumnVisibilityDrawer
         visible={showColumns}
-        columns={columns}
-        visibleColumnKeys={visibleColumnKeys}
-        onToggleColumn={(columnKey) => {
-          setVisibleColumnKeys((current) => {
-            if (current.includes(columnKey)) {
-              const next = current.filter((key) => key !== columnKey);
-              return next.length > 1 ? next : current;
-            }
-            return [...current, columnKey];
-          });
-        }}
-        onResetColumns={() => setVisibleColumnKeys(columns.map((column) => column.key))}
+        {...layoutDrawerProps(layout)}
         onClose={() => setShowColumns(false)}
       />
-
-      <ModalBase
-        visible={showSaveLayout}
-        eyebrow="CSN Tracker"
-        title="Save Layout"
-        onEscape={() => setShowSaveLayout(false)}
-        actions={
-          <>
-            <button type="button" onClick={() => setShowSaveLayout(false)} className="border border-slate-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700">
-              Cancel
-            </button>
-            <button type="button" onClick={() => void saveLayout()} className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950">
-              Save Layout
-            </button>
-          </>
-        }
-      >
-        <div className="grid gap-3">
-          <label className="grid gap-1 text-sm font-medium text-slate-700">
-            Layout Name
-            <input value={layoutDraft.name} onChange={(event) => setLayoutDraft((current) => ({ ...current, name: event.target.value }))} className="h-10 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500" />
-          </label>
-          <label className="grid gap-1 text-sm font-medium text-slate-700">
-            Scope
-            <select value={layoutDraft.scope} onChange={(event) => setLayoutDraft((current) => ({ ...current, scope: event.target.value }))} className="h-10 border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500">
-              <option value="USER">User-specific</option>
-              <option value="GLOBAL">Global</option>
-            </select>
-          </label>
-        </div>
-      </ModalBase>
 
       <ModalBase
         visible={Boolean(holdDialog)}
