@@ -2150,13 +2150,37 @@ export async function gateReportHandler(
       .in("gate_entry_id", chunk)).catch(() => [] as JsonRecord[]);
     const gexMap = new Map(gexRows.map((g) => [String(g.gate_entry_id), g]));
 
-    // 4. GRNs per line
-    const grnRows = await fetchInChunks<JsonRecord>(lineIds, (chunk) => serviceRoleClient
-      .schema("erp_procurement")
-      .from("goods_receipt")
-      .select("id, gate_entry_line_id, grn_number, grn_date, vendor_id, invoice_number")
-      .in("gate_entry_line_id", chunk)).catch(() => [] as JsonRecord[]);
-    const grnByLineMap = new Map(grnRows.map((g) => [String(g.gate_entry_line_id), g]));
+    // 4. GRNs per line. An invoice-split GRN keeps its gate-entry link on
+    // source_gate_entry_line_id (gate_entry_line_id is NULL on the split
+    // children), so both columns are read -- reading only gate_entry_line_id
+    // dropped every split child (e.g. a Fine Sand truck carrying several invoices).
+    const GRN_SELECT = "id, gate_entry_line_id, source_gate_entry_line_id, grn_number, grn_date, vendor_id, invoice_number, status, received_qty";
+    const [grnDirect, grnSplitChildren] = await Promise.all([
+      fetchInChunks<JsonRecord>(lineIds, (chunk) => serviceRoleClient
+        .schema("erp_procurement").from("goods_receipt").select(GRN_SELECT)
+        .in("gate_entry_line_id", chunk).order("id", { ascending: true })).catch(() => [] as JsonRecord[]),
+      fetchInChunks<JsonRecord>(lineIds, (chunk) => serviceRoleClient
+        .schema("erp_procurement").from("goods_receipt").select(GRN_SELECT)
+        .in("source_gate_entry_line_id", chunk).order("id", { ascending: true })).catch(() => [] as JsonRecord[]),
+    ]);
+    const grnById = new Map<string, JsonRecord>();
+    for (const g of [...grnDirect, ...grnSplitChildren]) grnById.set(String(g.id), g);
+    const grnRows = [...grnById.values()];
+    const grnsByLineId = new Map<string, JsonRecord[]>();
+    for (const g of grnRows) {
+      const lineKey = String(g.gate_entry_line_id ?? g.source_gate_entry_line_id ?? "");
+      if (!lineKey) continue;
+      const list = grnsByLineId.get(lineKey) ?? [];
+      list.push(g);
+      grnsByLineId.set(lineKey, list);
+    }
+    // A split source GRN (status SPLIT) is replaced by its children; it is shown only when the
+    // line has no child GRN at all.
+    const grnsForLine = (lineId: string): JsonRecord[] => {
+      const all = grnsByLineId.get(lineId) ?? [];
+      const live = all.filter((g) => String(g.status ?? "").toUpperCase() !== "SPLIT");
+      return live.length > 0 ? live : all;
+    };
 
     // 5. Bulk resolve
     const materialIds = [...new Set(lines.map((l) => String(l.material_id ?? "")).filter(Boolean))];
@@ -2182,48 +2206,51 @@ export async function gateReportHandler(
       const ge = geMap.get(String(line.gate_entry_id));
       if (!ge) continue;
       const gex = gexMap.get(String(line.gate_entry_id)) ?? null;
-      const grn = grnByLineMap.get(String(line.id)) ?? null;
+      const lineGrns = grnsForLine(String(line.id));
       const mat = matMap.get(String(line.material_id));
-      const vendor = grn ? vendorMap.get(String((grn as JsonRecord).vendor_id)) : null;
       const company = companyMap.get(String(ge.company_id));
-
-      if (vendorId && String((grn as JsonRecord | null)?.vendor_id) !== vendorId) continue;
-
       const geDate = String(ge.ge_date ?? "");
-      const grnDate = grn ? String((grn as JsonRecord).grn_date ?? "") : null;
       const gexDate = gex ? String((gex as JsonRecord).exit_date ?? "") : null;
 
-      items.push({
-        ge_number: ge.ge_number,
-        company_code: company?.company_code ?? null,
-        ge_date: geDate,
-        ge_type: ge.ge_type,
-        ge_status: ge.status,
-        ge_remarks: ge.remarks ?? null,
-        ge_person_name: ge.person_name ?? null,
-        vehicle_number: ge.vehicle_number ?? null,
-        line_number: line.line_number,
-        material_code: mat?.pace_code ?? null,
-        material_name: mat?.material_name ?? null,
-        material_type: mat?.material_type ?? null,
-        ge_qty: line.ge_qty,
-        uom_code: line.uom_code,
-        gross_weight: line.gross_weight ?? null,
-        net_weight: line.net_weight ?? null,
-        vendor_code: vendor?.vendor_code ?? null,
-        vendor_name: vendor?.vendor_name ?? null,
-        grn_number: grn ? (grn as JsonRecord).grn_number : null,
-        grn_date: grnDate,
-        invoice_number: grn ? (grn as JsonRecord).invoice_number ?? null : null,
-        gex_number: gex ? (gex as JsonRecord).exit_number : null,
-        gex_date: gexDate,
-        tare_weight: gex ? (gex as JsonRecord).tare_weight : null,
-        net_weight_calculated: gex ? (gex as JsonRecord).net_weight_calculated : null,
-        gex_remarks: gex ? (gex as JsonRecord).remarks : null,
-        gex_person_name: gex ? (gex as JsonRecord).person_name ?? null : null,
-        days_ge_to_gex: daysBetween(geDate, gexDate),
-        days_ge_to_grn: daysBetween(geDate, grnDate),
-      });
+      // One row per GRN of this gate-entry line (several when the GRN was split by invoice).
+      for (const grn of (lineGrns.length > 0 ? lineGrns : [null])) {
+        const vendor = grn ? vendorMap.get(String((grn as JsonRecord).vendor_id)) : null;
+        if (vendorId && String((grn as JsonRecord | null)?.vendor_id) !== vendorId) continue;
+        const grnDate = grn ? String((grn as JsonRecord).grn_date ?? "") : null;
+
+        items.push({
+          ge_number: ge.ge_number,
+          company_code: company?.company_code ?? null,
+          ge_date: geDate,
+          ge_type: ge.ge_type,
+          ge_status: ge.status,
+          ge_remarks: ge.remarks ?? null,
+          ge_person_name: ge.person_name ?? null,
+          vehicle_number: ge.vehicle_number ?? null,
+          line_number: line.line_number,
+          material_code: mat?.pace_code ?? null,
+          material_name: mat?.material_name ?? null,
+          material_type: mat?.material_type ?? null,
+          ge_qty: line.ge_qty,
+          uom_code: line.uom_code,
+          gross_weight: line.gross_weight ?? null,
+          net_weight: line.net_weight ?? null,
+          vendor_code: vendor?.vendor_code ?? null,
+          vendor_name: vendor?.vendor_name ?? null,
+          grn_number: grn ? (grn as JsonRecord).grn_number : null,
+          grn_qty: grn ? (grn as JsonRecord).received_qty ?? null : null,
+          grn_date: grnDate,
+          invoice_number: grn ? (grn as JsonRecord).invoice_number ?? null : null,
+          gex_number: gex ? (gex as JsonRecord).exit_number : null,
+          gex_date: gexDate,
+          tare_weight: gex ? (gex as JsonRecord).tare_weight : null,
+          net_weight_calculated: gex ? (gex as JsonRecord).net_weight_calculated : null,
+          gex_remarks: gex ? (gex as JsonRecord).remarks : null,
+          gex_person_name: gex ? (gex as JsonRecord).person_name ?? null : null,
+          days_ge_to_gex: daysBetween(geDate, gexDate),
+          days_ge_to_grn: daysBetween(geDate, grnDate),
+        });
+      }
     }
 
     return okResponse({ items, total: items.length }, ctx.request_id, req);
