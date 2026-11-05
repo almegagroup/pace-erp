@@ -6,10 +6,12 @@
  *          3 tabs: Create FO | Edit FO (+ Packing PO allocation) | Total Table.
  */
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
+import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
+import { layoutDrawerProps, useColumnLayouts } from "../../../shared/columnLayouts/useColumnLayouts.js";
 import { pushToast } from "../../../store/uiToast.js";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
@@ -906,6 +908,7 @@ export default function PlanFeedPage() {
   const [totalSearch, setTotalSearch] = useState("");
   const [totalColumnFilters, setTotalColumnFilters] = useState({});
   const [totalFiltersOpen, setTotalFiltersOpen] = useState(false);
+  const [totalColumnsOpen, setTotalColumnsOpen] = useState(false);
   const [exportingTotal, setExportingTotal] = useState(false);
   // Date-range search: the two date inputs + column dropdown are draft state
   // (typing/picking doesn't filter anything by itself); appliedDateFilter is
@@ -916,7 +919,7 @@ export default function PlanFeedPage() {
   const [dateRangeTo, setDateRangeTo] = useState("");
   const [dateRangeColumn, setDateRangeColumn] = useState("");
   const [appliedDateFilter, setAppliedDateFilter] = useState(null);
-  const totalColumns = useMemo(() => [
+  const allTotalColumns = useMemo(() => [
     // "Prioritize" (business owner ask) -- read-only here, editable only via
     // the dedicated Prioritize page. Values stay visible even after an FO
     // becomes FULLY_MAPPED (history) -- only the row's priority background
@@ -924,7 +927,7 @@ export default function PlanFeedPage() {
     { key: "priority_date", label: "Priority Date", width: "100px", render: (r) => r.priority_date || "--" },
     { key: "priority_number", label: "Priority #", width: "80px", align: "right", copyValue: (r) => r.priority_number ?? "--", excelValue: (r) => (r.priority_number ?? "") === "" ? "" : Number(r.priority_number), render: (r) => <span className="font-mono">{r.priority_number ?? "--"}</span> },
     { key: "order_serial_number", label: "Order Serial No.", width: "100px", render: (r) => <span className="font-mono">{r.order_serial_number || "--"}</span> },
-    { key: "fo_number", label: "FO #", width: "100px", render: (r) => <span className="font-mono font-semibold text-sky-700">{r.fo_number || "--"}</span> },
+    { key: "fo_number", pinned: true, label: "FO #", width: "100px", render: (r) => <span className="font-mono font-semibold text-sky-700">{r.fo_number || "--"}</span> },
     { key: "order_date", label: "Order Date", width: "95px" },
     { key: "original_fo_number", label: "Original FO #", width: "110px", render: (r) => <span className="font-mono">{r.original_fo_number || r.fo_number || "--"}</span> },
     // business owner, 2026-09-26 (main) -- the backend already returns
@@ -970,6 +973,10 @@ export default function PlanFeedPage() {
     { key: "site_contact_person", label: "Site Contact Person", width: "140px", render: (r) => r.site_contact_person || "--" },
     { key: "site_contact_number", label: "Contact Person Number", width: "140px", render: (r) => <span className="font-mono">{r.site_contact_number || "--"}</span> },
   ], []);
+  // Common column picker for the Total Table (visibility + order, up to 3 saved layouts per user).
+  const layoutMessage = useCallback((message, tone) => pushToast({ message, tone }), []);
+  const totalLayout = useColumnLayouts("PR00_TOTAL", allTotalColumns, layoutMessage);
+  const totalColumns = totalLayout.columns;
   const totalSuggestions = useMemo(() => [...new Set(summary.flatMap((row) => totalColumns.map((column) => gridCellValue(row, column)).filter(Boolean)))].sort((a, b) => a.localeCompare(b)).slice(0, 300), [summary, totalColumns]);
   const totalSuggestionsByColumn = useMemo(() => Object.fromEntries(totalColumns.map((column) => [column.key, [...new Set(summary.map((row) => gridCellValue(row, column)).filter(Boolean))].sort((a, b) => a.localeCompare(b)).slice(0, 150)])), [summary, totalColumns]);
   const filteredSummary = useMemo(() => {
@@ -1017,7 +1024,7 @@ export default function PlanFeedPage() {
     <ErpScreenScaffold
       title="Plan Feed"
       subtitle="Firm Order visibility — what customers ordered, and its current production/dispatch state"
-      actions={tab === "total" ? [{ key: "plan-feed-total-columns", label: totalFiltersOpen ? "Hide Column Filters" : "Column Filters", onClick: () => setTotalFiltersOpen((open) => !open) }, { key: "plan-feed-total-export", label: exportingTotal ? "Exporting..." : "Export Excel", onClick: () => void handleExportTotalExcel(), disabled: exportingTotal || filteredSummary.length === 0 }] : []}
+      actions={tab === "total" ? [{ key: "plan-feed-total-pick-columns", label: `Columns${totalLayout.activeLayoutName ? ` · ${totalLayout.activeLayoutName}` : ""}`, onClick: () => setTotalColumnsOpen(true) }, { key: "plan-feed-total-columns", label: totalFiltersOpen ? "Hide Column Filters" : "Column Filters", onClick: () => setTotalFiltersOpen((open) => !open) }, { key: "plan-feed-total-export", label: exportingTotal ? "Exporting..." : "Export Excel", onClick: () => void handleExportTotalExcel(), disabled: exportingTotal || filteredSummary.length === 0 }] : []}
     >
       <ErpSectionCard>
         <div className="flex gap-3 items-end flex-wrap">
@@ -1902,6 +1909,12 @@ export default function PlanFeedPage() {
       )}
       {tab === "prioritize" && <PlanFeedPrioritizeSection />}
       {tab === "report" && <PlanFeedCategoryReportSection />}
+      <ErpColumnVisibilityDrawer
+        visible={totalColumnsOpen}
+        title="Total Table Columns"
+        {...layoutDrawerProps(totalLayout)}
+        onClose={() => setTotalColumnsOpen(false)}
+      />
     </ErpScreenScaffold>
   );
 }
