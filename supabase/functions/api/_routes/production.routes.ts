@@ -179,7 +179,7 @@ import {
   previewMtsCreationPackingCombineHandler,
   createMtsCreationDocumentsHandler,
 } from "../_core/production/mts_creation_session.handlers.ts";
-import { getOrderInformationReportHandler, getBatchCountsReportHandler } from "../_core/production/order_information_system.handlers.ts";
+import { getOrderInformationReportHandler, getBatchCountsReportHandler, listOisStrokeOptionsHandler } from "../_core/production/order_information_system.handlers.ts";
 import { getMtsProductionRegisterHandler, getMtsProductionRegisterPendingCountHandler } from "../_core/production/mts_production_register.handlers.ts";
 import { searchBatchVarianceHandler, getBatchVarianceDetailHandler } from "../_core/production/batch_variance_report.handlers.ts";
 import {
@@ -445,6 +445,8 @@ export async function dispatchProductionRoutes(
       return await getOrderInformationReportHandler(req, ctx);
     case "GET:/api/production/order-information-system/batch-counts":
       return await getBatchCountsReportHandler(req, ctx);
+    case "GET:/api/production/order-information-system/stroke-options":
+      return await listOisStrokeOptionsHandler(req, ctx);
     case "GET:/api/production/order-information-system/mts-register":
       return await getMtsProductionRegisterHandler(req, ctx);
     case "GET:/api/production/order-information-system/mts-register/pending-count":

@@ -19,7 +19,7 @@ import { useMenu } from "../../../context/useMenu.js";
 import { useErpScreenHotkeys } from "../../../hooks/useErpScreenHotkeys.js";
 import { useScreenBackInterceptor } from "../../../hooks/useScreenBackInterceptor.js";
 import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
-import { getBatchCountsReport, getMtsProductionRegister, getMtsProductionRegisterPendingCount, getOrderInformationReport, listStrokeMasters } from "./prodApi.js";
+import { getBatchCountsReport, getMtsProductionRegister, getMtsProductionRegisterPendingCount, getOrderInformationReport, listOisStrokeOptions } from "./prodApi.js";
 import { MTS_REGISTER_COLUMNS } from "./mtsProductionRegisterColumns.jsx";
 import MtsRegisterModal from "./MtsRegisterModal.jsx";
 import { listMachines } from "../om/omApi.js";
@@ -315,7 +315,7 @@ export default function OrderInformationSystemPage() {
   });
   const strokesQ = useQuery({
     queryKey: ["ois-strokes", singleCompanyId],
-    queryFn: () => listStrokeMasters({ company_id: singleCompanyId, status: "APPROVED", per_page: 100 }),
+    queryFn: () => listOisStrokeOptions({ company_id: singleCompanyId }),
     enabled: filters.tab === "PROCESS" && Boolean(singleCompanyId),
     select: (data) => (Array.isArray(data) ? data : data?.data ?? []),
   });

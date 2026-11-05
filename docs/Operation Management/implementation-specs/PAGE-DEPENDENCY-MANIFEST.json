@@ -9339,20 +9339,20 @@
         "skipAcl": false
       },
       {
-        "fn": "listStrokeMasters",
-        "method": "GET",
-        "path": "/api/production/stroke-masters",
-        "resourceCode": "PROD_STROKE_MASTER",
-        "action": "VIEW",
-        "skipAcl": false
-      },
-      {
         "fn": "listMachines",
         "method": "GET",
         "path": "/api/om/machines",
         "resourceCode": null,
         "action": null,
         "skipAcl": true
+      },
+      {
+        "fn": "listOisStrokeOptions",
+        "method": "GET",
+        "path": "/api/production/order-information-system/stroke-options",
+        "resourceCode": "PROD_ORDER_INFO_SYSTEM",
+        "action": "VIEW",
+        "skipAcl": false
       }
     ]
   },
