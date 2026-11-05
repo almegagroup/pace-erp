@@ -29,6 +29,7 @@ import { generateMaterialDocNumber, generateRecoDocNumber } from "../../_shared/
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
 import { findFirstPhysicalInventoryBlock } from "../../_shared/physicalInventoryBlock.ts";
+import { fetchPackingOrderFoCapacities } from "./packing_order_fo_capacity.reader.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -400,14 +401,48 @@ async function computeSkuAvailability(
   materialId: string,
   storageLocationId: string,
   originalQty: number,
-): Promise<{ availableQty: number; dispatchedQty: number; foMappedQty: number; priorReversedQty: number }> {
-  const [dispatchedQty, foMappedQty, priorReversedQty] = await Promise.all([
-    sumDispatchedQtyForPackingOrder(packingOrderId),
-    sumFoMappedQtyForPackingOrder(packingOrderId),
+  companyId: string,
+  batchNumber: string,
+): Promise<{ availableQty: number; dispatchedQty: number; foMappedQty: number; priorReversedQty: number; returnedQty: number; physicalQty: number }> {
+  // Dispatch / FO-reservation arithmetic is the SAME rule Plan Feed uses (packing_order_fo_capacity.ts):
+  // a dispatch linked to an FO releases that FO's own reservation, so the same stock is never
+  // subtracted twice (the old code subtracted the raw allocation AND the dispatch).
+  const [capacities, priorReversedQty, returnedRaw, physicalQty] = await Promise.all([
+    fetchPackingOrderFoCapacities([{ id: packingOrderId, actual_qty_kg: originalQty }]),
     sumPriorReversedQty("SKU", materialId, storageLocationId, processOrderId, packingOrderId),
+    sumReturnedQtyForPackingOrder(packingOrderId),
+    sumUnrestrictedLedgerQty(companyId, materialId, storageLocationId, batchNumber),
   ]);
-  const availableQty = Math.max(0, originalQty - dispatchedQty - foMappedQty - priorReversedQty);
-  return { availableQty, dispatchedQty, foMappedQty, priorReversedQty };
+  const capacity = capacities.get(packingOrderId);
+  const dispatchedQty = capacity?.dispatched_qty_kg ?? 0;
+  const foMappedQty = [...(capacity?.reserved_by_plan_feed.values() ?? [])].reduce((sum, value) => sum + value, 0);
+  // Customer returns (Sales Return, not repacked into another SKU) bring dispatched stock back, so
+  // they cancel out against the dispatch -- never more than what was dispatched.
+  const returnedQty = Math.min(returnedRaw, dispatchedQty);
+  const paperAvailable = Math.max(0, Math.min(originalQty, (capacity?.free_qty_kg ?? 0) + returnedQty) - priorReversedQty);
+  // ...but PR19 posts a real Unrestricted ledger OUT, so it can never exceed what is physically in
+  // Unrestricted for this batch at this location (a return lands in BLOCKED until QA releases it).
+  // min() only ever tightens: it cannot re-open the shared-batch borrow described above, because
+  // paperAvailable is still this Packing PO's own accounting.
+  const availableQty = Math.max(0, Math.min(paperAvailable, physicalQty));
+  return { availableQty, dispatchedQty, foMappedQty, priorReversedQty, returnedQty, physicalQty };
+}
+
+// Customer returns of this Packing PO's output that were posted as such (not repacked into another SKU).
+async function sumReturnedQtyForPackingOrder(packingOrderId: string): Promise<number> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("sales_return_item")
+    .select("quantity, is_repacked, posting_status")
+    .eq("packing_order_id", packingOrderId)
+    .eq("posting_status", "POSTED");
+  if (error) {
+    console.error("[partial_reversal.sumReturnedQtyForPackingOrder] query failed:", JSON.stringify(error));
+    throw new Error("PR19_RETURN_LOOKUP_FAILED");
+  }
+  return ((data ?? []) as JsonRecord[])
+    .filter((row) => row.is_repacked !== true)
+    .reduce((sum, row) => sum + Number(row.quantity ?? 0), 0);
 }
 
 // §Q-reversal-2026-09-30 — a variable-fill pack code (599/510/000: barrel/IBC/tanker
@@ -591,8 +626,9 @@ export async function listPartialReversalStockLinesHandler(req: Request, ctx: Pr
       // §Q-reversal-2026-09-30 — packing_order_id-scoped (this PO's own actual_qty_kg
       // minus ITS OWN dispatched/FO-mapped/prior-reversed qty), never batch-wide. See
       // computeSkuAvailability's own header comment for the live incident this fixes.
-      const { availableQty, dispatchedQty, foMappedQty } = await computeSkuAvailability(
+      const { availableQty, dispatchedQty, foMappedQty, returnedQty, physicalQty } = await computeSkuAvailability(
         processOrderId, String(pkRow.id), String(pkRow.material_id ?? ""), fgSlocId, Number(pkRow.actual_qty_kg ?? 0),
+        companyId, batchNumber,
       );
       if (availableQty > 0) {
         rows.push({
@@ -609,6 +645,8 @@ export async function listPartialReversalStockLinesHandler(req: Request, ctx: Pr
           total_qty: Number(pkRow.actual_qty_kg ?? 0),
           dispatched_qty: dispatchedQty,
           fo_mapped_qty: foMappedQty,
+          returned_qty: returnedQty,
+          physical_unrestricted_qty: physicalQty,
           // §83.14 "balance barrel": one batch can split across several Packing POs at
           // different fill sizes — surfaced here so Page 2 shows which fill shape each
           // row is (not just an opaque PO number), and Page 3 can offer a "Num Packs to
@@ -1183,13 +1221,15 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
       // trust Page 2's number alone). See computeSkuAvailability's own header comment:
       // the old batch-wide ledger sum let this silently borrow a sibling Packing PO's
       // stock and "reverse" a fully-dispatched Packing PO -- confirmed live in prod.
-      const { availableQty, dispatchedQty, foMappedQty } = await computeSkuAvailability(
+      const { availableQty, dispatchedQty, foMappedQty, returnedQty, physicalQty } = await computeSkuAvailability(
         processOrderId, packingOrderId as string, String(pkData.material_id ?? ""), fgSlocId, packingActualQty,
+        companyId, String(poData.batch_number ?? ""),
       );
       if (reverseQty > availableQty + 1e-6) {
         const reasons: string[] = [];
-        if (dispatchedQty > 1e-6) reasons.push(`${dispatchedQty} already dispatched or on an active Delivery Order`);
+        if (dispatchedQty > 1e-6) reasons.push(`${dispatchedQty} already dispatched or on an active Delivery Order${returnedQty > 1e-6 ? `, ${returnedQty} of it returned by the customer` : ""}`);
         if (foMappedQty > 1e-6) reasons.push(`${foMappedQty} mapped to an FO`);
+        reasons.push(`${physicalQty} currently in Unrestricted stock for this batch`);
         const reasonText = reasons.length > 0 ? ` (${reasons.join(", ")})` : "";
         return prErr(req, ctx, "PR19_REVERSE_QTY_EXCEEDS_AVAILABLE", 422,
           `Reverse qty exceeds available. Only ${availableQty} of this Packing PO's ${packingActualQty} is available for reversal${reasonText}.`);

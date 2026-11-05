@@ -42,11 +42,18 @@ function materialLabel(m) {
 function availabilityNote(row) {
   const dispatched = Number(row.dispatched_qty ?? 0);
   const foMapped = Number(row.fo_mapped_qty ?? 0);
-  if (dispatched <= 1e-6 && foMapped <= 1e-6) return null;
+  const returned = Number(row.returned_qty ?? 0);
+  const physical = row.physical_unrestricted_qty == null ? null : Number(row.physical_unrestricted_qty);
+  const total = Number(row.total_qty ?? 0);
+  const physicalLimited = physical != null && physical + 1e-6 < total - dispatched + returned - foMapped;
+  if (dispatched <= 1e-6 && foMapped <= 1e-6 && returned <= 1e-6 && !physicalLimited) return null;
   const parts = [];
   if (dispatched > 1e-6) parts.push(`${fmt(dispatched)} KG dispatched or on an active Delivery Order`);
+  if (returned > 1e-6) parts.push(`${fmt(returned)} KG of it returned by the customer`);
   if (foMapped > 1e-6) parts.push(`${fmt(foMapped)} KG mapped to an FO`);
-  return `Only ${fmt(row.available_qty)} of ${fmt(row.total_qty ?? 0)} KG available (${parts.join(", ")})`;
+  // Returned stock lands in Blocked until QA releases it, and PR19 can only reverse what is in Unrestricted.
+  if (physicalLimited) parts.push(`${fmt(physical)} KG currently in Unrestricted stock for this batch`);
+  return `Only ${fmt(row.available_qty)} of ${fmt(total)} KG available (${parts.join(", ")})`;
 }
 function storageLocationLabel(loc) {
   if (!loc) return "--";
