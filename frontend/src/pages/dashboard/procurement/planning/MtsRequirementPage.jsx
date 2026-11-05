@@ -646,6 +646,9 @@ function ReportTab({ companyId, companyText, planMonth, asOf, demandAt }) {
         onSetDefaultLayout={layout.setDefault}
         onDeleteLayout={layout.removeLayout}
         onToggleColumn={layout.toggleColumn}
+        onMoveColumn={layout.moveColumn}
+        onUpdateCurrent={layout.updateCurrent}
+        isDirty={layout.isDirty}
         onResetColumns={layout.resetColumns}
         onClose={() => setColumnsOpen(false)}
       />

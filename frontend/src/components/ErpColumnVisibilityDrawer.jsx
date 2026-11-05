@@ -13,10 +13,14 @@ export default function ErpColumnVisibilityDrawer({
   onSetDefaultLayout,
   onDeleteLayout,
   onToggleColumn,
+  onMoveColumn,
+  onUpdateCurrent,
+  isDirty = false,
   onResetColumns,
   onClose,
 }) {
   const hasLayoutControls = layoutOptions.length > 0 || typeof onSaveCurrentAs === "function" || typeof onSetDefaultLayout === "function";
+  const visibleOrdered = columns.filter((column) => visibleColumnKeys.includes(column.key)).map((column) => column.key);
 
   return (
     <DrawerBase
@@ -65,7 +69,21 @@ export default function ErpColumnVisibilityDrawer({
               </select>
             </div>
 
+            {isDirty ? (
+              <div className="text-xs font-semibold text-amber-700">Unsaved changes — use Save Changes (this layout) or Save Current As (new layout).</div>
+            ) : null}
             <div className="flex flex-wrap gap-2">
+              {typeof onUpdateCurrent === "function" ? (
+                <button
+                  type="button"
+                  onClick={onUpdateCurrent}
+                  disabled={!activeLayoutId || !isDirty}
+                  title={!activeLayoutId ? "Pick a saved layout first" : !isDirty ? "No changes to save" : "Overwrite the selected layout with the current columns and order"}
+                  className="border border-sky-700 bg-sky-100 px-3 py-2 text-xs font-semibold uppercase tracking-[0.08em] text-sky-950 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-400"
+                >
+                  Save Changes
+                </button>
+              ) : null}
               {typeof onSaveCurrentAs === "function" ? (
                 <button
                   type="button"
@@ -108,12 +126,32 @@ export default function ErpColumnVisibilityDrawer({
                 className="flex items-center justify-between gap-3 border border-slate-300 bg-white px-4 py-3 text-sm text-slate-700"
               >
                 <span>{column.label}</span>
-                <input
-                  type="checkbox"
-                  checked={checked}
-                  onChange={() => onToggleColumn?.(column.key)}
-                  disabled={checked && visibleColumnKeys.length === 1}
-                />
+                <span className="flex items-center gap-2">
+                  {typeof onMoveColumn === "function" && checked ? (
+                    <span className="flex gap-1">
+                      <button
+                        type="button"
+                        title="Move up"
+                        disabled={visibleOrdered[0] === column.key}
+                        onClick={(event) => { event.preventDefault(); onMoveColumn(column.key, -1); }}
+                        className="border border-slate-300 px-2 text-xs leading-6 text-slate-700 disabled:opacity-30"
+                      >▲</button>
+                      <button
+                        type="button"
+                        title="Move down"
+                        disabled={visibleOrdered[visibleOrdered.length - 1] === column.key}
+                        onClick={(event) => { event.preventDefault(); onMoveColumn(column.key, 1); }}
+                        className="border border-slate-300 px-2 text-xs leading-6 text-slate-700 disabled:opacity-30"
+                      >▼</button>
+                    </span>
+                  ) : null}
+                  <input
+                    type="checkbox"
+                    checked={checked}
+                    onChange={() => onToggleColumn?.(column.key)}
+                    disabled={checked && visibleColumnKeys.length === 1}
+                  />
+                </span>
               </label>
             );
           })}

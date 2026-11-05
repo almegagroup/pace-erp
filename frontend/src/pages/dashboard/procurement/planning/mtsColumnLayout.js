@@ -35,3 +35,48 @@ export function toggleHidden(hidden, key) {
   if (next.has(key)) next.delete(key); else next.add(key);
   return next;
 }
+
+/** Default order of the pickable columns (as the report defines them). */
+export function defaultOrderKeys(columns) {
+  return pickableColumns(columns).map((c) => c.key);
+}
+
+/**
+ * Full pickable order for a saved layout: its saved keys first, in the saved order, then every other pickable
+ * column (hidden by that layout, or added later) in the report's own order. Saved keys that no longer exist are dropped.
+ */
+export function orderFromSaved(savedVisible, columns) {
+  const base = defaultOrderKeys(columns);
+  if (!Array.isArray(savedVisible)) return base;
+  const exists = new Set(base);
+  const first = [];
+  for (const key of savedVisible) if (exists.has(key) && !first.includes(key)) first.push(key);
+  return [...first, ...base.filter((key) => !first.includes(key))];
+}
+
+/**
+ * Re-order the pickable columns without disturbing the always-visible ones: the pickable columns fill the slots
+ * the pickable columns originally occupied, in `orderKeys` order. A pickable column missing from `orderKeys` (added later) goes last.
+ */
+export function applyOrder(columns, orderKeys) {
+  if (!Array.isArray(orderKeys) || orderKeys.length === 0) return columns;
+  const pickableSet = new Set(pickableColumns(columns).map((c) => c.key));
+  const byKey = new Map(columns.filter((c) => pickableSet.has(c.key)).map((c) => [c.key, c]));
+  const sequence = [];
+  for (const key of orderKeys) if (byKey.has(key)) sequence.push(byKey.get(key));
+  for (const [key, column] of byKey) if (!orderKeys.includes(key)) sequence.push(column);
+  let next = 0;
+  return columns.map((c) => (pickableSet.has(c.key) ? sequence[next++] : c));
+}
+
+/** Move a VISIBLE column one visible step up (-1) or down (+1); hidden columns in between are skipped over. */
+export function moveKey(orderKeys, hidden, key, delta) {
+  const from = orderKeys.indexOf(key);
+  if (from < 0) return orderKeys;
+  let to = from + delta;
+  while (to >= 0 && to < orderKeys.length && hidden.has(orderKeys[to])) to += delta;
+  if (to < 0 || to >= orderKeys.length) return orderKeys;
+  const next = orderKeys.filter((k) => k !== key);
+  next.splice(to, 0, key);
+  return next;
+}
