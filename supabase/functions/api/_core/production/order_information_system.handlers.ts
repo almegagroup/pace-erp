@@ -308,40 +308,55 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       if (!postingScopedOrderIds?.processOrderIds.length) {
         return okResponse({ data: [], meta: { order_count: 0, movement_count: 0 } }, ctx.request_id, req);
       }
-      let pq = serviceRoleClient.schema("erp_production").from("process_order")
-        .select("id, company_id, po_number, po_type, batch_number, status, material_id, machine_id, segment_code, stroke_master_id, has_unapproved_deviation")
-        .order("created_at", { ascending: false })
-        .in("id", postingScopedOrderIds.processOrderIds)
-        .limit(MAX_ORDERS_MATCHED);
-      if (companyIds) pq = pq.in("company_id", companyIds);
-      if (orderType) pq = pq.eq("po_type", orderType);
-      if (materialId) pq = pq.eq("material_id", materialId);
-      if (batchNumber) pq = pq.eq("batch_number", batchNumber);
-      if (machineId) pq = pq.eq("machine_id", machineId);
-      if (segmentCode) pq = pq.eq("segment_code", segmentCode);
-      if (strokeMasterId) pq = pq.eq("stroke_master_id", strokeMasterId);
-      if (statuses.length > 0) pq = pq.in("status", statuses);
-      if (hasDeviationOnly) pq = pq.eq("has_unapproved_deviation", true);
-      const { data, error } = await pq;
-      if (error) throw new Error("PROD_OIS_LOOKUP_FAILED");
-      processOrders = (data ?? []) as JsonRecord[];
+      // §8E: the id list is every PO with a posting in the period -- unbounded, so it must be
+      // chunked (one giant .in() overflowed the request URL -> PROD_OIS_LOOKUP_FAILED). Pages
+      // are ordered by id (stable for .range()); newest-first + the cap are applied in memory.
+      let rows: JsonRecord[];
+      try {
+        rows = await fetchInChunks<JsonRecord>(postingScopedOrderIds.processOrderIds, (idChunk) => {
+          let pq = serviceRoleClient.schema("erp_production").from("process_order")
+            .select("id, created_at, company_id, po_number, po_type, batch_number, status, material_id, machine_id, segment_code, stroke_master_id, has_unapproved_deviation")
+            .in("id", idChunk)
+            .order("id", { ascending: true });
+          if (companyIds) pq = pq.in("company_id", companyIds);
+          if (orderType) pq = pq.eq("po_type", orderType);
+          if (materialId) pq = pq.eq("material_id", materialId);
+          if (batchNumber) pq = pq.eq("batch_number", batchNumber);
+          if (machineId) pq = pq.eq("machine_id", machineId);
+          if (segmentCode) pq = pq.eq("segment_code", segmentCode);
+          if (strokeMasterId) pq = pq.eq("stroke_master_id", strokeMasterId);
+          if (statuses.length > 0) pq = pq.in("status", statuses);
+          if (hasDeviationOnly) pq = pq.eq("has_unapproved_deviation", true);
+          return pq;
+        });
+      } catch {
+        throw new Error("PROD_OIS_LOOKUP_FAILED");
+      }
+      rows.sort((x, y) => String(y.created_at ?? "").localeCompare(String(x.created_at ?? "")));
+      processOrders = rows.slice(0, MAX_ORDERS_MATCHED);
     } else {
       if (!postingScopedOrderIds?.packingOrderIds.length) {
         return okResponse({ data: [], meta: { order_count: 0, movement_count: 0 } }, ctx.request_id, req);
       }
-      let pq = serviceRoleClient.schema("erp_production").from("packing_order")
-        .select("id, company_id, po_number, po_type, process_order_id, batch_number, status, material_id, segment_code, num_packs, fill_qty_per_pack")
-        .order("created_at", { ascending: false })
-        .in("id", postingScopedOrderIds.packingOrderIds)
-        .limit(MAX_ORDERS_MATCHED);
-      if (companyIds) pq = pq.in("company_id", companyIds);
-      if (orderType) pq = pq.eq("po_type", orderType);
-      if (materialId) pq = pq.eq("material_id", materialId);
-      if (segmentCode) pq = pq.eq("segment_code", segmentCode);
-      if (statuses.length > 0) pq = pq.in("status", statuses);
-      const { data, error } = await pq;
-      if (error) throw new Error("PROD_OIS_LOOKUP_FAILED");
-      packingOrdersDirect = (data ?? []) as JsonRecord[];
+      let rows: JsonRecord[];
+      try {
+        rows = await fetchInChunks<JsonRecord>(postingScopedOrderIds.packingOrderIds, (idChunk) => {
+          let pq = serviceRoleClient.schema("erp_production").from("packing_order")
+            .select("id, created_at, company_id, po_number, po_type, process_order_id, batch_number, status, material_id, segment_code, num_packs, fill_qty_per_pack")
+            .in("id", idChunk)
+            .order("id", { ascending: true });
+          if (companyIds) pq = pq.in("company_id", companyIds);
+          if (orderType) pq = pq.eq("po_type", orderType);
+          if (materialId) pq = pq.eq("material_id", materialId);
+          if (segmentCode) pq = pq.eq("segment_code", segmentCode);
+          if (statuses.length > 0) pq = pq.in("status", statuses);
+          return pq;
+        });
+      } catch {
+        throw new Error("PROD_OIS_LOOKUP_FAILED");
+      }
+      rows.sort((x, y) => String(y.created_at ?? "").localeCompare(String(x.created_at ?? "")));
+      packingOrdersDirect = rows.slice(0, MAX_ORDERS_MATCHED);
       const processOrderIds = [...new Set(packingOrdersDirect.map((r) => String(r.process_order_id ?? "")).filter(Boolean))];
       if (processOrderIds.length > 0) {
         const { data: parents, error: parentErr } = await serviceRoleClient
@@ -871,13 +886,23 @@ export async function getBatchCountsReportHandler(req: Request, ctx: ProdHandler
     // No batch_started_at filter here — fetched once, unrestricted by date, so the
     // SAME row set can be grouped into both the selected-range count and the
     // "Till Date" (all-time) count below without a second round trip.
-    let pq = serviceRoleClient.schema("erp_production").from("process_order")
-      .select("company_id, stroke_master_id, material_id, batch_number, batch_started_at")
-      .not("batch_number", "is", null)
-      .neq("status", "REVERSED");
-    if (companyIds) pq = pq.in("company_id", companyIds);
-    const { data, error } = await pq;
-    if (error) throw new Error("PROD_OIS_BATCH_COUNTS_FAILED");
+    // Paginated: PostgREST silently caps one response at 1000 rows, which would drop batches
+    // from both the range count and the Till Date count with no error.
+    let data: JsonRecord[];
+    try {
+      data = await fetchAllRows<JsonRecord>((from, to) => {
+        let pq = serviceRoleClient.schema("erp_production").from("process_order")
+          .select("company_id, stroke_master_id, material_id, batch_number, batch_started_at")
+          .not("batch_number", "is", null)
+          .neq("status", "REVERSED")
+          .order("id", { ascending: true })
+          .range(from, to);
+        if (companyIds) pq = pq.in("company_id", companyIds);
+        return pq;
+      });
+    } catch {
+      throw new Error("PROD_OIS_BATCH_COUNTS_FAILED");
+    }
 
     const rangeStartMs = new Date(`${dateFrom}T00:00:00Z`).getTime();
     const rangeEndExclusiveMs = new Date(toExclusive).getTime();
