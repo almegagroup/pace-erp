@@ -26,6 +26,8 @@ import {
   useMaterialOptionsQuery,
   useStorageLocationOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
+import UomModeSwitcher from "../../../../components/inputs/UomModeSwitcher.jsx";
+import { applyUomMode, availableUomModes } from "../../../../shared/uomDisplay.js";
 import { useScreenBackInterceptor } from "../../../../hooks/useScreenBackInterceptor.js";
 import { listMachines } from "../../om/omApi.js";
 import { getStockHistory, getStockHistoryMachineWise } from "../procurementApi.js";
@@ -51,34 +53,6 @@ const BUCKET_LABELS = {
   TRANSFER: "Transfer",
 };
 const BUCKET_ORDER = Object.keys(BUCKET_LABELS);
-
-// Unit switch. DEFAULT = FG (MTS) outer / PM PO UoM / otherwise base (what the backend flags per
-// material); the others force that unit wherever the material has it, else fall back to default.
-const UOM_MODES = [
-  { key: "DEFAULT", label: "Default", hint: "FG: outer (MTS) / PM: PO UoM / else base" },
-  { key: "BASE", label: "Base", hint: "Base unit of measure" },
-  { key: "OUTER", label: "Outer", hint: "FG outer pack" },
-  { key: "INNER", label: "Inner", hint: "FG inner (primary container) unit" },
-  { key: "PO", label: "PO UoM", hint: "Purchase / PO unit (RM, PM, INT)" },
-];
-
-function applyUomMode(row, mode) {
-  const options = Array.isArray(row.uom_options) ? row.uom_options : [];
-  let option = null;
-  if (mode === "DEFAULT") option = options.find((entry) => entry.uom_code === row.default_uom_code) ?? null;
-  else option = options.find((entry) => entry.kind === mode) ?? null;
-  if (!option) option = options.find((entry) => entry.uom_code === row.default_uom_code) ?? options.find((entry) => entry.kind === "BASE") ?? null;
-  const factor = option && Number(option.factor) > 0 ? Number(option.factor) : 1;
-  if (!option || factor === 1) return { ...row, uom_code: option?.uom_code ?? row.uom_code };
-  const scale = (value) => Math.round((Number(value ?? 0) / factor) * 1e6) / 1e6;
-  return {
-    ...row,
-    uom_code: option.uom_code,
-    opening: scale(row.opening),
-    closing: scale(row.closing),
-    buckets: Object.fromEntries(Object.entries(row.buckets ?? {}).map(([key, value]) => [key, scale(value)])),
-  };
-}
 
 function joinValues(entries) {
   return entries.map((entry) => entry.value).join(",");
@@ -334,12 +308,11 @@ export default function StockHistoryPage() {
   const [visibleBuckets, setVisibleBuckets] = useState([]);
   // Backend sends every figure in BASE units plus each material's allowed units; the unit
   // switch below only re-derives the display, so changing it needs no new request.
-  const rows = useMemo(() => rawRows.map((row) => applyUomMode(row, uomMode)), [rawRows, uomMode]);
-  const availableUomKinds = useMemo(() => {
-    const kinds = new Set();
-    for (const row of rawRows) for (const option of row.uom_options ?? []) kinds.add(option.kind);
-    return UOM_MODES.filter((mode) => mode.key === "DEFAULT" || kinds.has(mode.key));
-  }, [rawRows]);
+  const rows = useMemo(
+    () => rawRows.map((row) => applyUomMode(row, uomMode, { qtyFields: ["opening", "closing"], mapFields: ["buckets"] })),
+    [rawRows, uomMode],
+  );
+  const availableUomKinds = useMemo(() => availableUomModes(rawRows), [rawRows]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState("");
@@ -675,21 +648,7 @@ export default function StockHistoryPage() {
               </div>
             ) : (
               <>
-                <div className="mb-2 flex flex-wrap items-center gap-2 text-xs text-slate-600">
-                  <span className="font-semibold uppercase tracking-[0.08em]">Unit</span>
-                  {availableUomKinds.map((mode) => (
-                    <button
-                      key={mode.key}
-                      type="button"
-                      onClick={() => setUomMode(mode.key)}
-                      title={mode.hint}
-                      className={`border px-3 py-1 font-semibold uppercase tracking-[0.06em] ${uomMode === mode.key ? "border-sky-700 bg-sky-100 text-sky-950" : "border-slate-300 bg-white text-slate-700"}`}
-                    >
-                      {mode.label}
-                    </button>
-                  ))}
-                  <span className="text-slate-400">Materials without the chosen unit stay in their default unit (see the UOM column).</span>
-                </div>
+                <UomModeSwitcher modes={availableUomKinds} value={uomMode} onChange={setUomMode} />
                 <div className="mb-2 text-xs text-slate-500">
                   Click and drag (or Shift+Click / Shift+Arrow) to select a range, then Ctrl+C to copy — same as Excel.
                 </div>

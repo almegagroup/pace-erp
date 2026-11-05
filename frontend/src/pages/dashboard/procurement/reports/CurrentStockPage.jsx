@@ -25,6 +25,8 @@ import {
   useMaterialOptionsQuery,
   useStorageLocationOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
+import UomModeSwitcher from "../../../../components/inputs/UomModeSwitcher.jsx";
+import { applyUomMode, availableUomModes } from "../../../../shared/uomDisplay.js";
 import { useScreenBackInterceptor } from "../../../../hooks/useScreenBackInterceptor.js";
 import { listMachines } from "../../om/omApi.js";
 import {
@@ -36,6 +38,7 @@ import {
   searchCurrentStockPackingPoNumbers,
 } from "../procurementApi.js";
 
+const STOCK_QTY_FIELDS = ["unrestricted_qty", "reserved_qty", "net_available_qty", "qi_qty", "blocked_qty", "intransit_qty"];
 const MATERIAL_TYPE_OPTIONS = ["RM", "PM", "INT", "SFG", "FG"];
 const STOCK_TYPE_OPTIONS = [
   { value: "UNRESTRICTED", label: "Unrestricted" },
@@ -536,7 +539,14 @@ export default function CurrentStockPage() {
   const [materialTypes, setMaterialTypes] = useState([...MATERIAL_TYPE_OPTIONS]);
   const [stockTypes, setStockTypes] = useState(STOCK_TYPE_OPTIONS.map((entry) => entry.value));
   const [showZero, setShowZero] = useState(false);
-  const [rows, setRows] = useState([]);
+  const [rawRows, setRawRows] = useState([]);
+  const [uomMode, setUomMode] = useState("DEFAULT");
+  // Backend sends base units + per-row unit options; the switch only re-derives the display.
+  const rows = useMemo(
+    () => rawRows.map((row) => applyUomMode(row, uomMode, { qtyFields: STOCK_QTY_FIELDS })),
+    [rawRows, uomMode],
+  );
+  const availableUomKinds = useMemo(() => availableUomModes(rawRows), [rawRows]);
   const [planningAlertsOnly, setPlanningAlertsOnly] = useState(false);
   const [allColumnSearch, setAllColumnSearch] = useState("");
   const [loading, setLoading] = useState(false);
@@ -651,11 +661,11 @@ export default function CurrentStockPage() {
     };
     try {
       const response = await getCurrentStock(params);
-      setRows(Array.isArray(response?.data) ? response.data : []);
+      setRawRows(Array.isArray(response?.data) ? response.data : []);
       setSubmittedParams(params);
       setPage(2);
     } catch (searchError) {
-      setRows([]);
+      setRawRows([]);
       setError(searchError instanceof Error ? searchError.message : "CURRENT_STOCK_FETCH_FAILED");
     } finally {
       setLoading(false);
@@ -922,6 +932,9 @@ export default function CurrentStockPage() {
                 {filteredDisplayedRows.length} of {displayedRows.length} rows
               </span>
             </div>
+          ) : null}
+          {searched && availableUomKinds.length > 1 ? (
+            <UomModeSwitcher modes={availableUomKinds} value={uomMode} onChange={setUomMode} />
           ) : null}
           {!searched ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
