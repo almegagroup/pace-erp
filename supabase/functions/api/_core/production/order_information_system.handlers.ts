@@ -14,6 +14,7 @@ import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import { assertProdReadRole, toTrimmedString, toUpperTrimmedString } from "./production.shared.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
+import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -172,6 +173,36 @@ async function resolvePostingScopedOrderIds(
   }
 
   return { processOrderIds: [...processOrderIds], packingOrderIds: [...packingOrderIds] };
+}
+
+// GET /api/production/order-information-system/stroke-options?company_id=
+// PR24's own Stroke filter list. The page used to call the Stroke Master list API for this, which needs
+// PROD_STROKE_MASTER:VIEW (a Production/QA resource) -- so every PR24 user outside those departments got a
+// 403 on page load. PR24 is open to everyone (PROD_ORDER_INFO_SYSTEM:VIEW), and the filter only needs
+// each APPROVED stroke's id and number, so it gets its own endpoint under its own resource, scoped to the
+// caller's own companies exactly like the report itself.
+export async function listOisStrokeOptionsHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const requestedCompanyIds = parseMultiValueParams(url, "company_ids", "company_id");
+    const allowedCompanyIds = await resolveAllowedCompanyIds(ctx);
+    const companyIds = scopeCompanyIds(allowedCompanyIds, requestedCompanyIds);
+    // A company the caller does not have (or none asked for, by SA/GA) resolves to "nothing", never "all".
+    if (!companyIds || companyIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const rows = await fetchAllRows<JsonRecord>((from, to) => serviceRoleClient
+      .schema("erp_production").from("stroke_master")
+      .select("id, stroke_number")
+      .eq("status", "APPROVED")
+      .in("company_id", companyIds)
+      .order("stroke_number", { ascending: true }).order("id", { ascending: true })
+      .range(from, to));
+    return okResponse({ data: rows }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_OIS_STROKE_OPTIONS_FAILED";
+    return oisErr(req, ctx, code, 500, "Stroke options failed");
+  }
 }
 
 // GET /api/production/order-information-system
