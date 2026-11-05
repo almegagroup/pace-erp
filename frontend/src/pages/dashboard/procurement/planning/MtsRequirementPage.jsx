@@ -649,6 +649,9 @@ function ReportTab({ companyId, companyText, planMonth, asOf, demandAt }) {
         onMoveColumn={layout.moveColumn}
         onUpdateCurrent={layout.updateCurrent}
         isDirty={layout.isDirty}
+        onRenameLayout={layout.renameCurrent}
+        canSaveNew={layout.canSaveNew}
+        layoutLimitText={`My layouts: ${layout.userLayoutCount} of ${layout.maxLayouts} used`}
         onResetColumns={layout.resetColumns}
         onClose={() => setColumnsOpen(false)}
       />

@@ -16,6 +16,8 @@ import {
 
 type LayoutCtx = Parameters<typeof listReportLayoutsHandler>[1];
 
+// A user may keep at most this many personal PO22 layouts (business owner 2026-11-05). Global layouts (SA/GA) are not counted.
+export const MAX_PO22_USER_LAYOUTS = 3;
 const SHARED_BASE = "/api/procurement/report-layouts";
 export const isMtsReportCode = (code: unknown): boolean => /^PO22(_[A-Z0-9_]+)?$/.test(String(code ?? "").trim().toUpperCase());
 
@@ -50,6 +52,21 @@ export async function listMtsReportLayoutsHandler(req: Request, ctx: LayoutCtx):
 export async function createMtsReportLayoutHandler(req: Request, ctx: LayoutCtx): Promise<Response> {
   const body = await req.json().catch(() => ({} as Record<string, unknown>)) as Record<string, unknown>;
   if (!isMtsReportCode(body.report_code)) return deny(req, ctx, "Only PO22 report layouts can be saved here.");
+  if (String(body.scope ?? "USER").toUpperCase() === "USER") {
+    const { count, error } = await serviceRoleClient.schema("erp_inventory").from("report_column_layout")
+      .select("id", { count: "exact", head: true })
+      .eq("report_code", String(body.report_code).trim().toUpperCase())
+      .eq("scope", "USER")
+      .eq("owner_user_id", ctx.auth_user_id);
+    if (error) return errorResponse("REPORT_LAYOUT_CREATE_FAILED", "Unable to create report layout.", ctx.request_id, "NONE", 500, {}, req);
+    if ((count ?? 0) >= MAX_PO22_USER_LAYOUTS) {
+      return errorResponse(
+        "REPORT_LAYOUT_LIMIT_REACHED",
+        `You can keep at most ${MAX_PO22_USER_LAYOUTS} layouts. Delete one, or use Save Changes to update an existing layout.`,
+        ctx.request_id, "NONE", 409, {}, req,
+      );
+    }
+  }
   return await createReportLayoutHandler(new Request(sharedUrl(req, ""), { method: "POST", headers: req.headers, body: JSON.stringify(body) }), ctx);
 }
 

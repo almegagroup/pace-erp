@@ -14,6 +14,9 @@ import {
   applyHidden, applyOrder, defaultOrderKeys, hiddenFromSaved, moveKey, orderFromSaved, pickableColumns, toggleHidden,
 } from "./mtsColumnLayout.js";
 
+// A user keeps at most this many personal layouts (the backend enforces the same limit).
+export const MAX_USER_LAYOUTS = 3;
+
 export function usePo22ColumnLayouts(reportCode, allColumns, onMessage) {
   const queryClient = useQueryClient();
   // Set once the user changes something by hand; holds the working copy (hidden set + full pickable order).
@@ -54,6 +57,9 @@ export function usePo22ColumnLayouts(reportCode, allColumns, onMessage) {
   }, [allColumns, working]);
   const visibleColumnKeys = useMemo(() => pickable.map((c) => c.key).filter((key) => !working.hidden.has(key)), [pickable, working]);
 
+  const userLayoutCount = useMemo(() => layouts.filter((l) => l.scope === "USER").length, [layouts]);
+  const canSaveNew = userLayoutCount < MAX_USER_LAYOUTS;
+
   const layoutOptions = useMemo(() => layouts.map((l) => ({
     id: l.id,
     label: `${l.scope === "GLOBAL" ? "Global" : "User"} — ${l.layout_name}`,
@@ -74,6 +80,10 @@ export function usePo22ColumnLayouts(reportCode, allColumns, onMessage) {
   }, [allColumns]);
 
   const saveCurrentAs = useCallback(async () => {
+    if (!canSaveNew) {
+      onMessage?.(`You can keep at most ${MAX_USER_LAYOUTS} layouts. Delete one, or use Save Changes to update an existing layout.`, "error");
+      return;
+    }
     const layoutName = window.prompt("Layout name");
     if (!layoutName || !layoutName.trim()) return;
     try {
@@ -86,7 +96,7 @@ export function usePo22ColumnLayouts(reportCode, allColumns, onMessage) {
       onMessage?.(error instanceof Error ? error.message : "REPORT_LAYOUT_CREATE_FAILED", "error");
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [reportCode, visibleColumnKeys, queryClient, onMessage, selectLayout]);
+  }, [reportCode, visibleColumnKeys, queryClient, onMessage, selectLayout, canSaveNew]);
 
   // Overwrite the layout being edited with the current visible columns + order.
   const updateCurrent = useCallback(async () => {
@@ -103,6 +113,21 @@ export function usePo22ColumnLayouts(reportCode, allColumns, onMessage) {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [baseLayout, visibleColumnKeys, queryClient, onMessage]);
+
+  const renameCurrent = useCallback(async () => {
+    const id = baseLayout?.id;
+    if (!id) { onMessage?.("Pick a saved layout first.", "error"); return; }
+    const layoutName = window.prompt("Layout name", baseLayout.layout_name);
+    if (!layoutName || !layoutName.trim() || layoutName.trim() === baseLayout.layout_name) return;
+    try {
+      await updateMtsReportLayout(id, { layout_name: layoutName.trim() });
+      await queryClient.invalidateQueries({ queryKey });
+      onMessage?.(`Layout renamed to "${layoutName.trim()}".`, "success");
+    } catch (error) {
+      onMessage?.(error instanceof Error ? error.message : "REPORT_LAYOUT_UPDATE_FAILED", "error");
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [baseLayout, queryClient, onMessage]);
 
   const setDefault = useCallback(async () => {
     const id = baseLayout?.id;
@@ -135,7 +160,7 @@ export function usePo22ColumnLayouts(reportCode, allColumns, onMessage) {
     columns, pickable, visibleColumnKeys, layoutOptions, defaultLayoutId,
     activeLayoutId: baseLayout?.id ?? "",
     activeLayoutName: baseLayout ? `${baseLayout.layout_name}${isDirty ? " (changed)" : ""}` : "",
-    isDirty,
-    toggleColumn, moveColumn, selectLayout, resetColumns, saveCurrentAs, updateCurrent, setDefault, removeLayout,
+    isDirty, canSaveNew, userLayoutCount, maxLayouts: MAX_USER_LAYOUTS,
+    toggleColumn, moveColumn, selectLayout, resetColumns, saveCurrentAs, renameCurrent, updateCurrent, setDefault, removeLayout,
   };
 }
