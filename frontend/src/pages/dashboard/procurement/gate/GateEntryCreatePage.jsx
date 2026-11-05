@@ -843,7 +843,8 @@ export default function GateEntryCreatePage() {
             ["Material", matDisplay],
             ["Item Type", csn.material_type || "—"],
             ["Quantity", csn.dispatch_qty ? `${Number(csn.dispatch_qty).toLocaleString()} ${csn.po_uom_code || ""}` : "—"],
-            [isImport ? "BOE number" : "Invoice number", (isImport ? csn.boe_number : csn.invoice_number) || "—"],
+            ...(isImport ? [["BOE number", csn.boe_number || "—"]] : []),
+            ["Invoice number", csn.invoice_number || "—"],
             [isImport ? "BL date (ATD)" : "LR date (ATD)", csn.bl_date || csn.lr_date || "—"],
           ].map(([label, value]) => (
             <div key={label}>
