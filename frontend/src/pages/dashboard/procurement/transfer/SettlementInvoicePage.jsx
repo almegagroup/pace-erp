@@ -95,7 +95,7 @@ export default function SettlementInvoicePage() {
 
   // Column picker for the pending GRN list (all PO12 Tab 1 columns shown by default; the choice is remembered per browser).
   const [showColumns, setShowColumns] = useState(false);
-  const { visibleColumns: pickedPo12Columns, visibleColumnKeys, toggleColumn, resetColumns } = useErpVisibleColumns({
+  const { visibleColumns: pickedPo12Columns, drawerProps } = useErpVisibleColumns({
     storageKey: "po12-settlement-pending-columns",
     columnDefs: PO12_COLUMNS,
     defaultColumnKeys: PENDING_COLUMN_KEYS,
@@ -446,10 +446,7 @@ export default function SettlementInvoicePage() {
         )}
             <ErpColumnVisibilityDrawer
               visible={showColumns}
-              columns={PO12_COLUMNS}
-              visibleColumnKeys={visibleColumnKeys}
-              onToggleColumn={toggleColumn}
-              onResetColumns={resetColumns}
+              {...drawerProps}
               onClose={() => setShowColumns(false)}
             />
           </>

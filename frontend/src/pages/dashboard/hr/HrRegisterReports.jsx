@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import {
   openScreen,
@@ -10,6 +10,7 @@ import {
 } from "../../../navigation/screenStackEngine.js";
 import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpReportFilterTemplate from "../../../components/templates/ErpReportFilterTemplate.jsx";
+import { useErpVisibleColumns } from "../../../hooks/useErpVisibleColumns.js";
 import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
 import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
@@ -205,52 +206,15 @@ function buildDownloadRows(visibleColumns, rows) {
 
 // ─── Column visibility hook ───────────────────────────────────────────────────
 
-function loadVisibleKeys(storageKey, defaults) {
-  if (typeof window === "undefined") return [...defaults];
-  try {
-    const raw = window.localStorage.getItem(storageKey);
-    if (!raw) return [...defaults];
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) return [...defaults];
-    return parsed;
-  } catch {
-    return [...defaults];
-  }
-}
-
-function saveVisibleKeys(storageKey, keys) {
-  try {
-    window.localStorage.setItem(storageKey, JSON.stringify(keys));
-  } catch { /* ignore */ }
-}
-
 function useRegisterColumnVisibility(kind) {
-  const allColumns    = COLUMN_DEFS_BY_KIND[kind];
-  const defaults      = DEFAULT_VISIBLE_BY_KIND[kind];
-  const storageKey    = STORAGE_KEY_BY_KIND[kind];
-
-  const [visibleKeys, setVisibleKeys] = useState(() => loadVisibleKeys(storageKey, defaults));
-
-  useEffect(() => {
-    saveVisibleKeys(storageKey, visibleKeys);
-  }, [storageKey, visibleKeys]);
-
-  const visibleColumns = useMemo(
-    () => allColumns.filter((col) => visibleKeys.includes(col.key)),
-    [allColumns, visibleKeys],
-  );
-
-  const toggleColumn = useCallback((key) => {
-    setVisibleKeys((prev) =>
-      prev.includes(key) ? prev.filter((k) => k !== key) : [...prev, key],
-    );
-  }, []);
-
-  const resetColumns = useCallback(() => {
-    setVisibleKeys([...defaults]);
-  }, [defaults]);
-
-  return { allColumns, visibleColumns, visibleKeys, toggleColumn, resetColumns };
+  const allColumns = COLUMN_DEFS_BY_KIND[kind];
+  // Common column picker (visibility + order, up to 3 saved layouts per user): the storage key doubles as the layout code.
+  const { visibleColumns, drawerProps } = useErpVisibleColumns({
+    storageKey: STORAGE_KEY_BY_KIND[kind],
+    columnDefs: allColumns,
+    defaultColumnKeys: DEFAULT_VISIBLE_BY_KIND[kind],
+  });
+  return { allColumns, visibleColumns, drawerProps };
 }
 
 // ─── RegisterCriteriaPage ─────────────────────────────────────────────────────
@@ -399,7 +363,7 @@ function RegisterResultsPage({ kind, title }) {
     ? runtimeContext.availableCompanies
     : [];
 
-  const { allColumns, visibleColumns, visibleKeys, toggleColumn, resetColumns } =
+  const { allColumns, visibleColumns, drawerProps } =
     useRegisterColumnVisibility(kind);
 
   // ── load data ─────────────────────────────────────────────────────────────
@@ -700,10 +664,7 @@ function RegisterResultsPage({ kind, title }) {
       <ErpColumnVisibilityDrawer
         visible={showColumnPicker}
         title="Choose Visible Columns"
-        columns={allColumns}
-        visibleColumnKeys={visibleKeys}
-        onToggleColumn={toggleColumn}
-        onResetColumns={resetColumns}
+        {...drawerProps}
         onClose={() => setShowColumnPicker(false)}
       />
     </>

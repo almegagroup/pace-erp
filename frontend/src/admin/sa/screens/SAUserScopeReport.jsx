@@ -125,7 +125,7 @@ export default function SAUserScopeReport() {
   const [error, setError] = useState("");
   const actionRefs = useRef([]);
   const searchRef = useRef(null);
-  const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } = useErpVisibleColumns({
+  const { visibleColumns, drawerProps } = useErpVisibleColumns({
     storageKey: "erp.sa.userScopeReport.visibleColumns",
     columnDefs: REPORT_COLUMNS,
     defaultColumnKeys: DEFAULT_REPORT_COLUMNS,
@@ -376,10 +376,7 @@ export default function SAUserScopeReport() {
       <ErpColumnVisibilityDrawer
         visible={showColumnDrawer}
         title="User Scope Report Columns"
-        columns={REPORT_COLUMNS}
-        visibleColumnKeys={visibleColumnKeys}
-        onToggleColumn={toggleColumn}
-        onResetColumns={resetColumns}
+        {...drawerProps}
         onClose={() => setShowColumnDrawer(false)}
       />
     </ErpScreenScaffold>
