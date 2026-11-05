@@ -36,6 +36,35 @@
 const DEFAULT_CHUNK_SIZE = 100;
 const PAGE_SIZE = 1000;
 
+// Process-wide cap on in-flight chunked/paginated PostgREST requests.
+// Found live 2026-11-05: Supabase's PostgREST holds only ~10 DB connections,
+// and every report used to fire ALL its id-chunks at once (Promise.all), each
+// then paging on its own -- one wide-date-range report easily launched dozens
+// of concurrent requests, a few users together launched hundreds. The pool
+// saturated, requests queued past PostgREST's own timeout ("Thread killed by
+// timeout manager" x hundreds per minute) and EVERY report (PR24, AC01, IN02,
+// ...) failed or hung together, but only when the date range was wide. The
+// work is identical; this just stops it queueing: at most N requests are in
+// flight per API instance, the rest wait here (in memory) for a free slot.
+const MAX_INFLIGHT = 4;
+let inflight = 0;
+const waiters: Array<() => void> = [];
+
+async function withSlot<T>(task: () => PromiseLike<T>): Promise<T> {
+  if (inflight >= MAX_INFLIGHT) {
+    await new Promise<void>((resolve) => waiters.push(resolve));
+  } else {
+    inflight += 1;
+  }
+  try {
+    return await task();
+  } finally {
+    const next = waiters.shift();
+    if (next) next(); // hand the slot straight to the next waiter (inflight unchanged)
+    else inflight -= 1;
+  }
+}
+
 export function chunkArray<T>(items: T[], size = DEFAULT_CHUNK_SIZE): T[][] {
   if (items.length === 0) return [];
   const chunks: T[][] = [];
@@ -75,7 +104,7 @@ async function fetchOneChunkPaginated<TRow>(
   for (;;) {
     // deno-lint-ignore no-explicit-any
     const builder = queryFn(chunk) as any;
-    const result = await builder.range(from, from + PAGE_SIZE - 1);
+    const result: { data: TRow[] | null; error: unknown } = await withSlot(() => builder.range(from, from + PAGE_SIZE - 1));
     if (result.error) throwChunkedInError(result.error);
     const page: TRow[] = result.data ?? [];
     rows.push(...page);
