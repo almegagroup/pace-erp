@@ -1819,6 +1819,10 @@ export function createMtsReportLayout(payload) {
   return fetchProcurement("POST", "/api/procurement/mts-requirement/layouts", payload);
 }
 
+export function updateMtsReportLayout(id, payload) {
+  return fetchProcurement("PATCH", `/api/procurement/mts-requirement/layouts/${encodeURIComponent(id)}`, payload);
+}
+
 export function deleteMtsReportLayout(id) {
   return fetchProcurement("DELETE", `/api/procurement/mts-requirement/layouts/${encodeURIComponent(id)}`);
 }
