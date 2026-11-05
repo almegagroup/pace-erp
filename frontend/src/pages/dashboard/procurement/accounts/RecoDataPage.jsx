@@ -109,6 +109,7 @@ const GRID_COLUMNS = [
   { key: "tally_invoice_date", label: "Tally Inv. Date", width: "110px", render: (r) => r.tally_invoice_date || "—" },
   { key: "inbound_number", label: "IBN", width: "110px", render: (r) => r.inbound_number || "—" },
   { key: "fo_number", label: "FO #", width: "110px", render: (r) => r.fo_number || "—" },
+  { key: "external_so_number", label: "External SO #", width: "130px", render: (r) => r.external_so_number || "—" },
   { key: "dispatch_type", label: "Dispatch Type", width: "150px", render: (r) => (r.dispatch_type || "—").replace(/_/g, " ") },
   { key: "dispatch_category", label: "Dispatch Cat.", width: "90px", render: (r) => r.dispatch_category || "—" },
   { key: "type_badge", label: "Type", width: "65px", render: (r) => <TypeBadge rowType={r.type_badge} />, copyValue: (r) => r.type_badge },

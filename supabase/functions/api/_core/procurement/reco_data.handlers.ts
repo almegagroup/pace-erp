@@ -257,6 +257,7 @@ type RecoRow = {
   tally_invoice_date: string;
   inbound_number: string;
   fo_number: string;
+  external_so_number: string;
   dispatch_type: string;
   dispatch_category: string;
   type_badge: string;
@@ -402,7 +403,7 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
       fetchInChunks<JsonRecord>(foIds, (chunk) => serviceRoleClient.schema("erp_production")
         .from("plan_feed").select("id, ordered_stroke_number").in("id", chunk)),
       fetchInChunks<JsonRecord>(soIds, (chunk) => serviceRoleClient.schema("erp_procurement")
-        .from("sales_order").select("id, dispatch_type").in("id", chunk)),
+        .from("sales_order").select("id, dispatch_type, customer_po_number").in("id", chunk)),
       fetchInChunks<JsonRecord>(processOrderIds, (chunk) => serviceRoleClient.schema("erp_production")
         .from("process_order").select("id, material_id, actual_qty, po_type").in("id", chunk)),
     ]);
@@ -457,6 +458,7 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
     }
     const packCountByPackingOrderId = new Map(packingOrders.map((row) => [textValue(row.id), numberValue(row.num_packs)]));
     const orderedStrokeByFoId = new Map(feeds.map((row) => [textValue(row.id), textValue(row.ordered_stroke_number)]));
+    const externalSoNumberBySoId = new Map(salesOrders.map((row) => [textValue(row.id), textValue(row.customer_po_number)]));
     const dispatchTypeBySoId = new Map(salesOrders.map((row) => [textValue(row.id), textValue(row.dispatch_type)]));
     const processOrderById = new Map(processOrderHeaders.map((row) => [textValue(row.id), row]));
 
@@ -692,6 +694,7 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
         tally_invoice_date: textValue(sample.tally_invoice_date),
         inbound_number: textValue(sample.inbound_number),
         fo_number: textValue(sample.fo_number),
+        external_so_number: externalSoNumberBySoId.get(textValue(sample.so_id)) ?? "",
         dispatch_type: dispatchTypeBySoId.get(textValue(sample.so_id)) ?? "",
         dispatch_category: textValue(sample.dispatch_category),
         type_badge: typeBadge(sample.line_material_type),
@@ -782,6 +785,7 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
             tally_invoice_date: sample.tally_invoice_date,
             inbound_number: sample.inbound_number,
             fo_number: sample.fo_number,
+            external_so_number: sample.external_so_number,
             dispatch_type: sample.dispatch_type,
             dispatch_category: sample.dispatch_category,
             type_badge: materialType,
@@ -841,6 +845,7 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
           tally_invoice_date: line.tally_invoice_date,
           inbound_number: line.inbound_number,
           fo_number: line.fo_number,
+          external_so_number: line.external_so_number,
           dispatch_type: line.dispatch_type,
           dispatch_category: line.dispatch_category,
           type_badge: "FG",
@@ -934,6 +939,7 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
           tally_invoice_date: original?.tally_invoice_date ?? "",
           inbound_number: "",
           fo_number: "",
+          external_so_number: "",
           dispatch_type: "",
           dispatch_category: "PREV",
           type_badge: typeBadge(row.line_material_type),
@@ -987,6 +993,7 @@ export async function getRecoDataHandler(req: Request, ctx: RecoDataHandlerConte
           tally_invoice_date: original?.tally_invoice_date ?? "",
           inbound_number: "",
           fo_number: "",
+          external_so_number: "",
           dispatch_type: "",
           dispatch_category: "PREV",
           type_badge: "PM",
