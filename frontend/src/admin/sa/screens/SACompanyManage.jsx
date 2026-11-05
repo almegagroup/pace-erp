@@ -112,8 +112,7 @@ export default function SACompanyManage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [showColumnDrawer, setShowColumnDrawer] = useState(false);
-  const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
-    useErpVisibleColumns({
+  const { visibleColumns, visibleColumnKeys, drawerProps } = useErpVisibleColumns({
       storageKey: "erp.sa.companyManage.columns",
       columnDefs: COMPANY_COLUMN_DEFS,
       defaultColumnKeys: DEFAULT_VISIBLE_COMPANY_COLUMNS,
@@ -471,10 +470,7 @@ export default function SACompanyManage() {
       <ErpColumnVisibilityDrawer
         visible={showColumnDrawer}
         title="Company Register Columns"
-        columns={COMPANY_COLUMN_DEFS}
-        visibleColumnKeys={visibleColumnKeys}
-        onToggleColumn={toggleColumn}
-        onResetColumns={resetColumns}
+        {...drawerProps}
         onClose={() => setShowColumnDrawer(false)}
       />
     </>

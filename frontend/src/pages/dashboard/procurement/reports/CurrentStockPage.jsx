@@ -11,6 +11,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
+import { layoutDrawerProps, useColumnLayouts } from "../../../../shared/columnLayouts/useColumnLayouts.js";
+import { pushToast } from "../../../../store/uiToast.js";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import MultiValueFilterField from "../../../../components/inputs/MultiValueFilterField.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
@@ -553,7 +555,6 @@ export default function CurrentStockPage() {
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState("");
   const [columnsOpen, setColumnsOpen] = useState(false);
-  const [visibleColumns, setVisibleColumns] = useState(DEFAULT_VISIBLE_COLUMNS);
   const [exporting, setExporting] = useState(false);
   const [submittedParams, setSubmittedParams] = useState(null);
   const [machineWiseOpen, setMachineWiseOpen] = useState(false);
@@ -601,10 +602,14 @@ export default function CurrentStockPage() {
     [planningAlertsOnly],
   );
 
-  const gridColumns = useMemo(
-    () => columnDefinitions.filter((column) => visibleColumns.includes(column.key)),
-    [columnDefinitions, visibleColumns],
+  // Common column picker: a column not in DEFAULT_VISIBLE_COLUMNS starts hidden; the user's saved layouts (max 3) override.
+  const pickerColumns = useMemo(
+    () => columnDefinitions.map((column) => ({ ...column, defaultHidden: !DEFAULT_VISIBLE_COLUMNS.includes(column.key) })),
+    [columnDefinitions],
   );
+  const layoutMessage = useCallback((message, tone) => pushToast({ message, tone }), []);
+  const layout = useColumnLayouts("IN03", pickerColumns, layoutMessage);
+  const gridColumns = layout.columns;
 
   const planningAlertRowCount = useMemo(
     () => rows.filter(hasPlanningAlert).length,
@@ -964,16 +969,7 @@ export default function CurrentStockPage() {
 
       <ErpColumnVisibilityDrawer
         visible={columnsOpen}
-        columns={columnDefinitions}
-        visibleColumnKeys={visibleColumns}
-        onToggleColumn={(columnKey) =>
-          setVisibleColumns((current) =>
-            current.includes(columnKey)
-              ? current.filter((entry) => entry !== columnKey)
-              : [...current, columnKey],
-          )
-        }
-        onResetColumns={() => setVisibleColumns(DEFAULT_VISIBLE_COLUMNS)}
+        {...layoutDrawerProps(layout)}
         onClose={() => setColumnsOpen(false)}
       />
 

@@ -34,6 +34,7 @@ import TransactionCompanySelector from "../../../components/inputs/TransactionCo
 import {
   resolveDefaultTransactionCompanyId,
 } from "../../../components/inputs/transactionCompanyRuntime.js";
+import { useErpVisibleColumns } from "../../../hooks/useErpVisibleColumns.js";
 import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
 import ErpScreenScaffold from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpEntryFormTemplate from "../../../components/templates/ErpEntryFormTemplate.jsx";
@@ -335,83 +336,13 @@ const HR_DEFAULT_VISIBLE_COLUMN_KEYS = Object.freeze([
   "approvalType",
 ]);
 
-function getHrRequestColumn(key) {
-  return HR_REQUEST_COLUMN_DEFS.find((column) => column.key === key) ?? null;
-}
-
-function loadHrVisibleColumnKeys(storageKey) {
-  if (typeof window === "undefined") {
-    return [...HR_DEFAULT_VISIBLE_COLUMN_KEYS];
-  }
-
-  try {
-    const raw = window.localStorage.getItem(storageKey);
-    if (!raw) {
-      return [...HR_DEFAULT_VISIBLE_COLUMN_KEYS];
-    }
-
-    const parsed = JSON.parse(raw);
-    if (!Array.isArray(parsed)) {
-      return [...HR_DEFAULT_VISIBLE_COLUMN_KEYS];
-    }
-
-    const allowedKeys = parsed.filter((key) => getHrRequestColumn(key));
-    return allowedKeys.length > 0 ? allowedKeys : [...HR_DEFAULT_VISIBLE_COLUMN_KEYS];
-  } catch {
-    return [...HR_DEFAULT_VISIBLE_COLUMN_KEYS];
-  }
-}
-
-function saveHrVisibleColumnKeys(storageKey, columnKeys) {
-  if (typeof window === "undefined") {
-    return;
-  }
-
-  window.localStorage.setItem(storageKey, JSON.stringify(columnKeys));
-}
-
 function useHrVisibleColumns(storageKey) {
-  const [visibleColumnKeys, setVisibleColumnKeys] = useState(() =>
-    loadHrVisibleColumnKeys(storageKey),
-  );
-
-  const visibleColumns = useMemo(
-    () =>
-      visibleColumnKeys
-        .map((key) => getHrRequestColumn(key))
-        .filter(Boolean),
-    [visibleColumnKeys],
-  );
-
-  useEffect(() => {
-    saveHrVisibleColumnKeys(storageKey, visibleColumnKeys);
-  }, [storageKey, visibleColumnKeys]);
-
-  function toggleColumn(columnKey) {
-    setVisibleColumnKeys((current) => {
-      if (current.includes(columnKey)) {
-        if (current.length === 1) {
-          return current;
-        }
-        return current.filter((key) => key !== columnKey);
-      }
-
-      return HR_REQUEST_COLUMN_DEFS
-        .map((column) => column.key)
-        .filter((key) => current.includes(key) || key === columnKey);
-    });
-  }
-
-  function resetColumns() {
-    setVisibleColumnKeys([...HR_DEFAULT_VISIBLE_COLUMN_KEYS]);
-  }
-
-  return {
-    visibleColumns,
-    visibleColumnKeys,
-    toggleColumn,
-    resetColumns,
-  };
+  // Common column picker (visibility + order, up to 3 saved layouts per user): the storage key doubles as the layout code.
+  return useErpVisibleColumns({
+    storageKey,
+    columnDefs: HR_REQUEST_COLUMN_DEFS,
+    defaultColumnKeys: HR_DEFAULT_VISIBLE_COLUMN_KEYS,
+  });
 }
 
 function HrRequestRowActions({ mode, request, onEdit, onCancel, onApprove, onReject }) {
@@ -577,21 +508,12 @@ function buildHrSummaryRow(rows = []) {
   };
 }
 
-function HrRequestColumnPickerModal({
-  visible,
-  visibleColumnKeys,
-  onClose,
-  onToggleColumn,
-  onResetColumns,
-}) {
+function HrRequestColumnPickerModal({ visible, drawerProps, onClose }) {
   return (
     <ErpColumnVisibilityDrawer
       visible={visible}
       title="Choose Visible Columns"
-      columns={HR_REQUEST_COLUMN_DEFS}
-      visibleColumnKeys={visibleColumnKeys}
-      onToggleColumn={onToggleColumn}
-      onResetColumns={onResetColumns}
+      {...drawerProps}
       onClose={onClose}
     />
   );
@@ -2202,7 +2124,7 @@ function HrRequestListWorkspace({
   const [cancelling, setCancelling] = useState(false);
   const [editingRequest, setEditingRequest] = useState(null);
   const [error, setError] = useState("");
-  const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
+  const { visibleColumns, drawerProps } =
     useHrVisibleColumns(`erp.hr.requestColumns.${kind}.myRequests`);
   const leaveRequestsQuery = useMyLeaveRequestsQuery({ enabled: kind === "leave" });
   const outWorkRequestsQuery = useMyOutWorkRequestsQuery({ enabled: kind === "outWork" });
@@ -2411,10 +2333,8 @@ function HrRequestListWorkspace({
         <>
           <HrRequestColumnPickerModal
             visible={showColumnPicker}
-            visibleColumnKeys={visibleColumnKeys}
+            drawerProps={drawerProps}
             onClose={() => setShowColumnPicker(false)}
-            onToggleColumn={toggleColumn}
-            onResetColumns={resetColumns}
           />
           <HrRequesterActionDrawer
             visible={Boolean(actionDrawerRequest)}
@@ -2462,7 +2382,7 @@ function HrApprovalInboxWorkspace({
   const [decisionDrawerRequest, setDecisionDrawerRequest] = useState(null);
   const [deciding, setDeciding] = useState(false);
   const [error, setError] = useState("");
-  const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
+  const { visibleColumns, drawerProps } =
     useHrVisibleColumns(`erp.hr.requestColumns.${kind}.approvalInbox`);
   const leaveInboxQuery = useLeaveApprovalInboxQuery({ enabled: kind === "leave" });
   const outWorkInboxQuery = useOutWorkApprovalInboxQuery({ enabled: kind === "outWork" });
@@ -2709,10 +2629,8 @@ function HrApprovalInboxWorkspace({
         <>
           <HrRequestColumnPickerModal
             visible={showColumnPicker}
-            visibleColumnKeys={visibleColumnKeys}
+            drawerProps={drawerProps}
             onClose={() => setShowColumnPicker(false)}
-            onToggleColumn={toggleColumn}
-            onResetColumns={resetColumns}
           />
           <HrApprovalDecisionDrawer
             visible={Boolean(decisionDrawerRequest)}
@@ -2743,7 +2661,7 @@ function HrApprovalHistoryWorkspace({
   const [showColumnPicker, setShowColumnPicker] = useState(false);
   const [focusKey, setFocusKey] = useState(initialContext.parentState?.focusKey ?? "");
   const [error, setError] = useState("");
-  const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
+  const { visibleColumns, drawerProps } =
     useHrVisibleColumns(`erp.hr.requestColumns.${kind}.approvalHistory`);
   const leaveHistoryQuery = useLeaveApprovalHistoryQuery(requesterAuthUserId, {
     enabled: kind === "leave",
@@ -2915,10 +2833,8 @@ function HrApprovalHistoryWorkspace({
         <>
           <HrRequestColumnPickerModal
             visible={showColumnPicker}
-            visibleColumnKeys={visibleColumnKeys}
+            drawerProps={drawerProps}
             onClose={() => setShowColumnPicker(false)}
-            onToggleColumn={toggleColumn}
-            onResetColumns={resetColumns}
           />
         </>
       }
@@ -2940,7 +2856,7 @@ function HrRegisterWorkspace({
   const [showColumnPicker, setShowColumnPicker] = useState(false);
   const [focusKey, setFocusKey] = useState(initialContext.parentState?.focusKey ?? "");
   const [error, setError] = useState("");
-  const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
+  const { visibleColumns, drawerProps } =
     useHrVisibleColumns(`erp.hr.requestColumns.${kind}.register`);
   const leaveRegisterQuery = useLeaveRegisterQuery(
     { requesterAuthUserId: requesterAuthUserId || undefined },
@@ -3140,10 +3056,8 @@ function HrRegisterWorkspace({
         <>
           <HrRequestColumnPickerModal
             visible={showColumnPicker}
-            visibleColumnKeys={visibleColumnKeys}
+            drawerProps={drawerProps}
             onClose={() => setShowColumnPicker(false)}
-            onToggleColumn={toggleColumn}
-            onResetColumns={resetColumns}
           />
         </>
       }

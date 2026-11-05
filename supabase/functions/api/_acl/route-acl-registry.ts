@@ -31,6 +31,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // This utility does not grant AI access to business data.
   "POST:/api/ai/smoke-test": { skipAcl: true },
 
+  // Common column-picker layouts: personal UI preferences for any logged-in user, scoped to the
+  // caller (or read-only Global) inside the handlers -- see _core/common/column_layout.handlers.ts.
+  "GET:/api/me/column-layouts":  { skipAcl: true },
+  "POST:/api/me/column-layouts": { skipAcl: true },
+
   // Runtime Communication configuration dynamically verifies the requested
   // page's EDIT ACL in its page-local company. A static resource here would
   // incorrectly evaluate only the session-selected company.
@@ -1092,6 +1097,19 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/procurement\/csns\/[^/]+\/(hold|release)$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/me\/column-layouts\/[^/]+$/,
+    methods: {
+      PATCH: { skipAcl: true },
+      DELETE: { skipAcl: true },
+    },
+  },
+  {
+    pattern: /^\/api\/me\/column-layouts\/[^/]+\/set-default$/,
+    methods: {
+      POST: { skipAcl: true },
+    },
   },
   {
     pattern: /^\/api\/procurement\/mts-requirement\/layouts\/[^/]+$/,

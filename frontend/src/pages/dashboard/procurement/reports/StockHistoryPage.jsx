@@ -12,6 +12,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
+import { layoutDrawerProps, useColumnLayouts } from "../../../../shared/columnLayouts/useColumnLayouts.js";
+import { pushToast } from "../../../../store/uiToast.js";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import MultiValueFilterField from "../../../../components/inputs/MultiValueFilterField.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
@@ -398,11 +400,10 @@ export default function StockHistoryPage() {
     [baseColumnDefinitions, bucketColumnDefinitions, closingColumnDefinition],
   );
 
-  const [hiddenColumns, setHiddenColumns] = useState([]);
-  const gridColumns = useMemo(
-    () => columnDefinitions.filter((column) => !hiddenColumns.includes(column.key)),
-    [columnDefinitions, hiddenColumns],
-  );
+  // Common column picker (visibility + order, up to 3 saved layouts per user).
+  const layoutMessage = useCallback((message, tone) => pushToast({ message, tone }), []);
+  const layout = useColumnLayouts("IN14", columnDefinitions, layoutMessage);
+  const gridColumns = layout.columns;
 
   const searchDisabled = !companyId || !dateFrom || !dateTo || dateSpanTooWide(dateFrom, dateTo) || dateRangeInvalid(dateFrom, dateTo);
 
@@ -675,16 +676,7 @@ export default function StockHistoryPage() {
 
       <ErpColumnVisibilityDrawer
         visible={columnsOpen}
-        columns={columnDefinitions}
-        visibleColumnKeys={columnDefinitions.map((column) => column.key).filter((key) => !hiddenColumns.includes(key))}
-        onToggleColumn={(columnKey) =>
-          setHiddenColumns((current) =>
-            current.includes(columnKey)
-              ? current.filter((entry) => entry !== columnKey)
-              : [...current, columnKey],
-          )
-        }
-        onResetColumns={() => setHiddenColumns([])}
+        {...layoutDrawerProps(layout)}
         onClose={() => setColumnsOpen(false)}
       />
 

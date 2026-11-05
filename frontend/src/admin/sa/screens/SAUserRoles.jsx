@@ -170,8 +170,7 @@ export default function SAUserRoles() {
   const filterRefs = useRef([]);
   const rowControlRefs = useRef([]);
   const searchInputRef = useRef(null);
-  const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
-    useErpVisibleColumns({
+  const { visibleColumns, visibleColumnKeys, drawerProps } = useErpVisibleColumns({
       storageKey: "erp.sa.userRoles.columns",
       columnDefs: ROLE_COLUMN_DEFS,
       defaultColumnKeys: DEFAULT_VISIBLE_ROLE_COLUMNS,
@@ -702,10 +701,7 @@ export default function SAUserRoles() {
       <ErpColumnVisibilityDrawer
         visible={showColumnDrawer}
         title="Role Assignment Columns"
-        columns={ROLE_COLUMN_DEFS}
-        visibleColumnKeys={visibleColumnKeys}
-        onToggleColumn={toggleColumn}
-        onResetColumns={resetColumns}
+        {...drawerProps}
         onClose={() => setShowColumnDrawer(false)}
       />
     </>

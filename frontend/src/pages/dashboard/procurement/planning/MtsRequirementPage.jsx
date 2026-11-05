@@ -20,7 +20,7 @@ import { useCallback, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
-import { usePo22ColumnLayouts } from "./usePo22ColumnLayouts.js";
+import { layoutDrawerProps, useColumnLayouts } from "../../../../shared/columnLayouts/useColumnLayouts.js";
 import { aggregateStoreItems, groupedItemRows, usageConsolidatedRows, usageDetailRows, dayShort, issueNote, normaliseStoreRows, periodSpan, planItemRows, simpleStoreNote, storeWaitQty, transferRows } from "./mtsStoreInstruction.js";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
@@ -586,7 +586,7 @@ function ReportTab({ companyId, companyText, planMonth, asOf, demandAt }) {
   const allColumns = useMemo(() => buildReportColumns(expanded, toggleExpanded, showPackQty, togglePackQty, du), [expanded, toggleExpanded, showPackQty, togglePackQty, du]);
   const [columnsOpen, setColumnsOpen] = useState(false);
   const layoutMessage = useCallback((message, tone) => pushToast({ message, tone }), []);
-  const layout = usePo22ColumnLayouts("PO22_REQUIREMENT", allColumns, layoutMessage);
+  const layout = useColumnLayouts("PO22_REQUIREMENT", allColumns, layoutMessage);
   // Same list feeds the grid and the Excel: the user's chosen layout, then the quick column-group switches.
   const columns = useMemo(() => layout.columns.filter((c) => c.group === "identity" || !hiddenGroups.has(c.group)), [layout.columns, hiddenGroups]);
   const rows = useMemo(() => (report?.rows ?? [])
@@ -636,23 +636,7 @@ function ReportTab({ companyId, companyText, planMonth, asOf, demandAt }) {
     <div className="grid gap-2">
       <ErpColumnVisibilityDrawer
         visible={columnsOpen}
-        columns={layout.pickable}
-        visibleColumnKeys={layout.visibleColumnKeys}
-        layoutOptions={layout.layoutOptions}
-        activeLayoutId={layout.activeLayoutId}
-        defaultLayoutId={layout.defaultLayoutId}
-        onSelectLayout={layout.selectLayout}
-        onSaveCurrentAs={layout.saveCurrentAs}
-        onSetDefaultLayout={layout.setDefault}
-        onDeleteLayout={layout.removeLayout}
-        onToggleColumn={layout.toggleColumn}
-        onMoveColumn={layout.moveColumn}
-        onUpdateCurrent={layout.updateCurrent}
-        isDirty={layout.isDirty}
-        onRenameLayout={layout.renameCurrent}
-        canSaveNew={layout.canSaveNew}
-        layoutLimitText={`My layouts: ${layout.userLayoutCount} of ${layout.maxLayouts} used`}
-        onResetColumns={layout.resetColumns}
+        {...layoutDrawerProps(layout)}
         onClose={() => setColumnsOpen(false)}
       />
       <div className="flex flex-wrap items-end gap-3">
