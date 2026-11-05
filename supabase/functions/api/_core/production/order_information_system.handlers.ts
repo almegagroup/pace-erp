@@ -89,51 +89,69 @@ async function resolvePostingScopedOrderIds(
   dateTo: string,
 ): Promise<PostingScopedOrderIds> {
   const pageSize = 1000;
-  const ledgerKeys: JsonRecord[] = [];
-  for (let offset = 0; ; offset += pageSize) {
-    let query = serviceRoleClient.schema("erp_inventory").from("stock_ledger")
-      .select("stock_document_id, batch_number, company_id")
-      .gte("posting_date", dateFrom)
-      .lte("posting_date", dateTo)
-      // posting_date first lets Postgres walk idx_sl_posting_date with a small
-      // incremental sort; ordering by id alone scanned the whole pkey per page
-      // (prod: 2.5s -> 34ms, 21k -> 1.4k buffers at offset 20000).
-      .order("posting_date", { ascending: true })
-      .order("id", { ascending: true })
-      .range(offset, offset + pageSize - 1);
-    if (companyIds) query = query.in("company_id", companyIds);
-    const { data, error } = await query;
-    if (error) throw new Error("PROD_OIS_LEDGER_FETCH_FAILED");
-    const page = (data ?? []) as JsonRecord[];
-    ledgerKeys.push(...page);
-    if (page.length < pageSize) break;
-  }
+  // Previously this paged through EVERY stock_ledger row of the period (all
+  // companies, every RM/PM line) just to read stock_document_id / batch_number,
+  // then re-resolved those thousands of document ids. Now: (a) only the
+  // PROC_PO / PACK_PO-tagged stock_document headers of the period (one row per
+  // posting event, reference id already on the row), and (b) only the ledger
+  // rows that actually carry a batch_number (the PID/other-tag branch below).
+  // Both scans run in parallel.
+  const fetchPaged = async (
+    build: (offset: number) => PromiseLike<{ data: unknown; error: unknown }>,
+  ): Promise<JsonRecord[]> => {
+    const rows: JsonRecord[] = [];
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await build(offset);
+      if (error) throw new Error("PROD_OIS_LEDGER_FETCH_FAILED");
+      const page = (data ?? []) as JsonRecord[];
+      rows.push(...page);
+      if (page.length < pageSize) break;
+    }
+    return rows;
+  };
 
-  const stockDocumentIds = [...new Set(
-    ledgerKeys.map((row) => toTrimmedString(row.stock_document_id)).filter(Boolean),
-  )];
+  const [documents, batchLedgerKeys] = await Promise.all([
+    fetchPaged((offset) => {
+      let query = serviceRoleClient.schema("erp_inventory").from("stock_document")
+        .select("reference_document_type, reference_document_id, company_id")
+        .in("reference_document_type", ["PROC_PO", "PACK_PO"])
+        .gte("posting_date", dateFrom)
+        .lte("posting_date", dateTo)
+        .order("posting_date", { ascending: true })
+        .order("id", { ascending: true })
+        .range(offset, offset + pageSize - 1);
+      if (companyIds) query = query.in("company_id", companyIds);
+      return query;
+    }),
+    fetchPaged((offset) => {
+      let query = serviceRoleClient.schema("erp_inventory").from("stock_ledger")
+        .select("batch_number, company_id")
+        .not("batch_number", "is", null)
+        .gte("posting_date", dateFrom)
+        .lte("posting_date", dateTo)
+        .order("posting_date", { ascending: true })
+        .order("id", { ascending: true })
+        .range(offset, offset + pageSize - 1);
+      if (companyIds) query = query.in("company_id", companyIds);
+      return query;
+    }),
+  ]);
+
   const batchNumbers = [...new Set(
-    ledgerKeys.map((row) => toTrimmedString(row.batch_number)).filter(Boolean),
+    batchLedgerKeys.map((row) => toTrimmedString(row.batch_number)).filter(Boolean),
   )];
   const ledgerCompanyIds = [...new Set(
-    ledgerKeys.map((row) => toTrimmedString(row.company_id)).filter(Boolean),
+    [...documents, ...batchLedgerKeys].map((row) => toTrimmedString(row.company_id)).filter(Boolean),
   )];
   const effectiveCompanyIds = companyIds ?? ledgerCompanyIds;
 
   const processOrderIds = new Set<string>();
   const packingOrderIds = new Set<string>();
-  if (stockDocumentIds.length > 0) {
-    const documents = await fetchInChunks<JsonRecord>(stockDocumentIds, (idChunk) =>
-      serviceRoleClient.schema("erp_inventory").from("stock_document")
-        .select("reference_document_type, reference_document_id")
-        .in("id", idChunk),
-    ).catch(() => { throw new Error("PROD_OIS_LOOKUP_FAILED"); });
-    for (const document of documents) {
-      const id = toTrimmedString(document.reference_document_id);
-      if (!id) continue;
-      if (toUpperTrimmedString(document.reference_document_type) === "PROC_PO") processOrderIds.add(id);
-      if (toUpperTrimmedString(document.reference_document_type) === "PACK_PO") packingOrderIds.add(id);
-    }
+  for (const document of documents) {
+    const id = toTrimmedString(document.reference_document_id);
+    if (!id) continue;
+    if (toUpperTrimmedString(document.reference_document_type) === "PROC_PO") processOrderIds.add(id);
+    if (toUpperTrimmedString(document.reference_document_type) === "PACK_PO") packingOrderIds.add(id);
   }
 
   // PID and other linked movements can be tagged to another document type but
@@ -401,7 +419,10 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
             lq = (lq as unknown as { gte: (c: string, v: string) => typeof lq }).gte("posting_date", dateFrom);
             lq = (lq as unknown as { lte: (c: string, v: string) => typeof lq }).lte("posting_date", dateTo);
           }
-          return lq.order("posting_date", { ascending: true }).order("id", { ascending: true });
+          // Stable order for the .range() pages by id only: ordering by posting_date made the
+          // planner walk the (company, posting_date) index and filter ~all of a company's month
+          // instead of using the stock_document_id index. Rows are re-sorted in memory below.
+          return lq.order("id", { ascending: true });
         });
       } catch {
         throw new Error("PROD_OIS_LEDGER_FETCH_FAILED");
@@ -422,8 +443,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
             .select("id, stock_document_id, posting_date, company_id, storage_location_id, material_id, batch_number, movement_type_code, direction, quantity, posted_quantity, base_uom_code, value, posted_value, valuation_rate, created_at")
             .in("batch_number", batchChunk)
             .in("company_id", companyIdsInScope)
-            .order("posting_date", { ascending: true })
-            .order("id", { ascending: true });
+            .order("id", { ascending: true }); // id-only: lets the planner use idx_sl_batch (re-sorted in memory below)
           if (!bypassDateRange) {
             lq = (lq as unknown as { gte: (c: string, v: string) => typeof lq }).gte("posting_date", dateFrom);
             lq = (lq as unknown as { lte: (c: string, v: string) => typeof lq }).lte("posting_date", dateTo);
