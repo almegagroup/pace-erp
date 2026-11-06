@@ -1465,6 +1465,12 @@ export async function saveAC01GRNCostHandler(
     if (suppliedGstPct != null && (!Number.isFinite(suppliedGstPct) || suppliedGstPct < 0 || suppliedGstPct > 100)) {
       return ac01ErrorResponse(req, ctx, "AC01_GST_PCT_INVALID", 422, "GST % must be between 0 and 100.");
     }
+    // Invoice Qty (goods_receipt.ge_qty) is correctable by AC01 WRITE holders;
+    // the RPC audits every change and keeps discrepancy_qty consistent.
+    const suppliedInvoiceQty = body.invoice_qty != null && body.invoice_qty !== "" ? Number(body.invoice_qty) : null;
+    if (suppliedInvoiceQty != null && (!Number.isFinite(suppliedInvoiceQty) || suppliedInvoiceQty <= 0)) {
+      return ac01ErrorResponse(req, ctx, "AC01_INVOICE_QTY_INVALID", 422, "Invoice Qty must be greater than 0.");
+    }
     // GST entered at GRN can be corrected by Accounts, but never silently.
     // The RPC repeats this guard inside its transaction and records every
     // actual change in the immutable AC01 GST correction audit table.
@@ -1502,6 +1508,7 @@ export async function saveAC01GRNCostHandler(
         p_clear_last_mile_payable_override: body.clear_last_mile_payable_override === true,
         p_clear_cha_payable_override: body.clear_cha_payable_override === true,
         p_considered_qty: body.considered_qty != null ? Number(body.considered_qty) : null,
+        p_invoice_qty: suppliedInvoiceQty,
         p_invoice_verified: body.invoice_verified === true,
         // Each AC01 save is a fresh confirmation point. Unless the user ticks
         // I Verify in this same save, an earlier acknowledgement is removed.
@@ -1510,7 +1517,7 @@ export async function saveAC01GRNCostHandler(
 
     if (error) {
       const message = error.message ?? "Unable to save AC01 GRN cost.";
-      const isGstValidationError = message.includes("AC01_GST_");
+      const isGstValidationError = message.includes("AC01_GST_") || message.includes("AC01_INVOICE_QTY_");
       return ac01ErrorResponse(req, ctx, isGstValidationError ? message : "AC01_SAVE_FAILED", isGstValidationError ? 422 : 500, message);
     }
 

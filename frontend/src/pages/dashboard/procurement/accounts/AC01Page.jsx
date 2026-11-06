@@ -131,9 +131,15 @@ function toISODate(ddmmyyyy) {
 // formula grn.handlers.ts's create-time calc already uses -- positive means
 // the invoice claimed more than what was actually received (shortage),
 // negative means more was received than invoiced (excess).
-function formatQtyVarianceNote(grn) {
+function formatQtyVarianceNote(grn, invoiceQtyOverride) {
   if (!grn) return "";
-  const discrepancy = grn.discrepancy_qty != null ? Number(grn.discrepancy_qty) : null;
+  // Invoice Qty is editable in the drawer, so derive the variance live from
+  // the draft value (same formula: invoice - received) instead of the stale
+  // stored discrepancy_qty.
+  const overrideNum = invoiceQtyOverride !== "" && invoiceQtyOverride != null ? Number(invoiceQtyOverride) : null;
+  const discrepancy = overrideNum != null && !Number.isNaN(overrideNum) && grn.received_qty != null
+    ? Number((overrideNum - Number(grn.received_qty)).toFixed(6))
+    : grn.discrepancy_qty != null ? Number(grn.discrepancy_qty) : null;
   if (discrepancy == null || Number.isNaN(discrepancy) || discrepancy === 0) return "None";
   const magnitude = formatNumberOrBlank(Math.abs(discrepancy));
   return discrepancy > 0 ? `Shortage ${magnitude}` : `Excess ${magnitude}`;
@@ -185,7 +191,7 @@ function computeLivePreview(grn, draft, costLines, deductionLines) {
   // rule, if the draft field is somehow blank.
   const consideredQty = draft.considered_qty !== "" && draft.considered_qty != null
     ? Number(draft.considered_qty)
-    : Number(grn.considered_qty ?? grn.ge_qty ?? grn.received_qty ?? 0);
+    : Number(grn.considered_qty ?? draft.invoice_qty ?? grn.ge_qty ?? grn.received_qty ?? 0);
   const perPackQty = grn.per_pack_qty != null ? Number(grn.per_pack_qty) : null;
   const hasPackConversion = perPackQty != null && perPackQty > 0;
   const effectiveRate = draft.confirmed_rate !== "" && draft.confirmed_rate != null
@@ -697,6 +703,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
       // Always prefilled from Invoice Qty if considered_qty was somehow never
       // set (pre-backfill edge case) -- matches the "always prefilled" rule.
       considered_qty: grn.considered_qty ?? grn.ge_qty ?? grn.received_qty ?? "",
+      invoice_qty: grn.ge_qty ?? grn.received_qty ?? "",
       revised_payment_date: toDDMMYYYY(grn.revised_payment_date),
       gst_pct: grn.gst_pct ?? "",
       gst_correction_reason: "",
@@ -774,6 +781,10 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
       setError("GST % must be between 0 and 100.");
       return;
     }
+    if (draft.invoice_qty !== "" && (!Number.isFinite(Number(draft.invoice_qty)) || Number(draft.invoice_qty) <= 0)) {
+      setError("Invoice Qty must be greater than 0.");
+      return;
+    }
     const storedGstPct = grnDetailQuery.data?.gst_pct != null ? Number(grnDetailQuery.data.gst_pct) : null;
     const gstPctChanged = enteredGstPct != null
       && (storedGstPct == null || Math.abs(enteredGstPct - storedGstPct) > 0.000001);
@@ -797,6 +808,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         gst_pct: enteredGstPct,
         gst_correction_reason: draft.gst_correction_reason?.trim() || null,
         considered_qty: draft.considered_qty === "" ? null : Number(draft.considered_qty),
+        invoice_qty: draft.invoice_qty === "" ? null : Number(draft.invoice_qty),
         invoice_verified: invoiceVerified,
         revised_payment_date: draft.revised_payment_date ? toISODate(draft.revised_payment_date) : null,
         clear_revised_payment_date: !draft.revised_payment_date,
@@ -1106,14 +1118,30 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
 
             <DrawerSection eyebrow="Quantity" title="Invoice qty, GRN qty and Considered Qty">
               <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}>
-                <DrawerField label="Invoice Qty (from GE)">
-                  <input disabled value={formatNumberOrBlank(grnDetailQuery.data?.ge_qty ?? grnDetailQuery.data?.received_qty)} className={inputCls} />
+                <DrawerField label="Invoice Qty (from GE, editable)">
+                  <input
+                    disabled={effectiveReadOnly}
+                    value={draft.invoice_qty}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      // Considered Qty is "always prefilled from Invoice Qty":
+                      // if it was still tracking the old Invoice Qty (user never
+                      // overrode it), keep it in sync so Payable + Landed Cost
+                      // recalculate automatically. A deliberately different
+                      // Considered Qty is left alone.
+                      setDraft((current) => {
+                        const tracking = String(current.considered_qty ?? "") === String(current.invoice_qty ?? "");
+                        return { ...current, invoice_qty: next, considered_qty: tracking ? next : current.considered_qty };
+                      });
+                    }}
+                    className={inputCls}
+                  />
                 </DrawerField>
                 <DrawerField label="GRN Qty (received)">
                   <input disabled value={formatNumberOrBlank(grnDetailQuery.data?.received_qty)} className={inputCls} />
                 </DrawerField>
                 <DrawerField label="Shortage / Excess">
-                  <input disabled value={formatQtyVarianceNote(grnDetailQuery.data)} className={inputCls} />
+                  <input disabled value={formatQtyVarianceNote(grnDetailQuery.data, draft.invoice_qty)} className={inputCls} />
                 </DrawerField>
                 <DrawerField label="Considered Qty (drives Payable + Landed Cost)">
                   <input
