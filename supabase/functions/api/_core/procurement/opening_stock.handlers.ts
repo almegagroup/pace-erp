@@ -1899,6 +1899,44 @@ async function findDownstreamGroup(
     }
   }
 
+  // Inward QA usage decision (a GRN's receipt leaving Quality Inspection for Unrestricted / Blocked): the impacted row is the
+  // QI-OUT leg; its sibling IN leg sits in the same material document (same number + year, another item) and must get
+  // the SAME corrected rate -- it is the same value changing stock type, not a new cost. Without this the correction stopped
+  // at the (empty) QI bucket and never reached the stock actually on hand (found live 2026-11-06: White Cement JK
+  // Unrestricted at 0.16/KG after its invoice-later GRNs were mapped).
+  if (toUpperTrimmedString(impacted.reference_document_type) === "QA" && toTrimmedString(impacted.stock_document_id)) {
+    const { data: sourceDoc } = await serviceRoleClient
+      .schema("erp_inventory").from("stock_document")
+      .select("company_id, document_number, document_year")
+      .eq("id", toTrimmedString(impacted.stock_document_id)).maybeSingle();
+    const { data: sourceLeg } = await serviceRoleClient
+      .schema("erp_inventory").from("stock_ledger")
+      .select("material_id, quantity")
+      .eq("id", impactedLedgerId).maybeSingle();
+    if (sourceDoc && sourceLeg) {
+      const { data: siblingDocs } = await serviceRoleClient
+        .schema("erp_inventory").from("stock_document")
+        .select("id")
+        .eq("company_id", String(sourceDoc.company_id))
+        .eq("document_number", String(sourceDoc.document_number))
+        .eq("document_year", String(sourceDoc.document_year))
+        .neq("id", toTrimmedString(impacted.stock_document_id));
+      const siblingDocIds = ((siblingDocs ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.id)).filter(Boolean);
+      if (siblingDocIds.length > 0) {
+        const { data: siblingLegs } = await serviceRoleClient
+          .schema("erp_inventory").from("stock_ledger")
+          .select("id")
+          .in("stock_document_id", siblingDocIds)
+          .eq("direction", "IN")
+          .eq("material_id", String(sourceLeg.material_id))
+          .eq("quantity", sourceLeg.quantity);
+        const matches = (siblingLegs ?? []) as JsonRecord[];
+        // Exactly one candidate or none: an ambiguous pairing is never guessed.
+        if (matches.length === 1) return { kind: "PASSTHROUGH", targetLedgerId: String(matches[0].id) };
+      }
+    }
+  }
+
   return null; // no known downstream (RTV/STO/legacy untagged rows/etc.) — leaf, nothing more to cascade
 }
 
