@@ -781,3 +781,18 @@ get staggered dates; the family check (no extra buying, no extra day below Min) 
 CMP003 PROD snapshot: MHEC family before: three orders "can wait" 20 / 13 / 6 d and the last one "too late 12 d" (not a set that works together);
 after: one order can wait 9 d, the others are on time, applying all costs no extra buying and no extra day below Min.
 Not verified on CMP005 live data.
+
+## 48. Overdue (passed) ETA to plant — what the sheet must say (owner 2026-11-06, NOT YET BUILT)
+
+Rule today (verified in `familyArrivalEta` / `isFamilyAllocatableArrival`, `mts_planning.logic.ts`): a piece whose ETA to plant has passed (or is missing) with no
+receipt is counted as arriving **today** (the as-of day) and flagged `ETA_PASSED` / `ETA_MISSING`. Because every run uses today as the as-of day, a piece that never
+arrives is assumed to arrive "today" again every day; nothing ages it out. That stays as it is for now.
+
+Owner's wording requirement for every such piece (Excel, Item Plan, Action tab):
+1. Say plainly that the **ETA has passed** ("ETA passed").
+2. Show the **original ETA to plant** date that is now in the past.
+3. Say that the plan has **adjusted the ETA to plant to today**.
+4. Add the instruction: **if it does not arrive today, ask the vendor for a tentative ETA / ATA and change CSN Tracker accordingly.**
+
+Open (not decided): whether to stop counting such a piece after N days overdue (replacement order / below-Critical warning), or only make the warning louder.
+Where the text lives today: `familyArrivalRisk` message (`mts_planning.logic.ts`), `overdue_days` branches in `mts_best_date_text.logic.ts` (lines ~38, ~99), the "OVERDUE / NOT SHIPPED" instruction.
