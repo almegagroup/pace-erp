@@ -282,6 +282,7 @@ import {
   submitOpeningStockDocumentHandler,
   updateOpeningStockLineHandler,
 } from "../_core/procurement/opening_stock.handlers.ts";
+import { grnGstInclusiveBackfillHandler } from "../_core/procurement/grn_gst_backfill.handlers.ts";
 import {
   addPIItemHandler,
   cancelPIDHandler,
@@ -697,6 +698,8 @@ export async function dispatchProcurementRoutes(
       return await getOpeningStockDocumentByNumberHandler(req, ctx);
     case "POST:/api/procurement/opening-stock/recalculate-valuation":
       return await recalculateValuationHandler(req, ctx);
+    case "POST:/api/procurement/grn-gst-inclusive-backfill":
+      return await grnGstInclusiveBackfillHandler(req, ctx);
     case "POST:/api/procurement/physical-inventory":
       return await createPIDHandler(req, ctx);
     case "GET:/api/procurement/physical-inventory":
