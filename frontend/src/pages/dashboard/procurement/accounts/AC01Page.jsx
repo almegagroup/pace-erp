@@ -183,8 +183,19 @@ function deriveDefaultsForCostType(costType, currentPartyType, defaultChaId) {
 // per_pack_qty conversion) so the live preview and the real save always
 // agree -- computed fresh from the CURRENT in-memory costLines/
 // deductionLines/draft on every relevant change, not from the server.
+// Foreign-currency PO (USD): PO/invoice rates are stored in the PO currency.
+// The user never sees them in USD -- they enter the BOE exchange rate
+// (INR per 1 unit of PO currency) and every rate/cost here is INR.
+function grnFxRate(grn, draft) {
+  const currency = String(grn?.po_currency_code ?? "INR").toUpperCase();
+  if (currency === "INR") return 1;
+  const entered = draft?.exchange_rate !== "" && draft?.exchange_rate != null ? Number(draft.exchange_rate) : 0;
+  return Number.isFinite(entered) && entered > 0 ? entered : 0;
+}
+
 function computeLivePreview(grn, draft, costLines, deductionLines) {
   if (!grn || !draft) return null;
+  const fxRate = grnFxRate(grn, draft);
   // Considered Qty (business owner, 2026-08-26) drives Payable + Landed
   // Cost/unit throughout -- never received_qty. Falls back to the fetched
   // grn.considered_qty, then Invoice Qty, matching the "always prefilled"
@@ -194,15 +205,17 @@ function computeLivePreview(grn, draft, costLines, deductionLines) {
     : Number(grn.considered_qty ?? draft.invoice_qty ?? grn.ge_qty ?? grn.received_qty ?? 0);
   const perPackQty = grn.per_pack_qty != null ? Number(grn.per_pack_qty) : null;
   const hasPackConversion = perPackQty != null && perPackQty > 0;
+  // draft.confirmed_rate is already INR (what the user types); the stored
+  // fallbacks are in the PO currency and get converted with the BOE rate.
   const effectiveRate = draft.confirmed_rate !== "" && draft.confirmed_rate != null
     ? Number(draft.confirmed_rate)
-    : grn.confirmed_rate != null
+    : (grn.confirmed_rate != null
       ? Number(grn.confirmed_rate)
       : grn.rate_confirmed === true && grn.invoice_rate != null
         ? Number(grn.invoice_rate)
         : grn.grn_rate != null
         ? Number(grn.grn_rate)
-        : 0;
+        : 0) * fxRate;
   const materialGstPct = draft.gst_pct !== "" && draft.gst_pct != null ? Number(draft.gst_pct) : (grn.gst_pct != null ? Number(grn.gst_pct) : 0);
   const purchaseCost = effectiveRate * consideredQty;
   const materialGstAmount = purchaseCost * materialGstPct / 100;
@@ -699,7 +712,11 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
     setDraft({
       invoice_number: grn.invoice_number ?? "",
       invoice_date: toDDMMYYYY(grn.invoice_date),
-      confirmed_rate: grn.confirmed_rate ?? "",
+      // Shown/entered in INR; converted back to the PO currency on save.
+      confirmed_rate: grn.confirmed_rate != null
+        ? Number((Number(grn.confirmed_rate) * (String(grn.po_currency_code ?? "INR").toUpperCase() === "INR" ? 1 : Number(grn.exchange_rate ?? 0))).toFixed(6)) || ""
+        : "",
+      exchange_rate: grn.exchange_rate ?? grn.boe_exchange_rate ?? "",
       // Always prefilled from Invoice Qty if considered_qty was somehow never
       // set (pre-backfill edge case) -- matches the "always prefilled" rule.
       considered_qty: grn.considered_qty ?? grn.ge_qty ?? grn.received_qty ?? "",
@@ -785,6 +802,11 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
       setError("Invoice Qty must be greater than 0.");
       return;
     }
+    const fxRateForSave = grnFxRate(grnDetailQuery.data, draft);
+    if (String(grnDetailQuery.data?.po_currency_code ?? "INR").toUpperCase() !== "INR" && !(fxRateForSave > 0)) {
+      setError(`Enter the BOE exchange rate (INR per ${grnDetailQuery.data?.po_currency_code}) before saving.`);
+      return;
+    }
     const storedGstPct = grnDetailQuery.data?.gst_pct != null ? Number(grnDetailQuery.data.gst_pct) : null;
     const gstPctChanged = enteredGstPct != null
       && (storedGstPct == null || Math.abs(enteredGstPct - storedGstPct) > 0.000001);
@@ -801,7 +823,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
     setError("");
     try {
       await saveAC01GRNCost(selectedGrnId, {
-        confirmed_rate: draft.confirmed_rate === "" ? null : Number(draft.confirmed_rate),
+        confirmed_rate: draft.confirmed_rate === "" ? null : Number(draft.confirmed_rate) / (fxRateForSave || 1),
+        exchange_rate: fxRateForSave > 0 && String(grnDetailQuery.data?.po_currency_code ?? "INR").toUpperCase() !== "INR" ? fxRateForSave : null,
         last_mile_transporter_id: draft.last_mile_transporter_id || null,
         invoice_number: draft.invoice_number || null,
         invoice_date: draft.invoice_date ? toISODate(draft.invoice_date) : null,
@@ -913,6 +936,10 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   // Recomputed on every keystroke/selection change -- see computeLivePreview's
   // own comment for why this exists (was previously showing stale save-time
   // numbers, defeating the point of a preview-before-save drawer).
+  const isForeignCurrencyGrn = String(grnDetailQuery.data?.po_currency_code ?? "INR").toUpperCase() !== "INR";
+  const grnFxNow = grnFxRate(grnDetailQuery.data, draft);
+  // PO / invoice rates are stored in the PO currency; the user only ever sees INR.
+  const inrRate = (value) => (value == null || value === "" ? null : Number((Number(value) * grnFxNow).toFixed(6)));
   const livePreview = useMemo(
     () => computeLivePreview(grnDetailQuery.data, draft, costLines, deductionLines),
     [grnDetailQuery.data, draft, costLines, deductionLines],
@@ -1156,13 +1183,25 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
 
             <DrawerSection eyebrow="Rate and GST confirmation" title="PO rate, invoice rate, confirmed rate and GST correction">
               <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}>
-                <DrawerField label="PO rate (reference)">
-                  <input disabled value={formatNumberOrBlank(grnDetailQuery.data?.po_rate)} className={inputCls} />
+                {isForeignCurrencyGrn ? (
+                  <DrawerField label={`BOE exchange rate (INR per ${grnDetailQuery.data?.po_currency_code}) — required`}>
+                    <input
+                      type="number" min="0" step="0.0001"
+                      disabled={effectiveReadOnly}
+                      value={draft.exchange_rate}
+                      onChange={(event) => setDraft((current) => ({ ...current, exchange_rate: event.target.value }))}
+                      placeholder="Exchange rate on BOE date"
+                      className={inputCls}
+                    />
+                  </DrawerField>
+                ) : null}
+                <DrawerField label={isForeignCurrencyGrn ? "PO rate (reference, INR)" : "PO rate (reference)"}>
+                  <input disabled value={formatNumberOrBlank(inrRate(grnDetailQuery.data?.po_rate))} className={inputCls} />
                 </DrawerField>
-                <DrawerField label="Invoice rate (noted at GRN)">
-                  <input disabled value={formatNumberOrBlank(grnDetailQuery.data?.invoice_rate)} className={inputCls} />
+                <DrawerField label={isForeignCurrencyGrn ? "Invoice rate (noted at GRN, INR)" : "Invoice rate (noted at GRN)"}>
+                  <input disabled value={formatNumberOrBlank(inrRate(grnDetailQuery.data?.invoice_rate))} className={inputCls} />
                 </DrawerField>
-                <DrawerField label="Confirmed rate">
+                <DrawerField label={isForeignCurrencyGrn ? "Confirmed rate (INR)" : "Confirmed rate"}>
                   <input disabled={effectiveReadOnly} value={draft.confirmed_rate} onChange={(event) => setDraft((current) => ({ ...current, confirmed_rate: event.target.value }))} placeholder="Enter confirmed rate" className={inputCls} />
                 </DrawerField>
                 <DrawerField label="Confirmed GST %">
@@ -1365,7 +1404,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                           <option value="PER_UOM">Per UoM</option>
                         </select>
                       ) : <div />}
-                      {!isDuty ? (
+                      {true ? (
                         <select
                           disabled={effectiveReadOnly}
                           value={line.has_gst ? "YES" : "NO"}
@@ -1376,7 +1415,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                           <option value="YES">Has GST? Yes</option>
                         </select>
                       ) : <div />}
-                      {!isDuty && line.has_gst ? (
+                      {line.has_gst ? (
                         <select
                           disabled={effectiveReadOnly}
                           value={line.gst_treatment}
@@ -1387,7 +1426,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                           <option value="INCLUSIVE">Inclusive</option>
                         </select>
                       ) : <div />}
-                      {!isDuty && line.has_gst ? (
+                      {line.has_gst ? (
                         <input
                           disabled={effectiveReadOnly}
                           value={line.gst_rate}

@@ -1095,6 +1095,8 @@ export async function createAndPostGRNFromLineHandler(
         // from Invoice Qty (ge_qty) at creation, user-editable in AC01's drawer
         // thereafter. Drives Payable + Landed Cost/unit, never received_qty.
         considered_qty: geQty,
+        // Rates on this GRN are in the PO/STO line's currency; AC01 converts to INR with the BOE exchange rate.
+        po_currency_code: toUpperTrimmedString(poLineData?.currency_code ?? stoLineData?.currency_code) || "INR",
         uom_code: geLine.uom_code ?? material.base_uom_code,
         discrepancy_qty: discrepancyQty,
         discrepancy_remarks: discrepancyRemarks,
