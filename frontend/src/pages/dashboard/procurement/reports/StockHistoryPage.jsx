@@ -12,6 +12,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
+import { layoutDrawerProps, useColumnLayouts } from "../../../../shared/columnLayouts/useColumnLayouts.js";
+import { pushToast } from "../../../../store/uiToast.js";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import MultiValueFilterField from "../../../../components/inputs/MultiValueFilterField.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
@@ -26,6 +28,8 @@ import {
   useMaterialOptionsQuery,
   useStorageLocationOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
+import UomModeSwitcher from "../../../../components/inputs/UomModeSwitcher.jsx";
+import { applyUomMode, availableUomModes } from "../../../../shared/uomDisplay.js";
 import { useScreenBackInterceptor } from "../../../../hooks/useScreenBackInterceptor.js";
 import { listMachines } from "../../om/omApi.js";
 import { getStockHistory, getStockHistoryMachineWise } from "../procurementApi.js";
@@ -301,8 +305,16 @@ export default function StockHistoryPage() {
   const [dateFrom, setDateFrom] = useState("");
   const [dateTo, setDateTo] = useState("");
 
-  const [rows, setRows] = useState([]);
+  const [rawRows, setRawRows] = useState([]);
+  const [uomMode, setUomMode] = useState("DEFAULT");
   const [visibleBuckets, setVisibleBuckets] = useState([]);
+  // Backend sends every figure in BASE units plus each material's allowed units; the unit
+  // switch below only re-derives the display, so changing it needs no new request.
+  const rows = useMemo(
+    () => rawRows.map((row) => applyUomMode(row, uomMode, { qtyFields: ["opening", "closing"], mapFields: ["buckets"] })),
+    [rawRows, uomMode],
+  );
+  const availableUomKinds = useMemo(() => availableUomModes(rawRows), [rawRows]);
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState("");
@@ -388,11 +400,10 @@ export default function StockHistoryPage() {
     [baseColumnDefinitions, bucketColumnDefinitions, closingColumnDefinition],
   );
 
-  const [hiddenColumns, setHiddenColumns] = useState([]);
-  const gridColumns = useMemo(
-    () => columnDefinitions.filter((column) => !hiddenColumns.includes(column.key)),
-    [columnDefinitions, hiddenColumns],
-  );
+  // Common column picker (visibility + order, up to 3 saved layouts per user).
+  const layoutMessage = useCallback((message, tone) => pushToast({ message, tone }), []);
+  const layout = useColumnLayouts("IN14", columnDefinitions, layoutMessage);
+  const gridColumns = layout.columns;
 
   const searchDisabled = !companyId || !dateFrom || !dateTo || dateSpanTooWide(dateFrom, dateTo) || dateRangeInvalid(dateFrom, dateTo);
 
@@ -428,12 +439,12 @@ export default function StockHistoryPage() {
     };
     try {
       const response = await getStockHistory(params);
-      setRows(Array.isArray(response?.data) ? response.data : []);
+      setRawRows(Array.isArray(response?.data) ? response.data : []);
       setVisibleBuckets(Array.isArray(response?.visible_buckets) ? response.visible_buckets : []);
       setSubmittedParams(params);
       setPage(2);
     } catch (searchError) {
-      setRows([]);
+      setRawRows([]);
       setVisibleBuckets([]);
       setError(searchError instanceof Error ? searchError.message : "STOCK_HISTORY_FETCH_FAILED");
     } finally {
@@ -638,6 +649,7 @@ export default function StockHistoryPage() {
               </div>
             ) : (
               <>
+                <UomModeSwitcher modes={availableUomKinds} value={uomMode} onChange={setUomMode} />
                 <div className="mb-2 text-xs text-slate-500">
                   Click and drag (or Shift+Click / Shift+Arrow) to select a range, then Ctrl+C to copy — same as Excel.
                 </div>
@@ -664,16 +676,7 @@ export default function StockHistoryPage() {
 
       <ErpColumnVisibilityDrawer
         visible={columnsOpen}
-        columns={columnDefinitions}
-        visibleColumnKeys={columnDefinitions.map((column) => column.key).filter((key) => !hiddenColumns.includes(key))}
-        onToggleColumn={(columnKey) =>
-          setHiddenColumns((current) =>
-            current.includes(columnKey)
-              ? current.filter((entry) => entry !== columnKey)
-              : [...current, columnKey],
-          )
-        }
-        onResetColumns={() => setHiddenColumns([])}
+        {...layoutDrawerProps(layout)}
         onClose={() => setColumnsOpen(false)}
       />
 

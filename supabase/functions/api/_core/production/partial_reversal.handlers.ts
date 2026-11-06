@@ -28,7 +28,9 @@ import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.t
 import { generateMaterialDocNumber, generateRecoDocNumber } from "../../_shared/materialDocument.ts";
 import type { MaterialDocumentRef } from "../../_shared/materialDocument.ts";
 import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { findFirstPhysicalInventoryBlock } from "../../_shared/physicalInventoryBlock.ts";
+import { fetchPackingOrderFoCapacities } from "./packing_order_fo_capacity.reader.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -400,14 +402,48 @@ async function computeSkuAvailability(
   materialId: string,
   storageLocationId: string,
   originalQty: number,
-): Promise<{ availableQty: number; dispatchedQty: number; foMappedQty: number; priorReversedQty: number }> {
-  const [dispatchedQty, foMappedQty, priorReversedQty] = await Promise.all([
-    sumDispatchedQtyForPackingOrder(packingOrderId),
-    sumFoMappedQtyForPackingOrder(packingOrderId),
+  companyId: string,
+  batchNumber: string,
+): Promise<{ availableQty: number; dispatchedQty: number; foMappedQty: number; priorReversedQty: number; returnedQty: number; physicalQty: number }> {
+  // Dispatch / FO-reservation arithmetic is the SAME rule Plan Feed uses (packing_order_fo_capacity.ts):
+  // a dispatch linked to an FO releases that FO's own reservation, so the same stock is never
+  // subtracted twice (the old code subtracted the raw allocation AND the dispatch).
+  const [capacities, priorReversedQty, returnedRaw, physicalQty] = await Promise.all([
+    fetchPackingOrderFoCapacities([{ id: packingOrderId, actual_qty_kg: originalQty }]),
     sumPriorReversedQty("SKU", materialId, storageLocationId, processOrderId, packingOrderId),
+    sumReturnedQtyForPackingOrder(packingOrderId),
+    sumUnrestrictedLedgerQty(companyId, materialId, storageLocationId, batchNumber),
   ]);
-  const availableQty = Math.max(0, originalQty - dispatchedQty - foMappedQty - priorReversedQty);
-  return { availableQty, dispatchedQty, foMappedQty, priorReversedQty };
+  const capacity = capacities.get(packingOrderId);
+  const dispatchedQty = capacity?.dispatched_qty_kg ?? 0;
+  const foMappedQty = [...(capacity?.reserved_by_plan_feed.values() ?? [])].reduce((sum, value) => sum + value, 0);
+  // Customer returns (Sales Return, not repacked into another SKU) bring dispatched stock back, so
+  // they cancel out against the dispatch -- never more than what was dispatched.
+  const returnedQty = Math.min(returnedRaw, dispatchedQty);
+  const paperAvailable = Math.max(0, Math.min(originalQty, (capacity?.free_qty_kg ?? 0) + returnedQty) - priorReversedQty);
+  // ...but PR19 posts a real Unrestricted ledger OUT, so it can never exceed what is physically in
+  // Unrestricted for this batch at this location (a return lands in BLOCKED until QA releases it).
+  // min() only ever tightens: it cannot re-open the shared-batch borrow described above, because
+  // paperAvailable is still this Packing PO's own accounting.
+  const availableQty = Math.max(0, Math.min(paperAvailable, physicalQty));
+  return { availableQty, dispatchedQty, foMappedQty, priorReversedQty, returnedQty, physicalQty };
+}
+
+// Customer returns of this Packing PO's output that were posted as such (not repacked into another SKU).
+async function sumReturnedQtyForPackingOrder(packingOrderId: string): Promise<number> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("sales_return_item")
+    .select("quantity, is_repacked, posting_status")
+    .eq("packing_order_id", packingOrderId)
+    .eq("posting_status", "POSTED");
+  if (error) {
+    console.error("[partial_reversal.sumReturnedQtyForPackingOrder] query failed:", JSON.stringify(error));
+    throw new Error("PR19_RETURN_LOOKUP_FAILED");
+  }
+  return ((data ?? []) as JsonRecord[])
+    .filter((row) => row.is_repacked !== true)
+    .reduce((sum, row) => sum + Number(row.quantity ?? 0), 0);
 }
 
 // §Q-reversal-2026-09-30 — a variable-fill pack code (599/510/000: barrel/IBC/tanker
@@ -591,8 +627,9 @@ export async function listPartialReversalStockLinesHandler(req: Request, ctx: Pr
       // §Q-reversal-2026-09-30 — packing_order_id-scoped (this PO's own actual_qty_kg
       // minus ITS OWN dispatched/FO-mapped/prior-reversed qty), never batch-wide. See
       // computeSkuAvailability's own header comment for the live incident this fixes.
-      const { availableQty, dispatchedQty, foMappedQty } = await computeSkuAvailability(
+      const { availableQty, dispatchedQty, foMappedQty, returnedQty, physicalQty } = await computeSkuAvailability(
         processOrderId, String(pkRow.id), String(pkRow.material_id ?? ""), fgSlocId, Number(pkRow.actual_qty_kg ?? 0),
+        companyId, batchNumber,
       );
       if (availableQty > 0) {
         rows.push({
@@ -609,6 +646,8 @@ export async function listPartialReversalStockLinesHandler(req: Request, ctx: Pr
           total_qty: Number(pkRow.actual_qty_kg ?? 0),
           dispatched_qty: dispatchedQty,
           fo_mapped_qty: foMappedQty,
+          returned_qty: returnedQty,
+          physical_unrestricted_qty: physicalQty,
           // §83.14 "balance barrel": one batch can split across several Packing POs at
           // different fill sizes — surfaced here so Page 2 shows which fill shape each
           // row is (not just an opaque PO number), and Page 3 can offer a "Num Packs to
@@ -665,21 +704,43 @@ export async function listSalvageBatchOptionsHandler(req: Request, ctx: ProdHand
     // been Verified (the normal end state), the list always went empty and
     // there was no way to reference which batch the salvage was actually
     // meant for. VERIFIED batches are now included alongside BATCH_STARTED.
+    // Found live 2026-11-06 (CMP006, batch BM05911): this used to be limited to OTHER batches of the SAME
+    // prodshade, so a prodshade with a single batch (1 of 389 MTO batches) got an empty dropdown and the
+    // tag could never be set. The tag is a free traceability reference, so any batch of the same company
+    // and PO type is offered; same-prodshade batches are listed first and flagged.
     let query = serviceRoleClient
       .schema("erp_production")
       .from("process_order")
-      .select("id, po_number, batch_number, status, created_at")
+      .select("id, po_number, batch_number, status, created_at, material_id")
       .eq("company_id", companyId)
       .eq("po_type", poType)
-      .eq("material_id", prodshadeMaterialId)
+      .not("batch_number", "is", null)
       .in("status", ["BATCH_STARTED", "VERIFIED"])
       .order("created_at", { ascending: false })
-      .limit(100);
+      .limit(300);
     if (excludeProcessOrderId) query = query.neq("id", excludeProcessOrderId);
     const { data, error } = await query;
     if (error) throw new Error("PR19_SALVAGE_LOOKUP_FAILED");
 
-    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+    const batchRows = (data ?? []) as JsonRecord[];
+    const materialMap = await getMaterialMapByIds(
+      [...new Set(batchRows.map((row) => String(row.material_id ?? "")).filter(Boolean))],
+      "id, pace_code, material_name",
+    );
+    const items = batchRows.map((row) => {
+      const material = materialMap.get(String(row.material_id ?? ""));
+      return {
+        id: row.id,
+        po_number: row.po_number,
+        batch_number: row.batch_number,
+        status: row.status,
+        created_at: row.created_at,
+        same_prodshade: String(row.material_id ?? "") === prodshadeMaterialId,
+        prodshade_label: [material?.pace_code, material?.material_name].filter(Boolean).join(" — ") || null,
+      };
+    }).sort((left, right) => Number(right.same_prodshade) - Number(left.same_prodshade));
+
+    return okResponse({ data: items }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PR19_SALVAGE_LOOKUP_FAILED";
     return prErr(req, ctx, code, code === "PR19_INVALID" ? 400 : 500, "Salvage batch lookup failed");
@@ -791,6 +852,125 @@ async function buildRmIntPreview(processOrderId: string, ratio: number): Promise
 // packing_order_line_reco per PM line — but PR19 never looked at that table for PM, so the PM
 // qty it returns understates (on a PID gain) or overstates (on a PID loss) the true proportional
 // PM. Mirrors buildRmIntPreview's own source_txn_type filter and fallback reasoning.
+// ── PM (packaging) return rule — business owner, 2026-11-05 ─────────────────────────────────
+// Barrels, labels, tanker fittings are counted things. A partial reversal in KG used to return them
+// "proportionally" (5.6522 barrels for 1300 of 7130 KG), which is physically meaningless. Now:
+//   * a DISCRETE PM line (NOS/EA/PCS/...) returns WHOLE packs only -- the packs that were fully emptied;
+//   * fixed-fill pack (e.g. 31 x 230 KG): default = floor((already reversed + this KG) / fill) - floor(already reversed / fill),
+//     cumulative, so the last partial pack's PM comes back once its remaining KG is reversed;
+//   * container / variable-fill (num_packs = 1, e.g. a tanker): default 0 until the whole container is emptied, then 1;
+//   * the user can edit each line (whole number, never more than is still returnable) -- only they know how many
+//     barrels were really emptied;
+//   * a CONTINUOUS PM line (KG/L/M ...) stays proportional to the KG ratio, as before.
+const CONTINUOUS_PM_UOMS = new Set(["KG", "G", "GM", "MT", "L", "LT", "LTR", "ML", "M", "MTR", "CM", "SQM", "SQMTR"]);
+function isDiscretePmUom(uomCode: unknown): boolean {
+  return !CONTINUOUS_PM_UOMS.has(toUpperTrimmedString(uomCode));
+}
+
+async function sumPriorReversedQtyForPackingOrder(packingOrderId: string): Promise<number> {
+  const { data, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("partial_batch_reversal")
+    .select("reverse_qty")
+    .eq("selected_row_type", "SKU")
+    .eq("selected_packing_order_id", packingOrderId)
+    .eq("status", "POSTED");
+  if (error) {
+    console.error("[partial_reversal.sumPriorReversedQtyForPackingOrder] query failed:", JSON.stringify(error));
+    throw new Error("PR19_STOCK_LOOKUP_FAILED");
+  }
+  return ((data ?? []) as JsonRecord[]).reduce((sum, row) => sum + Number(row.reverse_qty ?? 0), 0);
+}
+
+// PM already returned by earlier PR19 reversals of this Packing PO, per formulation material.
+async function sumPriorReturnedPmByFormulation(packingOrderId: string): Promise<Map<string, number>> {
+  const { data: headers, error } = await serviceRoleClient
+    .schema("erp_production")
+    .from("partial_batch_reversal")
+    .select("id")
+    .eq("selected_packing_order_id", packingOrderId)
+    .eq("status", "POSTED");
+  if (error) {
+    console.error("[partial_reversal.sumPriorReturnedPmByFormulation] header query failed:", JSON.stringify(error));
+    throw new Error("PR19_STOCK_LOOKUP_FAILED");
+  }
+  const ids = ((headers ?? []) as JsonRecord[]).map((row) => String(row.id));
+  const rows = await fetchInChunks<JsonRecord>(ids, (chunk) => serviceRoleClient
+    .schema("erp_production").from("partial_batch_reversal_line")
+    .select("formulation_material_id, qty").eq("line_type", "PM").eq("included", true).in("reversal_id", chunk));
+  const returned = new Map<string, number>();
+  for (const row of rows) {
+    const key = toTrimmedString(row.formulation_material_id);
+    if (key) returned.set(key, (returned.get(key) ?? 0) + Number(row.qty ?? 0));
+  }
+  return returned;
+}
+
+type PmPlanLine = { line_id: string; formulation_material_id: string; base_qty: number; is_discrete: boolean; default_qty: number; max_qty: number };
+type PmPlan = { mode: "FIXED_FILL" | "CONTAINER"; packs_default: number; total_packs: number; lines: PmPlanLine[] };
+
+async function buildPmReversalPlan(input: {
+  packingOrderId: string;
+  numPacks: unknown;
+  fillQtyPerPack: unknown;
+  outputQty: number;
+  reverseQty: number;
+  pmLines: JsonRecord[];
+  pmBaseQtyMap: Map<string, number>;
+  uomByLineId: Map<string, string>;
+}): Promise<PmPlan> {
+  const [priorReversed, priorReturnedByFormulation] = await Promise.all([
+    sumPriorReversedQtyForPackingOrder(input.packingOrderId),
+    sumPriorReturnedPmByFormulation(input.packingOrderId),
+  ]);
+  const numPacks = Number(input.numPacks ?? 0);
+  const fill = Number(input.fillQtyPerPack ?? 0);
+  const after = priorReversed + input.reverseQty;
+  const emptied = after >= input.outputQty - 1e-6;
+  const fixedFill = numPacks > 1 && fill > 0;
+  let packsDefault = 0;
+  if (fixedFill) {
+    const unitsAfter = emptied ? numPacks : Math.min(numPacks, Math.floor(after / fill + 1e-6));
+    const unitsBefore = Math.min(numPacks, Math.floor(priorReversed / fill + 1e-6));
+    packsDefault = Math.max(0, unitsAfter - unitsBefore);
+  } else {
+    packsDefault = emptied ? 1 : 0;
+  }
+  const totalPacks = fixedFill ? numPacks : 1;
+  const ratioKg = input.outputQty > 0 ? input.reverseQty / input.outputQty : 0;
+
+  // returnable budget per formulation material, consumed line by line (a PO rarely repeats a PM material)
+  const remainingByFormulation = new Map<string, number>();
+  const lines: PmPlanLine[] = [];
+  for (const line of input.pmLines) {
+    const lineId = String(line.id);
+    const formulationId = String(line.material_id ?? "");
+    const baseQty = input.pmBaseQtyMap.get(lineId) ?? 0;
+    if (!remainingByFormulation.has(formulationId)) {
+      const lineTotal = input.pmLines
+        .filter((other) => String(other.material_id ?? "") === formulationId)
+        .reduce((sum, other) => sum + (input.pmBaseQtyMap.get(String(other.id)) ?? 0), 0);
+      remainingByFormulation.set(formulationId, Math.max(0, lineTotal - (priorReturnedByFormulation.get(formulationId) ?? 0)));
+    }
+    const budget = remainingByFormulation.get(formulationId) ?? 0;
+    const maxQty = Math.min(baseQty, budget);
+    remainingByFormulation.set(formulationId, Math.max(0, budget - maxQty));
+    const discrete = isDiscretePmUom(input.uomByLineId.get(lineId));
+    let defaultQty: number;
+    if (discrete) {
+      defaultQty = Math.floor((totalPacks > 0 ? (baseQty / totalPacks) * packsDefault : 0) + 1e-6);
+    } else {
+      defaultQty = baseQty * ratioKg;
+    }
+    defaultQty = Math.max(0, Math.min(defaultQty, maxQty));
+    lines.push({
+      line_id: lineId, formulation_material_id: formulationId, base_qty: baseQty, is_discrete: discrete,
+      default_qty: Number(defaultQty.toFixed(6)), max_qty: Number(maxQty.toFixed(6)),
+    });
+  }
+  return { mode: fixedFill ? "FIXED_FILL" : "CONTAINER", packs_default: packsDefault, total_packs: totalPacks, lines };
+}
+
 async function resolvePmLineBaseQtyMap(
   packingOrderId: string,
   pmLines: JsonRecord[],
@@ -884,7 +1064,7 @@ export async function getPartialReversalDetailHandler(req: Request, ctx: ProdHan
     const { data: pkOrder, error: pkErr } = await serviceRoleClient
       .schema("erp_production")
       .from("packing_order")
-      .select("id, material_id, actual_qty_kg, status, process_order_id")
+      .select("id, material_id, actual_qty_kg, status, process_order_id, num_packs, fill_qty_per_pack")
       .eq("id", packingOrderId)
       .maybeSingle();
     if (pkErr) throw new Error("PR19_DETAIL_FAILED");
@@ -913,14 +1093,28 @@ export async function getPartialReversalDetailHandler(req: Request, ctx: ProdHan
     if (pmErr) throw new Error("PR19_DETAIL_FAILED");
     const pmBaseQtyMap = await resolvePmLineBaseQtyMap(packingOrderId, (pmLines ?? []) as JsonRecord[]);
 
+    const pmEffectiveMaterialId = (line: JsonRecord) => toTrimmedString(line.actual_material_id) || String(line.material_id ?? "");
+    const pmUomMap = await getMaterialMapByIds(((pmLines ?? []) as JsonRecord[]).map(pmEffectiveMaterialId), "id, base_uom_code");
+    const uomByLineId = new Map(((pmLines ?? []) as JsonRecord[]).map((line) => [String(line.id), String(pmUomMap.get(pmEffectiveMaterialId(line))?.base_uom_code ?? "")]));
+    const pmPlan = await buildPmReversalPlan({
+      packingOrderId, numPacks: pkData.num_packs, fillQtyPerPack: pkData.fill_qty_per_pack, outputQty: packingActualQty,
+      reverseQty, pmLines: (pmLines ?? []) as JsonRecord[], pmBaseQtyMap, uomByLineId,
+    });
+    const pmPlanByLineId = new Map(pmPlan.lines.map((l) => [l.line_id, l]));
+
     const pmPreview = ((pmLines ?? []) as JsonRecord[]).map((line) => {
       const baseQty = pmBaseQtyMap.get(String(line.id)) ?? 0;
+      const plan = pmPlanByLineId.get(String(line.id));
       return {
         packing_order_line_id: String(line.id),
-        material_id: toTrimmedString(line.actual_material_id) || String(line.material_id ?? ""),
+        material_id: pmEffectiveMaterialId(line),
         formulation_material_id: String(line.material_id ?? ""),
         qty: baseQty,
-        proportional_qty: baseQty * ratioPm,
+        // Whole-pack default (discrete PM) / KG-proportional (continuous PM); the user may edit it.
+        proportional_qty: plan?.default_qty ?? 0,
+        default_qty: plan?.default_qty ?? 0,
+        max_qty: plan?.max_qty ?? 0,
+        is_discrete: plan?.is_discrete ?? false,
         included: true,
         storage_location_id: toTrimmedString(line.issue_sloc_id) || null,
       };
@@ -941,6 +1135,9 @@ export async function getPartialReversalDetailHandler(req: Request, ctx: ProdHan
         actual_total_output: packingActualQty,
         reversal_ratio: ratioPm,
         reversal_ratio_rm: ratioRm,
+        pm_mode: pmPlan.mode,
+        pm_packs_default: pmPlan.packs_default,
+        pm_total_packs: pmPlan.total_packs,
         rm_int_lines: rmIntLines.map((l) => ({
           ...l,
           material: materialMap.get(l.material_id) ?? null,
@@ -979,6 +1176,18 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
     const pmLineExclusions = new Set(
       Array.isArray(body.pm_line_exclusions) ? (body.pm_line_exclusions as unknown[]).map((v) => toTrimmedString(v)).filter(Boolean) : [],
     );
+    // Per-PM-line quantity the user confirmed on Page 3 (whole numbers for counted packaging).
+    // Missing line = the server-computed default (same rule the Page 3 preview used).
+    const pmLineQuantities = new Map<string, number>();
+    if (body.pm_line_quantities && typeof body.pm_line_quantities === "object" && !Array.isArray(body.pm_line_quantities)) {
+      for (const [lineId, raw] of Object.entries(body.pm_line_quantities as Record<string, unknown>)) {
+        const qty = Number(raw);
+        if (!lineId || raw === "" || raw === null || !Number.isFinite(qty) || qty < 0) {
+          return prErr(req, ctx, "PR19_PM_QTY_INVALID", 422, "PM return quantities must be zero or a positive number.");
+        }
+        pmLineQuantities.set(lineId, qty);
+      }
+    }
 
     if (!processOrderId || !["SFG", "SKU"].includes(rowType) || !reverseQty) {
       return prErr(req, ctx, "PR19_INVALID", 400, "process_order_id, row_type (SFG/SKU) and reverse_qty required");
@@ -1016,8 +1225,8 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
     const sfgSlocId = toTrimmedString((stroke as JsonRecord | null)?.default_storage_location_id);
     if (!sfgSlocId) return prErr(req, ctx, "PR19_CREATE_FAILED", 422, "Stroke has no default storage location");
 
-    // Salvage batch (optional) — traceability tag only, must be BATCH_STARTED
-    // (not yet FINAL), same PO type/prodshade family.
+    // Salvage batch (optional) — traceability tag only, must be BATCH_STARTED or VERIFIED, same company
+    // and PO type (any prodshade -- see listSalvageBatchOptionsHandler), and never the batch being reversed.
     let salvageProcessOrderId: string | null = null;
     if (salvageBatchNumber) {
       const { data: salvagePo, error: salvageErr } = await serviceRoleClient
@@ -1026,8 +1235,9 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
         .select("id, status")
         .eq("company_id", companyId)
         .eq("po_type", String(poData.po_type ?? ""))
-        .eq("material_id", String(poData.material_id ?? ""))
         .eq("batch_number", salvageBatchNumber)
+        .neq("id", String(poData.id ?? ""))
+        .limit(1)
         .maybeSingle();
       if (salvageErr) throw new Error("PR19_CREATE_FAILED");
       const salvageStatus = (salvagePo as JsonRecord | null)?.status;
@@ -1156,7 +1366,7 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
       const { data: pkOrder, error: pkErr } = await serviceRoleClient
         .schema("erp_production")
         .from("packing_order")
-        .select("id, material_id, actual_qty_kg, status, process_order_id")
+        .select("id, material_id, actual_qty_kg, status, process_order_id, num_packs, fill_qty_per_pack")
         .eq("id", packingOrderId as string)
         .maybeSingle();
       if (pkErr) throw new Error("PR19_CREATE_FAILED");
@@ -1183,13 +1393,15 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
       // trust Page 2's number alone). See computeSkuAvailability's own header comment:
       // the old batch-wide ledger sum let this silently borrow a sibling Packing PO's
       // stock and "reverse" a fully-dispatched Packing PO -- confirmed live in prod.
-      const { availableQty, dispatchedQty, foMappedQty } = await computeSkuAvailability(
+      const { availableQty, dispatchedQty, foMappedQty, returnedQty, physicalQty } = await computeSkuAvailability(
         processOrderId, packingOrderId as string, String(pkData.material_id ?? ""), fgSlocId, packingActualQty,
+        companyId, String(poData.batch_number ?? ""),
       );
       if (reverseQty > availableQty + 1e-6) {
         const reasons: string[] = [];
-        if (dispatchedQty > 1e-6) reasons.push(`${dispatchedQty} already dispatched or on an active Delivery Order`);
+        if (dispatchedQty > 1e-6) reasons.push(`${dispatchedQty} already dispatched or on an active Delivery Order${returnedQty > 1e-6 ? `, ${returnedQty} of it returned by the customer` : ""}`);
         if (foMappedQty > 1e-6) reasons.push(`${foMappedQty} mapped to an FO`);
+        reasons.push(`${physicalQty} currently in Unrestricted stock for this batch`);
         const reasonText = reasons.length > 0 ? ` (${reasons.join(", ")})` : "";
         return prErr(req, ctx, "PR19_REVERSE_QTY_EXCEEDS_AVAILABLE", 422,
           `Reverse qty exceeds available. Only ${availableQty} of this Packing PO's ${packingActualQty} is available for reversal${reasonText}.`);
@@ -1349,11 +1561,32 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
       ]);
       const pmMaterialMap = await getMaterialMapByIds(pmMaterialIds, "id, base_uom_code");
       const pmBaseQtyMap = await resolvePmLineBaseQtyMap(packingOrderId as string, (pmLines ?? []) as JsonRecord[]);
+      const pmUomByLineId = new Map(((pmLines ?? []) as JsonRecord[]).map((row) => {
+        const effectiveId = toTrimmedString(row.actual_material_id) || String(row.material_id ?? "");
+        return [String(row.id), String(pmMaterialMap.get(effectiveId)?.base_uom_code ?? "")] as const;
+      }));
+      const pmPlan = await buildPmReversalPlan({
+        packingOrderId: packingOrderId as string, numPacks: pkData.num_packs, fillQtyPerPack: pkData.fill_qty_per_pack,
+        outputQty: packingActualQty, reverseQty, pmLines: (pmLines ?? []) as JsonRecord[], pmBaseQtyMap, uomByLineId: pmUomByLineId,
+      });
+      const pmPlanByLineId = new Map(pmPlan.lines.map((l) => [l.line_id, l]));
+      // Validate every user-supplied PM quantity BEFORE anything is posted.
+      for (const [lineId, qty] of pmLineQuantities) {
+        const plan = pmPlanByLineId.get(lineId);
+        if (!plan) return prErr(req, ctx, "PR19_PM_LINE_NOT_FOUND", 404, "A PM quantity was supplied for a line that does not belong to this Packing PO.");
+        if (plan.is_discrete && Math.abs(qty - Math.round(qty)) > 1e-6) {
+          return prErr(req, ctx, "PR19_PM_QTY_NOT_WHOLE", 422, "Packaging that is counted (barrels, labels...) can only be returned in whole numbers.");
+        }
+        if (qty > plan.max_qty + 1e-6) {
+          return prErr(req, ctx, "PR19_PM_QTY_EXCEEDS_RETURNABLE", 422, `Only ${plan.max_qty} of this packaging line can still be returned (the rest was already returned or was never used).`);
+        }
+      }
 
       for (const pmLine of (pmLines ?? []) as JsonRecord[]) {
         const pmLineId = String(pmLine.id);
-        const baseQty = pmBaseQtyMap.get(pmLineId) ?? 0;
-        const proportionalQty = baseQty * ratioPm;
+        const proportionalQty = pmLineQuantities.has(pmLineId)
+          ? (pmLineQuantities.get(pmLineId) as number)
+          : (pmPlanByLineId.get(pmLineId)?.default_qty ?? 0);
         const effectiveMaterialId = toTrimmedString(pmLine.actual_material_id) || String(pmLine.material_id ?? "");
         const included = !pmLineExclusions.has(pmLineId);
 
@@ -1508,7 +1741,7 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
     const code = err instanceof Error ? err.message : "PR19_CREATE_FAILED";
     return prErr(req, ctx, code,
       code === "PR19_INVALID" ? 400
-        : (code === "PR19_REVERSE_QTY_EXCEEDS_AVAILABLE" || code === "PR19_SALVAGE_BATCH_INVALID") ? 422
+        : (code === "PR19_REVERSE_QTY_EXCEEDS_AVAILABLE" || code === "PR19_SALVAGE_BATCH_INVALID" || code.startsWith("PR19_PM_QTY")) ? 422
         : code.endsWith("_NOT_FOUND") ? 404
         : 500,
       "Partial batch reversal failed");

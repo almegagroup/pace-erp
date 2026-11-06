@@ -1,82 +1,34 @@
-import { useEffect, useMemo, useState } from "react";
+/*
+ * File-Path: frontend/src/hooks/useErpVisibleColumns.js
+ * Purpose: Column picker state for list pages. Now backed by the common column-layout system
+ *          (shared/columnLayouts): hidden columns + order, up to 3 named layouts per user per page, a default layout,
+ *          Save Changes / Save As / Rename / Delete. The old per-browser localStorage choice is gone -- a user's saved
+ *          layouts follow them across browsers.
+ *          `storageKey` (kept for existing callers) doubles as the page's layout code; pass `layoutCode` to override.
+ *          Return shape is unchanged (visibleColumns, visibleColumnKeys, toggleColumn, resetColumns) plus `drawerProps`:
+ *          spread it on <ErpColumnVisibilityDrawer/> to get the layout controls.
+ * Authority: Frontend
+ */
+import { useCallback, useMemo } from "react";
+import { pushToast } from "../store/uiToast.js";
+import { layoutDrawerProps, useColumnLayouts } from "../shared/columnLayouts/useColumnLayouts.js";
 
-function loadVisibleColumnKeys(storageKey, columnDefs, defaultColumnKeys) {
-  if (typeof window === "undefined") {
-    return [...defaultColumnKeys];
-  }
+const toLayoutCode = (value) => String(value ?? "").toUpperCase().replace(/[^A-Z0-9_.-]/g, "_").slice(0, 60);
 
-  try {
-    const raw = window.localStorage.getItem(storageKey);
-
-    if (!raw) {
-      return [...defaultColumnKeys];
-    }
-
-    const parsed = JSON.parse(raw);
-
-    if (!Array.isArray(parsed)) {
-      return [...defaultColumnKeys];
-    }
-
-    const allowedKeys = parsed.filter((key) =>
-      columnDefs.some((column) => column.key === key)
-    );
-
-    return allowedKeys.length > 0 ? allowedKeys : [...defaultColumnKeys];
-  } catch {
-    return [...defaultColumnKeys];
-  }
-}
-
-export function useErpVisibleColumns({
-  storageKey,
-  columnDefs,
-  defaultColumnKeys,
-}) {
-  const [visibleColumnKeys, setVisibleColumnKeys] = useState(() =>
-    loadVisibleColumnKeys(storageKey, columnDefs, defaultColumnKeys)
+export function useErpVisibleColumns({ storageKey, layoutCode, columnDefs, defaultColumnKeys }) {
+  const pickerColumns = useMemo(
+    () => columnDefs.map((column) => ({ ...column, defaultHidden: !defaultColumnKeys.includes(column.key) })),
+    [columnDefs, defaultColumnKeys],
   );
-
-  const visibleColumns = useMemo(
-    () =>
-      visibleColumnKeys
-        .map((key) => columnDefs.find((column) => column.key === key) ?? null)
-        .filter(Boolean),
-    [columnDefs, visibleColumnKeys]
-  );
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    window.localStorage.setItem(storageKey, JSON.stringify(visibleColumnKeys));
-  }, [storageKey, visibleColumnKeys]);
-
-  function toggleColumn(columnKey) {
-    setVisibleColumnKeys((current) => {
-      if (current.includes(columnKey)) {
-        if (current.length === 1) {
-          return current;
-        }
-
-        return current.filter((key) => key !== columnKey);
-      }
-
-      return columnDefs
-        .map((column) => column.key)
-        .filter((key) => current.includes(key) || key === columnKey);
-    });
-  }
-
-  function resetColumns() {
-    setVisibleColumnKeys([...defaultColumnKeys]);
-  }
+  const notify = useCallback((message, tone) => pushToast({ message, tone }), []);
+  const layout = useColumnLayouts(toLayoutCode(layoutCode ?? storageKey), pickerColumns, notify);
 
   return {
-    visibleColumns,
-    visibleColumnKeys,
-    toggleColumn,
-    resetColumns,
+    visibleColumns: layout.columns,
+    visibleColumnKeys: layout.visibleColumnKeys,
+    toggleColumn: layout.toggleColumn,
+    resetColumns: layout.resetColumns,
+    layout,
+    drawerProps: layoutDrawerProps(layout),
   };
 }

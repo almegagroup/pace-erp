@@ -17,6 +17,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ModalBase from "../../../../components/layer/ModalBase.jsx";
+import GstInclusiveBackfillModal from "./GstInclusiveBackfillModal.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
@@ -130,9 +131,15 @@ function toISODate(ddmmyyyy) {
 // formula grn.handlers.ts's create-time calc already uses -- positive means
 // the invoice claimed more than what was actually received (shortage),
 // negative means more was received than invoiced (excess).
-function formatQtyVarianceNote(grn) {
+function formatQtyVarianceNote(grn, invoiceQtyOverride) {
   if (!grn) return "";
-  const discrepancy = grn.discrepancy_qty != null ? Number(grn.discrepancy_qty) : null;
+  // Invoice Qty is editable in the drawer, so derive the variance live from
+  // the draft value (same formula: invoice - received) instead of the stale
+  // stored discrepancy_qty.
+  const overrideNum = invoiceQtyOverride !== "" && invoiceQtyOverride != null ? Number(invoiceQtyOverride) : null;
+  const discrepancy = overrideNum != null && !Number.isNaN(overrideNum) && grn.received_qty != null
+    ? Number((overrideNum - Number(grn.received_qty)).toFixed(6))
+    : grn.discrepancy_qty != null ? Number(grn.discrepancy_qty) : null;
   if (discrepancy == null || Number.isNaN(discrepancy) || discrepancy === 0) return "None";
   const magnitude = formatNumberOrBlank(Math.abs(discrepancy));
   return discrepancy > 0 ? `Shortage ${magnitude}` : `Excess ${magnitude}`;
@@ -176,26 +183,39 @@ function deriveDefaultsForCostType(costType, currentPartyType, defaultChaId) {
 // per_pack_qty conversion) so the live preview and the real save always
 // agree -- computed fresh from the CURRENT in-memory costLines/
 // deductionLines/draft on every relevant change, not from the server.
+// Foreign-currency PO (USD): PO/invoice rates are stored in the PO currency.
+// The user never sees them in USD -- they enter the BOE exchange rate
+// (INR per 1 unit of PO currency) and every rate/cost here is INR.
+function grnFxRate(grn, draft) {
+  const currency = String(grn?.po_currency_code ?? "INR").toUpperCase();
+  if (currency === "INR") return 1;
+  const entered = draft?.exchange_rate !== "" && draft?.exchange_rate != null ? Number(draft.exchange_rate) : 0;
+  return Number.isFinite(entered) && entered > 0 ? entered : 0;
+}
+
 function computeLivePreview(grn, draft, costLines, deductionLines) {
   if (!grn || !draft) return null;
+  const fxRate = grnFxRate(grn, draft);
   // Considered Qty (business owner, 2026-08-26) drives Payable + Landed
   // Cost/unit throughout -- never received_qty. Falls back to the fetched
   // grn.considered_qty, then Invoice Qty, matching the "always prefilled"
   // rule, if the draft field is somehow blank.
   const consideredQty = draft.considered_qty !== "" && draft.considered_qty != null
     ? Number(draft.considered_qty)
-    : Number(grn.considered_qty ?? grn.ge_qty ?? grn.received_qty ?? 0);
+    : Number(grn.considered_qty ?? draft.invoice_qty ?? grn.ge_qty ?? grn.received_qty ?? 0);
   const perPackQty = grn.per_pack_qty != null ? Number(grn.per_pack_qty) : null;
   const hasPackConversion = perPackQty != null && perPackQty > 0;
+  // draft.confirmed_rate is already INR (what the user types); the stored
+  // fallbacks are in the PO currency and get converted with the BOE rate.
   const effectiveRate = draft.confirmed_rate !== "" && draft.confirmed_rate != null
     ? Number(draft.confirmed_rate)
-    : grn.confirmed_rate != null
+    : (grn.confirmed_rate != null
       ? Number(grn.confirmed_rate)
       : grn.rate_confirmed === true && grn.invoice_rate != null
         ? Number(grn.invoice_rate)
         : grn.grn_rate != null
         ? Number(grn.grn_rate)
-        : 0;
+        : 0) * fxRate;
   const materialGstPct = draft.gst_pct !== "" && draft.gst_pct != null ? Number(draft.gst_pct) : (grn.gst_pct != null ? Number(grn.gst_pct) : 0);
   const purchaseCost = effectiveRate * consideredQty;
   const materialGstAmount = purchaseCost * materialGstPct / 100;
@@ -537,6 +557,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   const [rateStatus, setRateStatus] = useState("");
   // A SPLIT source GRN repeats the same qty and landed cost as its invoice GRNs, so it is hidden by default (totals and Excel stay single).
   const [showSplitSources, setShowSplitSources] = useState(false);
+  const [showGstBackfill, setShowGstBackfill] = useState(false);
   const [selectedGrnId, setSelectedGrnId] = useState(initialGrnId);
   const [drawerOpen, setDrawerOpen] = useState(Boolean(initialGrnId));
   const [draft, setDraft] = useState(null);
@@ -635,6 +656,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   const columns = useMemo(() => buildColumns(components), [components]);
 
   const [exporting, setExporting] = useState(false);
+  // Rows the grid shows after its own header (Excel-style) filters -- Export Excel uses exactly these.
+  const [shownRows, setShownRows] = useState(null);
   async function handleExportExcel() {
     setExporting(true);
     try {
@@ -646,7 +669,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         fileName: `${readOnly ? "ac03_landed_costs" : "ac01_grn_landed_cost"}_${dateFrom || "from"}_${dateTo || "to"}.xlsx`,
         sheetName: readOnly ? "AC03 Landed Costs" : "AC01 GRN Landed Cost",
         columns,
-        rows,
+        rows: shownRows ?? rows,
         getCellValue: (row, column) =>
           typeof column.excelValue === "function" ? column.excelValue(row)
             : typeof column.copyValue === "function" ? column.copyValue(row) : (row?.[column.key] ?? ""),
@@ -689,10 +712,15 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
     setDraft({
       invoice_number: grn.invoice_number ?? "",
       invoice_date: toDDMMYYYY(grn.invoice_date),
-      confirmed_rate: grn.confirmed_rate ?? "",
+      // Shown/entered in INR; converted back to the PO currency on save.
+      confirmed_rate: grn.confirmed_rate != null
+        ? Number((Number(grn.confirmed_rate) * (String(grn.po_currency_code ?? "INR").toUpperCase() === "INR" ? 1 : Number(grn.exchange_rate ?? 0))).toFixed(6)) || ""
+        : "",
+      exchange_rate: grn.exchange_rate ?? grn.boe_exchange_rate ?? "",
       // Always prefilled from Invoice Qty if considered_qty was somehow never
       // set (pre-backfill edge case) -- matches the "always prefilled" rule.
       considered_qty: grn.considered_qty ?? grn.ge_qty ?? grn.received_qty ?? "",
+      invoice_qty: grn.ge_qty ?? grn.received_qty ?? "",
       revised_payment_date: toDDMMYYYY(grn.revised_payment_date),
       gst_pct: grn.gst_pct ?? "",
       gst_correction_reason: "",
@@ -770,6 +798,15 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
       setError("GST % must be between 0 and 100.");
       return;
     }
+    if (draft.invoice_qty !== "" && (!Number.isFinite(Number(draft.invoice_qty)) || Number(draft.invoice_qty) <= 0)) {
+      setError("Invoice Qty must be greater than 0.");
+      return;
+    }
+    const fxRateForSave = grnFxRate(grnDetailQuery.data, draft);
+    if (String(grnDetailQuery.data?.po_currency_code ?? "INR").toUpperCase() !== "INR" && !(fxRateForSave > 0)) {
+      setError(`Enter the BOE exchange rate (INR per ${grnDetailQuery.data?.po_currency_code}) before saving.`);
+      return;
+    }
     const storedGstPct = grnDetailQuery.data?.gst_pct != null ? Number(grnDetailQuery.data.gst_pct) : null;
     const gstPctChanged = enteredGstPct != null
       && (storedGstPct == null || Math.abs(enteredGstPct - storedGstPct) > 0.000001);
@@ -786,13 +823,15 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
     setError("");
     try {
       await saveAC01GRNCost(selectedGrnId, {
-        confirmed_rate: draft.confirmed_rate === "" ? null : Number(draft.confirmed_rate),
+        confirmed_rate: draft.confirmed_rate === "" ? null : Number(draft.confirmed_rate) / (fxRateForSave || 1),
+        exchange_rate: fxRateForSave > 0 && String(grnDetailQuery.data?.po_currency_code ?? "INR").toUpperCase() !== "INR" ? fxRateForSave : null,
         last_mile_transporter_id: draft.last_mile_transporter_id || null,
         invoice_number: draft.invoice_number || null,
         invoice_date: draft.invoice_date ? toISODate(draft.invoice_date) : null,
         gst_pct: enteredGstPct,
         gst_correction_reason: draft.gst_correction_reason?.trim() || null,
         considered_qty: draft.considered_qty === "" ? null : Number(draft.considered_qty),
+        invoice_qty: draft.invoice_qty === "" ? null : Number(draft.invoice_qty),
         invoice_verified: invoiceVerified,
         revised_payment_date: draft.revised_payment_date ? toISODate(draft.revised_payment_date) : null,
         clear_revised_payment_date: !draft.revised_payment_date,
@@ -897,6 +936,10 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   // Recomputed on every keystroke/selection change -- see computeLivePreview's
   // own comment for why this exists (was previously showing stale save-time
   // numbers, defeating the point of a preview-before-save drawer).
+  const isForeignCurrencyGrn = String(grnDetailQuery.data?.po_currency_code ?? "INR").toUpperCase() !== "INR";
+  const grnFxNow = grnFxRate(grnDetailQuery.data, draft);
+  // PO / invoice rates are stored in the PO currency; the user only ever sees INR.
+  const inrRate = (value) => (value == null || value === "" ? null : Number((Number(value) * grnFxNow).toFixed(6)));
   const livePreview = useMemo(
     () => computeLivePreview(grnDetailQuery.data, draft, costLines, deductionLines),
     [grnDetailQuery.data, draft, costLines, deductionLines],
@@ -920,6 +963,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         title={readOnly ? "AC03 · Landed Costs (View)" : "AC01 · Invoice Verifications"}
         notices={error ? [{ key: "ac01-error", tone: "error", message: error }] : []}
         actions={[
+          ...(!readOnly ? [{ key: "gst-inclusive-backfill", label: "GRN Stock-value Correction", onClick: () => setShowGstBackfill(true) }] : []),
           ...(!readOnly ? [{
             key: "bulk-component-map",
             label: "Bulk Component Map",
@@ -932,7 +976,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
             key: "export",
             label: exporting ? "Exporting..." : "Export Excel",
             onClick: () => void handleExportExcel(),
-            disabled: exporting || rows.length === 0,
+            disabled: exporting || (shownRows ?? rows).length === 0,
           },
         ]}
         filterSection={{
@@ -995,6 +1039,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
               onRowActivate={openDrawer}
               rangeSelect
               virtualize
+              columnFilter
+              onFilteredRowsChange={setShownRows}
               emptyMessage={listQuery.isLoading ? "Loading GRNs..." : "No GRNs matched the current filter."}
               getRowProps={(row) => (
                 row.is_editable_for_viewer === false
@@ -1099,14 +1145,30 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
 
             <DrawerSection eyebrow="Quantity" title="Invoice qty, GRN qty and Considered Qty">
               <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}>
-                <DrawerField label="Invoice Qty (from GE)">
-                  <input disabled value={formatNumberOrBlank(grnDetailQuery.data?.ge_qty ?? grnDetailQuery.data?.received_qty)} className={inputCls} />
+                <DrawerField label="Invoice Qty (from GE, editable)">
+                  <input
+                    disabled={effectiveReadOnly}
+                    value={draft.invoice_qty}
+                    onChange={(event) => {
+                      const next = event.target.value;
+                      // Considered Qty is "always prefilled from Invoice Qty":
+                      // if it was still tracking the old Invoice Qty (user never
+                      // overrode it), keep it in sync so Payable + Landed Cost
+                      // recalculate automatically. A deliberately different
+                      // Considered Qty is left alone.
+                      setDraft((current) => {
+                        const tracking = String(current.considered_qty ?? "") === String(current.invoice_qty ?? "");
+                        return { ...current, invoice_qty: next, considered_qty: tracking ? next : current.considered_qty };
+                      });
+                    }}
+                    className={inputCls}
+                  />
                 </DrawerField>
                 <DrawerField label="GRN Qty (received)">
                   <input disabled value={formatNumberOrBlank(grnDetailQuery.data?.received_qty)} className={inputCls} />
                 </DrawerField>
                 <DrawerField label="Shortage / Excess">
-                  <input disabled value={formatQtyVarianceNote(grnDetailQuery.data)} className={inputCls} />
+                  <input disabled value={formatQtyVarianceNote(grnDetailQuery.data, draft.invoice_qty)} className={inputCls} />
                 </DrawerField>
                 <DrawerField label="Considered Qty (drives Payable + Landed Cost)">
                   <input
@@ -1121,13 +1183,25 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
 
             <DrawerSection eyebrow="Rate and GST confirmation" title="PO rate, invoice rate, confirmed rate and GST correction">
               <div className="grid gap-2" style={{ gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))" }}>
-                <DrawerField label="PO rate (reference)">
-                  <input disabled value={formatNumberOrBlank(grnDetailQuery.data?.po_rate)} className={inputCls} />
+                {isForeignCurrencyGrn ? (
+                  <DrawerField label={`BOE exchange rate (INR per ${grnDetailQuery.data?.po_currency_code}) — required`}>
+                    <input
+                      type="number" min="0" step="0.0001"
+                      disabled={effectiveReadOnly}
+                      value={draft.exchange_rate}
+                      onChange={(event) => setDraft((current) => ({ ...current, exchange_rate: event.target.value }))}
+                      placeholder="Exchange rate on BOE date"
+                      className={inputCls}
+                    />
+                  </DrawerField>
+                ) : null}
+                <DrawerField label={isForeignCurrencyGrn ? "PO rate (reference, INR)" : "PO rate (reference)"}>
+                  <input disabled value={formatNumberOrBlank(inrRate(grnDetailQuery.data?.po_rate))} className={inputCls} />
                 </DrawerField>
-                <DrawerField label="Invoice rate (noted at GRN)">
-                  <input disabled value={formatNumberOrBlank(grnDetailQuery.data?.invoice_rate)} className={inputCls} />
+                <DrawerField label={isForeignCurrencyGrn ? "Invoice rate (noted at GRN, INR)" : "Invoice rate (noted at GRN)"}>
+                  <input disabled value={formatNumberOrBlank(inrRate(grnDetailQuery.data?.invoice_rate))} className={inputCls} />
                 </DrawerField>
-                <DrawerField label="Confirmed rate">
+                <DrawerField label={isForeignCurrencyGrn ? "Confirmed rate (INR)" : "Confirmed rate"}>
                   <input disabled={effectiveReadOnly} value={draft.confirmed_rate} onChange={(event) => setDraft((current) => ({ ...current, confirmed_rate: event.target.value }))} placeholder="Enter confirmed rate" className={inputCls} />
                 </DrawerField>
                 <DrawerField label="Confirmed GST %">
@@ -1330,7 +1404,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                           <option value="PER_UOM">Per UoM</option>
                         </select>
                       ) : <div />}
-                      {!isDuty ? (
+                      {true ? (
                         <select
                           disabled={effectiveReadOnly}
                           value={line.has_gst ? "YES" : "NO"}
@@ -1341,7 +1415,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                           <option value="YES">Has GST? Yes</option>
                         </select>
                       ) : <div />}
-                      {!isDuty && line.has_gst ? (
+                      {line.has_gst ? (
                         <select
                           disabled={effectiveReadOnly}
                           value={line.gst_treatment}
@@ -1352,7 +1426,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
                           <option value="INCLUSIVE">Inclusive</option>
                         </select>
                       ) : <div />}
-                      {!isDuty && line.has_gst ? (
+                      {line.has_gst ? (
                         <input
                           disabled={effectiveReadOnly}
                           value={line.gst_rate}
@@ -1573,6 +1647,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
           </div>
         )}
       </DrawerBase>
+      <GstInclusiveBackfillModal visible={showGstBackfill} onClose={() => setShowGstBackfill(false)} />
       <ModalBase
         visible={gstCorrectionReasonOpen}
         eyebrow="AC01 · GST Correction"

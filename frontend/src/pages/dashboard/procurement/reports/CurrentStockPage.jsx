@@ -11,6 +11,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
+import { layoutDrawerProps, useColumnLayouts } from "../../../../shared/columnLayouts/useColumnLayouts.js";
+import { pushToast } from "../../../../store/uiToast.js";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import MultiValueFilterField from "../../../../components/inputs/MultiValueFilterField.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
@@ -25,6 +27,8 @@ import {
   useMaterialOptionsQuery,
   useStorageLocationOptionsQuery,
 } from "../../../../hooks/queries/useOmMasterQueries.js";
+import UomModeSwitcher from "../../../../components/inputs/UomModeSwitcher.jsx";
+import { applyUomMode, availableUomModes } from "../../../../shared/uomDisplay.js";
 import { useScreenBackInterceptor } from "../../../../hooks/useScreenBackInterceptor.js";
 import { listMachines } from "../../om/omApi.js";
 import {
@@ -36,6 +40,7 @@ import {
   searchCurrentStockPackingPoNumbers,
 } from "../procurementApi.js";
 
+const STOCK_QTY_FIELDS = ["unrestricted_qty", "reserved_qty", "net_available_qty", "qi_qty", "blocked_qty", "intransit_qty"];
 const MATERIAL_TYPE_OPTIONS = ["RM", "PM", "INT", "SFG", "FG"];
 const STOCK_TYPE_OPTIONS = [
   { value: "UNRESTRICTED", label: "Unrestricted" },
@@ -536,14 +541,20 @@ export default function CurrentStockPage() {
   const [materialTypes, setMaterialTypes] = useState([...MATERIAL_TYPE_OPTIONS]);
   const [stockTypes, setStockTypes] = useState(STOCK_TYPE_OPTIONS.map((entry) => entry.value));
   const [showZero, setShowZero] = useState(false);
-  const [rows, setRows] = useState([]);
+  const [rawRows, setRawRows] = useState([]);
+  const [uomMode, setUomMode] = useState("DEFAULT");
+  // Backend sends base units + per-row unit options; the switch only re-derives the display.
+  const rows = useMemo(
+    () => rawRows.map((row) => applyUomMode(row, uomMode, { qtyFields: STOCK_QTY_FIELDS })),
+    [rawRows, uomMode],
+  );
+  const availableUomKinds = useMemo(() => availableUomModes(rawRows), [rawRows]);
   const [planningAlertsOnly, setPlanningAlertsOnly] = useState(false);
   const [allColumnSearch, setAllColumnSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [searched, setSearched] = useState(false);
   const [error, setError] = useState("");
   const [columnsOpen, setColumnsOpen] = useState(false);
-  const [visibleColumns, setVisibleColumns] = useState(DEFAULT_VISIBLE_COLUMNS);
   const [exporting, setExporting] = useState(false);
   const [submittedParams, setSubmittedParams] = useState(null);
   const [machineWiseOpen, setMachineWiseOpen] = useState(false);
@@ -591,10 +602,14 @@ export default function CurrentStockPage() {
     [planningAlertsOnly],
   );
 
-  const gridColumns = useMemo(
-    () => columnDefinitions.filter((column) => visibleColumns.includes(column.key)),
-    [columnDefinitions, visibleColumns],
+  // Common column picker: a column not in DEFAULT_VISIBLE_COLUMNS starts hidden; the user's saved layouts (max 3) override.
+  const pickerColumns = useMemo(
+    () => columnDefinitions.map((column) => ({ ...column, defaultHidden: !DEFAULT_VISIBLE_COLUMNS.includes(column.key) })),
+    [columnDefinitions],
   );
+  const layoutMessage = useCallback((message, tone) => pushToast({ message, tone }), []);
+  const layout = useColumnLayouts("IN03", pickerColumns, layoutMessage);
+  const gridColumns = layout.columns;
 
   const planningAlertRowCount = useMemo(
     () => rows.filter(hasPlanningAlert).length,
@@ -651,11 +666,11 @@ export default function CurrentStockPage() {
     };
     try {
       const response = await getCurrentStock(params);
-      setRows(Array.isArray(response?.data) ? response.data : []);
+      setRawRows(Array.isArray(response?.data) ? response.data : []);
       setSubmittedParams(params);
       setPage(2);
     } catch (searchError) {
-      setRows([]);
+      setRawRows([]);
       setError(searchError instanceof Error ? searchError.message : "CURRENT_STOCK_FETCH_FAILED");
     } finally {
       setLoading(false);
@@ -923,6 +938,9 @@ export default function CurrentStockPage() {
               </span>
             </div>
           ) : null}
+          {searched && availableUomKinds.length > 1 ? (
+            <UomModeSwitcher modes={availableUomKinds} value={uomMode} onChange={setUomMode} />
+          ) : null}
           {!searched ? (
             <div className="border border-dashed border-slate-300 bg-slate-50 px-4 py-6 text-sm text-slate-500">
               Set filters and click Search to view current stock.
@@ -951,16 +969,7 @@ export default function CurrentStockPage() {
 
       <ErpColumnVisibilityDrawer
         visible={columnsOpen}
-        columns={columnDefinitions}
-        visibleColumnKeys={visibleColumns}
-        onToggleColumn={(columnKey) =>
-          setVisibleColumns((current) =>
-            current.includes(columnKey)
-              ? current.filter((entry) => entry !== columnKey)
-              : [...current, columnKey],
-          )
-        }
-        onResetColumns={() => setVisibleColumns(DEFAULT_VISIBLE_COLUMNS)}
+        {...layoutDrawerProps(layout)}
         onClose={() => setColumnsOpen(false)}
       />
 

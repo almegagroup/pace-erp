@@ -999,7 +999,17 @@ export async function createAndPostGRNFromLineHandler(
       return procurementErrorResponse(req, ctx, "GRN_GST_REQUIRED", 400,
         "GST % from the invoice is required. Enter 0 when the invoice is zero-rated.");
     }
-    const effectiveGrnRate = rateConfirmed ? (poRate ?? 0) : 0;
+    // GST basis (business owner 2026-11-06): when the PO rate is GST-INCLUSIVE it already carries the invoice GST %,
+    // so the rate that values stock / feeds AC01 (taxable value, landed cost, payable = net x (1 + GST)) is the NET of
+    // GST -- GST is creditable (ITC), not a cost, and adding it on top again overstated taxable value, GST and
+    // payable by the GST % (e.g. 25 MT x 6000 incl. 18% showed 1,77,000 instead of 1,50,000). `po_rate` keeps the
+    // PO's own (gross) figure. Without a GST % at post time (invoice-later Bulk receipt) the rate cannot be netted
+    // here and stays as quoted.
+    const poGstTerms = toUpperTrimmedString(poData?.gst_terms);
+    const grossGrnRate = rateConfirmed ? (poRate ?? 0) : 0;
+    const effectiveGrnRate = poGstTerms === "INCLUSIVE" && gstPct !== null && gstPct > 0
+      ? Number((grossGrnRate / (1 + gstPct / 100)).toFixed(6))
+      : grossGrnRate;
     // grn_rate is quoted per the PO/transaction UOM (e.g. per PKT) — stock is
     // valued per base UOM (e.g. per NOS), so divide by the same pack factor
     // used to convert stockQty above, or the value posted to stock is wrong
@@ -1085,6 +1095,8 @@ export async function createAndPostGRNFromLineHandler(
         // from Invoice Qty (ge_qty) at creation, user-editable in AC01's drawer
         // thereafter. Drives Payable + Landed Cost/unit, never received_qty.
         considered_qty: geQty,
+        // Rates on this GRN are in the PO/STO line's currency; AC01 converts to INR with the BOE exchange rate.
+        po_currency_code: toUpperTrimmedString(poLineData?.currency_code ?? stoLineData?.currency_code) || "INR",
         uom_code: geLine.uom_code ?? material.base_uom_code,
         discrepancy_qty: discrepancyQty,
         discrepancy_remarks: discrepancyRemarks,
@@ -2074,8 +2086,17 @@ export async function mapGrnInvoiceHandler(
         results.push({ grn_id: grn.id, ok: true, recalculated: false });
         continue;
       }
+      // The invoice rate is per the GRN's transaction UoM (e.g. per MT) while the receipt leg lives in the base
+      // UoM (KG): passing 15825 per MT as "per KG" valued the stock 1000x too high (found live 2026-11-02, GRN
+      // Invoice Mapping on a White Cement JK MT receipt). Divide by the base quantity per transaction unit,
+      // taken from the leg itself so it matches exactly what the receipt posted (1 when GRN UoM = base UoM).
+      const { data: receiptLeg } = await serviceRoleClient.schema("erp_inventory").from("stock_ledger")
+        .select("quantity").eq("id", ledgerId).maybeSingle();
+      const receivedQty = Number(grn.received_qty ?? 0);
+      const legQty = Number(receiptLeg?.quantity ?? 0);
+      const baseUnitFactor = receivedQty > 0 && legQty > 0 ? legQty / receivedQty : 1;
       const cascadeResults = await cascadeRecalculate(
-        [{ ledgerId, newRate: invoiceRate }],
+        [{ ledgerId, newRate: invoiceRate / baseUnitFactor }],
         ctx.auth_user_id,
         `GRN Invoice Mapping — ${invoiceNumber}`,
       );

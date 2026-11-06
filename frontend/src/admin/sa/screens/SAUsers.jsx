@@ -161,8 +161,7 @@ export default function SAUsers() {
   const filterRefs = useRef([]);
   const rowActionRefs = useRef([]);
   const searchInputRef = useRef(null);
-  const { visibleColumns, visibleColumnKeys, toggleColumn, resetColumns } =
-    useErpVisibleColumns({
+  const { visibleColumns, visibleColumnKeys, drawerProps } = useErpVisibleColumns({
       storageKey: "erp.sa.users.columns",
       columnDefs: USER_COLUMN_DEFS,
       defaultColumnKeys: DEFAULT_VISIBLE_USER_COLUMNS,
@@ -780,10 +779,7 @@ export default function SAUsers() {
       <ErpColumnVisibilityDrawer
         visible={showColumnDrawer}
         title="User Directory Columns"
-        columns={USER_COLUMN_DEFS}
-        visibleColumnKeys={visibleColumnKeys}
-        onToggleColumn={toggleColumn}
-        onResetColumns={resetColumns}
+        {...drawerProps}
         onClose={() => setShowColumnDrawer(false)}
       />
     </>

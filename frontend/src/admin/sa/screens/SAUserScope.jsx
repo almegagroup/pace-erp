@@ -334,7 +334,7 @@ export default function SAUserScope() {
   const [workContextSearch, setWorkContextSearch] = useState("");
   const [projectSearch, setProjectSearch] = useState("");
   const [departmentSearch, setDepartmentSearch] = useState("");
-  const { visibleColumnKeys, toggleColumn, resetColumns } = useErpVisibleColumns({
+  const { visibleColumnKeys, drawerProps } = useErpVisibleColumns({
     storageKey: "erp.sa.userScope.previewColumns",
     columnDefs: USER_SCOPE_PREVIEW_COLUMN_DEFS,
     defaultColumnKeys: DEFAULT_USER_SCOPE_PREVIEW_COLUMNS,
@@ -1727,10 +1727,7 @@ export default function SAUserScope() {
       <ErpColumnVisibilityDrawer
         visible={showColumnDrawer}
         title="User Scope Preview Columns"
-        columns={USER_SCOPE_PREVIEW_COLUMN_DEFS}
-        visibleColumnKeys={visibleColumnKeys}
-        onToggleColumn={toggleColumn}
-        onResetColumns={resetColumns}
+        {...drawerProps}
         onClose={() => setShowColumnDrawer(false)}
       />
     </ErpScreenScaffold>

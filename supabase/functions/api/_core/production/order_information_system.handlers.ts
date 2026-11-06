@@ -14,6 +14,7 @@ import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
 import { assertProdReadRole, toTrimmedString, toUpperTrimmedString } from "./production.shared.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
+import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
 
 type JsonRecord = Record<string, unknown>;
 
@@ -88,51 +89,69 @@ async function resolvePostingScopedOrderIds(
   dateTo: string,
 ): Promise<PostingScopedOrderIds> {
   const pageSize = 1000;
-  const ledgerKeys: JsonRecord[] = [];
-  for (let offset = 0; ; offset += pageSize) {
-    let query = serviceRoleClient.schema("erp_inventory").from("stock_ledger")
-      .select("stock_document_id, batch_number, company_id")
-      .gte("posting_date", dateFrom)
-      .lte("posting_date", dateTo)
-      // posting_date first lets Postgres walk idx_sl_posting_date with a small
-      // incremental sort; ordering by id alone scanned the whole pkey per page
-      // (prod: 2.5s -> 34ms, 21k -> 1.4k buffers at offset 20000).
-      .order("posting_date", { ascending: true })
-      .order("id", { ascending: true })
-      .range(offset, offset + pageSize - 1);
-    if (companyIds) query = query.in("company_id", companyIds);
-    const { data, error } = await query;
-    if (error) throw new Error("PROD_OIS_LEDGER_FETCH_FAILED");
-    const page = (data ?? []) as JsonRecord[];
-    ledgerKeys.push(...page);
-    if (page.length < pageSize) break;
-  }
+  // Previously this paged through EVERY stock_ledger row of the period (all
+  // companies, every RM/PM line) just to read stock_document_id / batch_number,
+  // then re-resolved those thousands of document ids. Now: (a) only the
+  // PROC_PO / PACK_PO-tagged stock_document headers of the period (one row per
+  // posting event, reference id already on the row), and (b) only the ledger
+  // rows that actually carry a batch_number (the PID/other-tag branch below).
+  // Both scans run in parallel.
+  const fetchPaged = async (
+    build: (offset: number) => PromiseLike<{ data: unknown; error: unknown }>,
+  ): Promise<JsonRecord[]> => {
+    const rows: JsonRecord[] = [];
+    for (let offset = 0; ; offset += pageSize) {
+      const { data, error } = await build(offset);
+      if (error) throw new Error("PROD_OIS_LEDGER_FETCH_FAILED");
+      const page = (data ?? []) as JsonRecord[];
+      rows.push(...page);
+      if (page.length < pageSize) break;
+    }
+    return rows;
+  };
 
-  const stockDocumentIds = [...new Set(
-    ledgerKeys.map((row) => toTrimmedString(row.stock_document_id)).filter(Boolean),
-  )];
+  const [documents, batchLedgerKeys] = await Promise.all([
+    fetchPaged((offset) => {
+      let query = serviceRoleClient.schema("erp_inventory").from("stock_document")
+        .select("reference_document_type, reference_document_id, company_id")
+        .in("reference_document_type", ["PROC_PO", "PACK_PO"])
+        .gte("posting_date", dateFrom)
+        .lte("posting_date", dateTo)
+        .order("posting_date", { ascending: true })
+        .order("id", { ascending: true })
+        .range(offset, offset + pageSize - 1);
+      if (companyIds) query = query.in("company_id", companyIds);
+      return query;
+    }),
+    fetchPaged((offset) => {
+      let query = serviceRoleClient.schema("erp_inventory").from("stock_ledger")
+        .select("batch_number, company_id")
+        .not("batch_number", "is", null)
+        .gte("posting_date", dateFrom)
+        .lte("posting_date", dateTo)
+        .order("posting_date", { ascending: true })
+        .order("id", { ascending: true })
+        .range(offset, offset + pageSize - 1);
+      if (companyIds) query = query.in("company_id", companyIds);
+      return query;
+    }),
+  ]);
+
   const batchNumbers = [...new Set(
-    ledgerKeys.map((row) => toTrimmedString(row.batch_number)).filter(Boolean),
+    batchLedgerKeys.map((row) => toTrimmedString(row.batch_number)).filter(Boolean),
   )];
   const ledgerCompanyIds = [...new Set(
-    ledgerKeys.map((row) => toTrimmedString(row.company_id)).filter(Boolean),
+    [...documents, ...batchLedgerKeys].map((row) => toTrimmedString(row.company_id)).filter(Boolean),
   )];
   const effectiveCompanyIds = companyIds ?? ledgerCompanyIds;
 
   const processOrderIds = new Set<string>();
   const packingOrderIds = new Set<string>();
-  if (stockDocumentIds.length > 0) {
-    const documents = await fetchInChunks<JsonRecord>(stockDocumentIds, (idChunk) =>
-      serviceRoleClient.schema("erp_inventory").from("stock_document")
-        .select("reference_document_type, reference_document_id")
-        .in("id", idChunk),
-    ).catch(() => { throw new Error("PROD_OIS_LOOKUP_FAILED"); });
-    for (const document of documents) {
-      const id = toTrimmedString(document.reference_document_id);
-      if (!id) continue;
-      if (toUpperTrimmedString(document.reference_document_type) === "PROC_PO") processOrderIds.add(id);
-      if (toUpperTrimmedString(document.reference_document_type) === "PACK_PO") packingOrderIds.add(id);
-    }
+  for (const document of documents) {
+    const id = toTrimmedString(document.reference_document_id);
+    if (!id) continue;
+    if (toUpperTrimmedString(document.reference_document_type) === "PROC_PO") processOrderIds.add(id);
+    if (toUpperTrimmedString(document.reference_document_type) === "PACK_PO") packingOrderIds.add(id);
   }
 
   // PID and other linked movements can be tagged to another document type but
@@ -172,6 +191,36 @@ async function resolvePostingScopedOrderIds(
   }
 
   return { processOrderIds: [...processOrderIds], packingOrderIds: [...packingOrderIds] };
+}
+
+// GET /api/production/order-information-system/stroke-options?company_id=
+// PR24's own Stroke filter list. The page used to call the Stroke Master list API for this, which needs
+// PROD_STROKE_MASTER:VIEW (a Production/QA resource) -- so every PR24 user outside those departments got a
+// 403 on page load. PR24 is open to everyone (PROD_ORDER_INFO_SYSTEM:VIEW), and the filter only needs
+// each APPROVED stroke's id and number, so it gets its own endpoint under its own resource, scoped to the
+// caller's own companies exactly like the report itself.
+export async function listOisStrokeOptionsHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
+  try {
+    assertProdReadRole(ctx);
+    const url = new URL(req.url);
+    const requestedCompanyIds = parseMultiValueParams(url, "company_ids", "company_id");
+    const allowedCompanyIds = await resolveAllowedCompanyIds(ctx);
+    const companyIds = scopeCompanyIds(allowedCompanyIds, requestedCompanyIds);
+    // A company the caller does not have (or none asked for, by SA/GA) resolves to "nothing", never "all".
+    if (!companyIds || companyIds.length === 0) return okResponse({ data: [] }, ctx.request_id, req);
+
+    const rows = await fetchAllRows<JsonRecord>((from, to) => serviceRoleClient
+      .schema("erp_production").from("stroke_master")
+      .select("id, stroke_number")
+      .eq("status", "APPROVED")
+      .in("company_id", companyIds)
+      .order("stroke_number", { ascending: true }).order("id", { ascending: true })
+      .range(from, to));
+    return okResponse({ data: rows }, ctx.request_id, req);
+  } catch (err) {
+    const code = err instanceof Error ? err.message : "PROD_OIS_STROKE_OPTIONS_FAILED";
+    return oisErr(req, ctx, code, 500, "Stroke options failed");
+  }
 }
 
 // GET /api/production/order-information-system
@@ -259,40 +308,55 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
       if (!postingScopedOrderIds?.processOrderIds.length) {
         return okResponse({ data: [], meta: { order_count: 0, movement_count: 0 } }, ctx.request_id, req);
       }
-      let pq = serviceRoleClient.schema("erp_production").from("process_order")
-        .select("id, company_id, po_number, po_type, batch_number, status, material_id, machine_id, segment_code, stroke_master_id, has_unapproved_deviation")
-        .order("created_at", { ascending: false })
-        .in("id", postingScopedOrderIds.processOrderIds)
-        .limit(MAX_ORDERS_MATCHED);
-      if (companyIds) pq = pq.in("company_id", companyIds);
-      if (orderType) pq = pq.eq("po_type", orderType);
-      if (materialId) pq = pq.eq("material_id", materialId);
-      if (batchNumber) pq = pq.eq("batch_number", batchNumber);
-      if (machineId) pq = pq.eq("machine_id", machineId);
-      if (segmentCode) pq = pq.eq("segment_code", segmentCode);
-      if (strokeMasterId) pq = pq.eq("stroke_master_id", strokeMasterId);
-      if (statuses.length > 0) pq = pq.in("status", statuses);
-      if (hasDeviationOnly) pq = pq.eq("has_unapproved_deviation", true);
-      const { data, error } = await pq;
-      if (error) throw new Error("PROD_OIS_LOOKUP_FAILED");
-      processOrders = (data ?? []) as JsonRecord[];
+      // §8E: the id list is every PO with a posting in the period -- unbounded, so it must be
+      // chunked (one giant .in() overflowed the request URL -> PROD_OIS_LOOKUP_FAILED). Pages
+      // are ordered by id (stable for .range()); newest-first + the cap are applied in memory.
+      let rows: JsonRecord[];
+      try {
+        rows = await fetchInChunks<JsonRecord>(postingScopedOrderIds.processOrderIds, (idChunk) => {
+          let pq = serviceRoleClient.schema("erp_production").from("process_order")
+            .select("id, created_at, company_id, po_number, po_type, batch_number, status, material_id, machine_id, segment_code, stroke_master_id, has_unapproved_deviation")
+            .in("id", idChunk)
+            .order("id", { ascending: true });
+          if (companyIds) pq = pq.in("company_id", companyIds);
+          if (orderType) pq = pq.eq("po_type", orderType);
+          if (materialId) pq = pq.eq("material_id", materialId);
+          if (batchNumber) pq = pq.eq("batch_number", batchNumber);
+          if (machineId) pq = pq.eq("machine_id", machineId);
+          if (segmentCode) pq = pq.eq("segment_code", segmentCode);
+          if (strokeMasterId) pq = pq.eq("stroke_master_id", strokeMasterId);
+          if (statuses.length > 0) pq = pq.in("status", statuses);
+          if (hasDeviationOnly) pq = pq.eq("has_unapproved_deviation", true);
+          return pq;
+        });
+      } catch {
+        throw new Error("PROD_OIS_LOOKUP_FAILED");
+      }
+      rows.sort((x, y) => String(y.created_at ?? "").localeCompare(String(x.created_at ?? "")));
+      processOrders = rows.slice(0, MAX_ORDERS_MATCHED);
     } else {
       if (!postingScopedOrderIds?.packingOrderIds.length) {
         return okResponse({ data: [], meta: { order_count: 0, movement_count: 0 } }, ctx.request_id, req);
       }
-      let pq = serviceRoleClient.schema("erp_production").from("packing_order")
-        .select("id, company_id, po_number, po_type, process_order_id, batch_number, status, material_id, segment_code, num_packs, fill_qty_per_pack")
-        .order("created_at", { ascending: false })
-        .in("id", postingScopedOrderIds.packingOrderIds)
-        .limit(MAX_ORDERS_MATCHED);
-      if (companyIds) pq = pq.in("company_id", companyIds);
-      if (orderType) pq = pq.eq("po_type", orderType);
-      if (materialId) pq = pq.eq("material_id", materialId);
-      if (segmentCode) pq = pq.eq("segment_code", segmentCode);
-      if (statuses.length > 0) pq = pq.in("status", statuses);
-      const { data, error } = await pq;
-      if (error) throw new Error("PROD_OIS_LOOKUP_FAILED");
-      packingOrdersDirect = (data ?? []) as JsonRecord[];
+      let rows: JsonRecord[];
+      try {
+        rows = await fetchInChunks<JsonRecord>(postingScopedOrderIds.packingOrderIds, (idChunk) => {
+          let pq = serviceRoleClient.schema("erp_production").from("packing_order")
+            .select("id, created_at, company_id, po_number, po_type, process_order_id, batch_number, status, material_id, segment_code, num_packs, fill_qty_per_pack")
+            .in("id", idChunk)
+            .order("id", { ascending: true });
+          if (companyIds) pq = pq.in("company_id", companyIds);
+          if (orderType) pq = pq.eq("po_type", orderType);
+          if (materialId) pq = pq.eq("material_id", materialId);
+          if (segmentCode) pq = pq.eq("segment_code", segmentCode);
+          if (statuses.length > 0) pq = pq.in("status", statuses);
+          return pq;
+        });
+      } catch {
+        throw new Error("PROD_OIS_LOOKUP_FAILED");
+      }
+      rows.sort((x, y) => String(y.created_at ?? "").localeCompare(String(x.created_at ?? "")));
+      packingOrdersDirect = rows.slice(0, MAX_ORDERS_MATCHED);
       const processOrderIds = [...new Set(packingOrdersDirect.map((r) => String(r.process_order_id ?? "")).filter(Boolean))];
       if (processOrderIds.length > 0) {
         const { data: parents, error: parentErr } = await serviceRoleClient
@@ -370,7 +434,10 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
             lq = (lq as unknown as { gte: (c: string, v: string) => typeof lq }).gte("posting_date", dateFrom);
             lq = (lq as unknown as { lte: (c: string, v: string) => typeof lq }).lte("posting_date", dateTo);
           }
-          return lq.order("posting_date", { ascending: true }).order("id", { ascending: true });
+          // Stable order for the .range() pages by id only: ordering by posting_date made the
+          // planner walk the (company, posting_date) index and filter ~all of a company's month
+          // instead of using the stock_document_id index. Rows are re-sorted in memory below.
+          return lq.order("id", { ascending: true });
         });
       } catch {
         throw new Error("PROD_OIS_LEDGER_FETCH_FAILED");
@@ -391,8 +458,7 @@ export async function getOrderInformationReportHandler(req: Request, ctx: ProdHa
             .select("id, stock_document_id, posting_date, company_id, storage_location_id, material_id, batch_number, movement_type_code, direction, quantity, posted_quantity, base_uom_code, value, posted_value, valuation_rate, created_at")
             .in("batch_number", batchChunk)
             .in("company_id", companyIdsInScope)
-            .order("posting_date", { ascending: true })
-            .order("id", { ascending: true });
+            .order("id", { ascending: true }); // id-only: lets the planner use idx_sl_batch (re-sorted in memory below)
           if (!bypassDateRange) {
             lq = (lq as unknown as { gte: (c: string, v: string) => typeof lq }).gte("posting_date", dateFrom);
             lq = (lq as unknown as { lte: (c: string, v: string) => typeof lq }).lte("posting_date", dateTo);
@@ -820,13 +886,23 @@ export async function getBatchCountsReportHandler(req: Request, ctx: ProdHandler
     // No batch_started_at filter here — fetched once, unrestricted by date, so the
     // SAME row set can be grouped into both the selected-range count and the
     // "Till Date" (all-time) count below without a second round trip.
-    let pq = serviceRoleClient.schema("erp_production").from("process_order")
-      .select("company_id, stroke_master_id, material_id, batch_number, batch_started_at")
-      .not("batch_number", "is", null)
-      .neq("status", "REVERSED");
-    if (companyIds) pq = pq.in("company_id", companyIds);
-    const { data, error } = await pq;
-    if (error) throw new Error("PROD_OIS_BATCH_COUNTS_FAILED");
+    // Paginated: PostgREST silently caps one response at 1000 rows, which would drop batches
+    // from both the range count and the Till Date count with no error.
+    let data: JsonRecord[];
+    try {
+      data = await fetchAllRows<JsonRecord>((from, to) => {
+        let pq = serviceRoleClient.schema("erp_production").from("process_order")
+          .select("company_id, stroke_master_id, material_id, batch_number, batch_started_at")
+          .not("batch_number", "is", null)
+          .neq("status", "REVERSED")
+          .order("id", { ascending: true })
+          .range(from, to);
+        if (companyIds) pq = pq.in("company_id", companyIds);
+        return pq;
+      });
+    } catch {
+      throw new Error("PROD_OIS_BATCH_COUNTS_FAILED");
+    }
 
     const rangeStartMs = new Date(`${dateFrom}T00:00:00Z`).getTime();
     const rangeEndExclusiveMs = new Date(toExclusive).getTime();

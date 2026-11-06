@@ -132,6 +132,8 @@ export const listOldPackingPoBatches = (p) => fetchProd("GET", "/api/production/
 // ── PR24 Order Information System (§122) ──────────────────────────────────────
 export const getOrderInformationReport = (p) => fetchProd("GET", "/api/production/order-information-system", undefined, p);
 export const getBatchCountsReport = (p) => fetchProd("GET", "/api/production/order-information-system/batch-counts", undefined, p);
+// PR24's own Stroke filter list (id + stroke_number), gated on PR24's own resource -- not Stroke Master's.
+export const listOisStrokeOptions = (p) => fetchProd("GET", "/api/production/order-information-system/stroke-options", undefined, p);
 export const getMtsProductionRegister = (p) => fetchProd("GET", "/api/production/order-information-system/mts-register", undefined, p);
 export const getMtsProductionRegisterPendingCount = (p) => fetchProd("GET", "/api/production/order-information-system/mts-register/pending-count", undefined, p);
 

@@ -13,6 +13,13 @@ import {
   previewUserHandler
 } from "../_core/auth/menu.handler.ts";
 
+import {
+  createColumnLayoutHandler,
+  deleteColumnLayoutHandler,
+  listColumnLayoutsHandler,
+  setDefaultColumnLayoutHandler,
+  updateColumnLayoutHandler,
+} from "../_core/common/column_layout.handlers.ts";
 import type { SessionResolution } from "../_pipeline/session.ts";
 import type { ContextResolution } from "../_pipeline/context.ts";
 
@@ -23,6 +30,28 @@ export async function dispatchMenuRoutes(
   session: Extract<SessionResolution, { status: "ACTIVE" }>,
   context: Extract<ContextResolution, { status: "RESOLVED" }>
 ): Promise<Response | null> {
+
+  // Common column-picker layouts (session-only personal UI preferences, see column_layout.handlers.ts).
+  {
+    const pathname = new URL(req.url).pathname;
+    if (pathname === "/api/me/column-layouts" || pathname.startsWith("/api/me/column-layouts/")) {
+      const layoutCtx = {
+        context,
+        request_id: requestId,
+        auth_user_id: session.authUserId,
+        roleCode: context.roleCode,
+      };
+      if (pathname === "/api/me/column-layouts") {
+        if (req.method === "GET") return await listColumnLayoutsHandler(req, layoutCtx);
+        if (req.method === "POST") return await createColumnLayoutHandler(req, layoutCtx);
+      } else if (/^\/api\/me\/column-layouts\/[^/]+\/set-default$/.test(pathname)) {
+        if (req.method === "POST") return await setDefaultColumnLayoutHandler(req, layoutCtx);
+      } else if (/^\/api\/me\/column-layouts\/[^/]+$/.test(pathname)) {
+        if (req.method === "PATCH") return await updateColumnLayoutHandler(req, layoutCtx);
+        if (req.method === "DELETE") return await deleteColumnLayoutHandler(req, layoutCtx);
+      }
+    }
+  }
 
   switch (routeKey) {
 

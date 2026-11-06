@@ -162,10 +162,34 @@ function addDays(input: string, days: number): string {
 // invoice rate and the confirmation flag. Prefer the explicit confirmed rate,
 // then this proven mapping value (which also repairs old mapped rows), then
 // the original GRN rate.
-function effectiveCommercialRate(grn: JsonRecord): number {
+// INR per 1 unit of the PO currency. INR POs are always 1. A foreign-currency
+// GRN with no BOE exchange rate yet has no meaningful INR rate -> 0 (callers
+// flag exchange_rate_required so the UI asks for it instead of showing USD as INR).
+function grnFxFactor(grn: JsonRecord): number {
+  const currency = toTrimmedString(grn.po_currency_code).toUpperCase() || "INR";
+  if (currency === "INR") return 1;
+  const rate = grn.exchange_rate != null ? Number(grn.exchange_rate) : 0;
+  return Number.isFinite(rate) && rate > 0 ? rate : 0;
+}
+
+// Rate in PO currency (as stored), before INR conversion.
+function effectiveCommercialRateRaw(grn: JsonRecord): number {
   if (grn.confirmed_rate != null) return Number(grn.confirmed_rate);
   if (grn.rate_confirmed === true && grn.invoice_rate != null) return Number(grn.invoice_rate);
   return grn.grn_rate != null ? Number(grn.grn_rate) : 0;
+}
+
+// INR rate -- every AC01 cost / payable / landed-cost calculation uses this.
+function effectiveCommercialRate(grn: JsonRecord): number {
+  return effectiveCommercialRateRaw(grn) * grnFxFactor(grn);
+}
+
+function toInr(grn: JsonRecord, value: unknown): number | null {
+  if (value == null) return null;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return null;
+  const factor = grnFxFactor(grn);
+  return factor > 0 ? Number((n * factor).toFixed(6)) : null;
 }
 
 function gstStateCode(gstNumber: unknown): string {
@@ -707,12 +731,27 @@ function buildListRow(
     discrepancy_qty: grn.discrepancy_qty != null ? Number(grn.discrepancy_qty) : null,
     base_uom_code: material?.base_uom_code ?? null,
     pack_uom_code: grn.uom_code ?? null,
-    purchase_rate: grn.po_rate,
-    invoice_rate: grn.invoice_rate,
-    confirmed_rate: grn.confirmed_rate,
+    // Rates shown to the user are always INR (converted with the BOE exchange
+    // rate for foreign-currency POs); the raw PO-currency values stay under *_raw.
+    po_currency_code: toTrimmedString(grn.po_currency_code).toUpperCase() || "INR",
+    exchange_rate: grn.exchange_rate != null ? Number(grn.exchange_rate) : null,
+    exchange_rate_required: grnFxFactor(grn) === 0,
+    purchase_rate: toInr(grn, grn.po_rate),
+    invoice_rate: toInr(grn, grn.invoice_rate),
+    confirmed_rate: toInr(grn, grn.confirmed_rate),
+    purchase_rate_raw: grn.po_rate,
+    invoice_rate_raw: grn.invoice_rate,
+    confirmed_rate_raw: grn.confirmed_rate,
     rate_confirmed: grn.rate_confirmed,
+    // An INCLUSIVE PO's po_rate carries GST while the invoice rate is the taxable (net) rate, so compare against the
+    // PO rate net of the GRN's GST % (to the 4 decimals the rates are stored in).
     rate_mismatch: grn.invoice_rate != null && grn.po_rate != null
-      && Number(grn.invoice_rate) !== Number(grn.po_rate) && !grn.rate_confirmed,
+      && !grn.rate_confirmed
+      && Number(Number(grn.invoice_rate).toFixed(4)) !== Number(
+        (toUpperTrimmedString(po?.gst_terms) === "INCLUSIVE" && Number(grn.gst_pct ?? 0) > 0
+          ? Number(grn.po_rate) / (1 + Number(grn.gst_pct) / 100)
+          : Number(grn.po_rate)).toFixed(4),
+      ),
     currency: "INR",
     gst_pct: grn.gst_pct,
     taxable_value: Number((effectiveRate * consideredQty).toFixed(4)),
@@ -872,7 +911,7 @@ export async function listAC01GRNsHandler(
           .select("id, company_code, gst_number").in("id", chunk)),
       fetchInChunks<JsonRecord>(poIds, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("purchase_order")
-          .select("id, payment_term_id, freight_term, company_id, crcp_enabled").in("id", chunk)),
+          .select("id, payment_term_id, freight_term, company_id, crcp_enabled, gst_terms").in("id", chunk)),
       fetchInChunks<JsonRecord>(grnIds, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("landed_cost")
           // itc_owner_company_id added for the "ITC To" column + Settlement
@@ -911,7 +950,7 @@ export async function listAC01GRNsHandler(
           // csn_display_number is not a real column -- it's only ever computed at
           // read time (csn.handlers.ts's enrichTrackerRows); buildListRow already
           // falls back to the raw csn_number below when it's absent.
-          .select("id, csn_number, lc_number, lc_opened_date").in("id", chunk)),
+          .select("id, csn_number, lc_number, lc_opened_date, boe_exchange_rate").in("id", chunk)),
       fetchInChunks<JsonRecord>(qaDocumentIds, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("inward_qa_decision_line")
           .select("qa_document_id, usage_decision, decision_qty").in("qa_document_id", chunk)),
@@ -1285,6 +1324,7 @@ export async function getAC01GRNHandler(
     // a separate round trip (CHA Master is a short list, unlike Transporter
     // Master -- no debounced search needed, a plain dropdown is proportionate).
     let defaultChaId: string | null = null;
+    let boeExchangeRate: number | null = null;
     if (grn.gate_entry_line_id) {
       const { data: gateEntryLine } = await serviceRoleClient
         .schema("erp_procurement").from("gate_entry_line")
@@ -1292,8 +1332,9 @@ export async function getAC01GRNHandler(
       if (gateEntryLine?.csn_id) {
         const { data: csn } = await serviceRoleClient
           .schema("erp_procurement").from("consignment_note")
-          .select("cha_id").eq("id", String(gateEntryLine.csn_id)).maybeSingle();
+          .select("cha_id, boe_exchange_rate").eq("id", String(gateEntryLine.csn_id)).maybeSingle();
         defaultChaId = (csn?.cha_id as string | null) ?? null;
+        boeExchangeRate = csn?.boe_exchange_rate != null ? Number(csn.boe_exchange_rate) : null;
       }
     }
     const { data: companyChaMaps } = await serviceRoleClient
@@ -1399,6 +1440,11 @@ export async function getAC01GRNHandler(
       last_mile_suggested_payable: suggestedPayables.lastMile,
       cha_suggested_payable: suggestedPayables.cha,
       default_cha_id: defaultChaId,
+      // Foreign-currency PO: rates on the raw GRN fields above are in po_currency_code.
+      // boe_exchange_rate is the CSN's BOE rate, offered as the AC01 default.
+      po_currency_code: toTrimmedString(grn.po_currency_code).toUpperCase() || "INR",
+      boe_exchange_rate: boeExchangeRate,
+      exchange_rate_required: grnFxFactor(grn as JsonRecord) === 0,
       cha_options: chaOptions,
       landed_cost: landedCost ?? null,
       cost_lines: costLinesWithChaName,
@@ -1458,6 +1504,18 @@ export async function saveAC01GRNCostHandler(
     if (suppliedGstPct != null && (!Number.isFinite(suppliedGstPct) || suppliedGstPct < 0 || suppliedGstPct > 100)) {
       return ac01ErrorResponse(req, ctx, "AC01_GST_PCT_INVALID", 422, "GST % must be between 0 and 100.");
     }
+    // Invoice Qty (goods_receipt.ge_qty) is correctable by AC01 WRITE holders;
+    // the RPC audits every change and keeps discrepancy_qty consistent.
+    const suppliedInvoiceQty = body.invoice_qty != null && body.invoice_qty !== "" ? Number(body.invoice_qty) : null;
+    if (suppliedInvoiceQty != null && (!Number.isFinite(suppliedInvoiceQty) || suppliedInvoiceQty <= 0)) {
+      return ac01ErrorResponse(req, ctx, "AC01_INVOICE_QTY_INVALID", 422, "Invoice Qty must be greater than 0.");
+    }
+    // BOE exchange rate (INR per 1 unit of the PO currency) -- mandatory to save a
+    // foreign-currency GRN; the RPC converts every rate to INR with it.
+    const suppliedExchangeRate = body.exchange_rate != null && body.exchange_rate !== "" ? Number(body.exchange_rate) : null;
+    if (suppliedExchangeRate != null && (!Number.isFinite(suppliedExchangeRate) || suppliedExchangeRate <= 0)) {
+      return ac01ErrorResponse(req, ctx, "AC01_EXCHANGE_RATE_INVALID", 422, "Exchange rate must be greater than 0.");
+    }
     // GST entered at GRN can be corrected by Accounts, but never silently.
     // The RPC repeats this guard inside its transaction and records every
     // actual change in the immutable AC01 GST correction audit table.
@@ -1495,6 +1553,8 @@ export async function saveAC01GRNCostHandler(
         p_clear_last_mile_payable_override: body.clear_last_mile_payable_override === true,
         p_clear_cha_payable_override: body.clear_cha_payable_override === true,
         p_considered_qty: body.considered_qty != null ? Number(body.considered_qty) : null,
+        p_invoice_qty: suppliedInvoiceQty,
+        p_exchange_rate: suppliedExchangeRate,
         p_invoice_verified: body.invoice_verified === true,
         // Each AC01 save is a fresh confirmation point. Unless the user ticks
         // I Verify in this same save, an earlier acknowledgement is removed.
@@ -1503,7 +1563,7 @@ export async function saveAC01GRNCostHandler(
 
     if (error) {
       const message = error.message ?? "Unable to save AC01 GRN cost.";
-      const isGstValidationError = message.includes("AC01_GST_");
+      const isGstValidationError = message.includes("AC01_GST_") || message.includes("AC01_INVOICE_QTY_") || message.includes("AC01_EXCHANGE_RATE_");
       return ac01ErrorResponse(req, ctx, isGstValidationError ? message : "AC01_SAVE_FAILED", isGstValidationError ? 422 : 500, message);
     }
 

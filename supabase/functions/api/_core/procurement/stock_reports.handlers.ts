@@ -670,6 +670,74 @@ function isZeroBalanceRow(row: CurrentStockDraftRow): boolean {
   );
 }
 
+type UomOption = { kind: "BASE" | "OUTER" | "INNER" | "PO"; uom_code: string; factor: number };
+
+// Shared by IN03 (Current Stock) and IN14 (Stock History): every figure is returned in BASE units
+// and the screen converts to the unit the user picks, so these options are all it needs.
+//   FG       -> BASE, OUTER (pack's outer UOM), INNER (primary-container unit, e.g. PKT)
+//   RM/PM/.. -> BASE, PO (purchase UOM; if none is set, the single fixed alternate UOM)
+// Only fixed (non-variable) active conversions into the base UOM qualify.
+// Default unit: FG in `outerDefaultMaterialIds` = outer; PM = PO UoM; everything else = base
+// (`legacyMtrNosDefault` keeps IN03's older "MTR material shows NOS" default for non-PM types).
+function buildMaterialUomOptions(params: {
+  materialMap: Map<string, JsonRecord>;
+  conversionRows: JsonRecord[];
+  outerUomsByPackCode: Map<string, Set<string>>;
+  outerDefaultMaterialIds: Set<string>;
+  legacyMtrNosDefault?: boolean;
+}): { optionsByMaterialId: Map<string, UomOption[]>; defaultUomByMaterialId: Map<string, string> } {
+  const { materialMap, conversionRows, outerUomsByPackCode, outerDefaultMaterialIds } = params;
+  const fixedByMaterialId = new Map<string, Array<{ uomCode: string; factor: number }>>();
+  for (const conversion of conversionRows) {
+    const materialId = toTrimmedString(conversion.material_id);
+    const material = materialMap.get(materialId);
+    const factor = Number(conversion.conversion_factor ?? 0);
+    const fromUomCode = toTrimmedString(conversion.from_uom_code);
+    if (!material || conversion.variable_conversion || !Number.isFinite(factor) || factor <= 0
+      || !fromUomCode || fromUomCode === toTrimmedString(material.base_uom_code)
+      || toTrimmedString(conversion.to_uom_code) !== toTrimmedString(material.base_uom_code)) continue;
+    const list = fixedByMaterialId.get(materialId) ?? [];
+    if (!list.some((entry) => entry.uomCode === fromUomCode)) list.push({ uomCode: fromUomCode, factor });
+    fixedByMaterialId.set(materialId, list);
+  }
+  const optionsByMaterialId = new Map<string, UomOption[]>();
+  const defaultUomByMaterialId = new Map<string, string>();
+  for (const [materialId, material] of materialMap) {
+    const baseUomCode = toTrimmedString(material.base_uom_code);
+    const materialType = toTrimmedString(material.material_type);
+    const conversions = fixedByMaterialId.get(materialId) ?? [];
+    const options: UomOption[] = [{ kind: "BASE", uom_code: baseUomCode, factor: 1 }];
+    let defaultUom = baseUomCode;
+    if (materialType === "FG") {
+      const outerUoms = outerUomsByPackCode.get(toTrimmedString(material.pack_code));
+      const outer = conversions.find((entry) => outerUoms?.has(entry.uomCode));
+      if (outer) {
+        options.push({ kind: "OUTER", uom_code: outer.uomCode, factor: outer.factor });
+        if (outerDefaultMaterialIds.has(materialId)) defaultUom = outer.uomCode;
+        const inner = conversions
+          .filter((entry) => entry.uomCode !== outer.uomCode && entry.factor < outer.factor)
+          .sort((left, right) => left.factor - right.factor)[0];
+        if (inner) options.push({ kind: "INNER", uom_code: inner.uomCode, factor: inner.factor });
+      }
+    } else {
+      const purchaseUom = toTrimmedString(material.purchase_uom_code);
+      const po = conversions.find((entry) => entry.uomCode === purchaseUom)
+        ?? (conversions.length === 1 ? conversions[0] : undefined);
+      if (po) {
+        options.push({ kind: "PO", uom_code: po.uomCode, factor: po.factor });
+        if (materialType === "PM") defaultUom = po.uomCode;
+      }
+      if (params.legacyMtrNosDefault && materialType !== "PM" && baseUomCode === "MTR") {
+        const nos = conversions.find((entry) => entry.uomCode === "NOS");
+        if (nos) defaultUom = "NOS";
+      }
+    }
+    optionsByMaterialId.set(materialId, options);
+    defaultUomByMaterialId.set(materialId, defaultUom);
+  }
+  return { optionsByMaterialId, defaultUomByMaterialId };
+}
+
 function convertFgQtyToPrimary(quantityKg: number, fillQtyPerPack: number | null): number {
   const fillQty = Number(fillQtyPerPack ?? 0);
   if (!Number.isFinite(fillQty) || fillQty <= 0) {
@@ -1273,7 +1341,7 @@ export async function getCurrentStockHandler(
     let materialQuery = serviceRoleClient
       .schema("erp_master")
       .from("material_master")
-      .select("id, pace_code, external_code, material_name, document_name, material_type, base_uom_code, pack_code");
+      .select("id, pace_code, external_code, material_name, document_name, material_type, base_uom_code, purchase_uom_code, pack_code");
     if (requestedMaterialTypes.length > 0) {
       materialQuery = materialQuery.in("material_type", requestedMaterialTypes);
     }
@@ -1758,23 +1826,16 @@ export async function getCurrentStockHandler(
       outerUomCodes.add(outerUomCode);
       outerUomCodesByPackCode.set(packCode, outerUomCodes);
     }
-    const nosDisplayFactorByMaterialId = new Map<string, number>();
-    const mtsFgDisplayByMaterialId = new Map<string, { uomCode: string; factor: number }>();
-    for (const conversion of (reportUomResp.data ?? []) as JsonRecord[]) {
-      const material = materialMap.get(toTrimmedString(conversion.material_id));
-      const factor = Number(conversion.conversion_factor ?? 0);
-      const fromUomCode = toTrimmedString(conversion.from_uom_code);
-      if (conversion.variable_conversion || !Number.isFinite(factor) || factor <= 0
-        || toTrimmedString(conversion.to_uom_code) !== toTrimmedString(material?.base_uom_code)) continue;
-      if (toTrimmedString(material?.base_uom_code) === "MTR" && fromUomCode === "NOS") {
-        nosDisplayFactorByMaterialId.set(toTrimmedString(conversion.material_id), factor);
-      }
-      const outerUomCodes = outerUomCodesByPackCode.get(toTrimmedString(material?.pack_code));
-      if (material?.material_type === "FG" && outerUomCodes?.has(fromUomCode)
-        && !mtsFgDisplayByMaterialId.has(toTrimmedString(conversion.material_id))) {
-        mtsFgDisplayByMaterialId.set(toTrimmedString(conversion.material_id), { uomCode: fromUomCode, factor });
-      }
-    }
+    const fgPathAMaterialIds = new Set(
+      rows.filter((row) => row.path_kind === "A" && row.material_type === "FG").map((row) => row.material_id),
+    );
+    const { optionsByMaterialId: uomOptionsByMaterialId, defaultUomByMaterialId } = buildMaterialUomOptions({
+      materialMap,
+      conversionRows: (reportUomResp.data ?? []) as JsonRecord[],
+      outerUomsByPackCode: outerUomCodesByPackCode,
+      outerDefaultMaterialIds: fgPathAMaterialIds,
+      legacyMtrNosDefault: true,
+    });
 
     const pathAReservationMap = new Map<string, number>();
     const pathARows = rows.filter((row) => row.path_kind === "A");
@@ -1879,45 +1940,29 @@ export async function getCurrentStockHandler(
       const reservedBaseQty = row.path_kind === "A"
         ? pathAReservationMap.get([row.company_id, row.material_id, row.storage_location_id].join("__")) ?? 0
         : pathBCReservationMap.get([row.company_id, row.material_id, row.storage_location_id, row.batch_number ?? ""].join("__")) ?? 0;
-      const mtsFgDisplay = row.path_kind === "A" && row.material_type === "FG"
-        ? mtsFgDisplayByMaterialId.get(row.material_id)
-        : undefined;
-      const nativeUomCode = row.path_kind === "C"
-        ? packCodeMap.get(toTrimmedString(material?.pack_code)) || row.base_uom_code
-        : mtsFgDisplay?.uomCode || row.base_uom_code;
-      const displayFactor = row.path_kind === "C"
-        ? 1
-        : (mtsFgDisplay?.factor ?? nosDisplayFactorByMaterialId.get(row.material_id) ?? 1);
-      // User-facing unit is always the pack's outer UoM (BAG/JAR/...), never the base
-      // KG. "NOS" is only the MTR-material alternate-unit label (ribbons etc.).
-      const uomCode = mtsFgDisplay ? mtsFgDisplay.uomCode : (displayFactor === 1 ? nativeUomCode : "NOS");
-      const toDisplayQty = (quantity: number) => normalizeNumber(quantity / displayFactor);
-      const unrestrictedBaseQty = row.path_kind === "C"
-        ? convertFgQtyToPrimary(row.unrestricted_qty, row.fill_qty_per_pack)
-        : normalizeNumber(row.unrestricted_qty);
-      const qiBaseQty = row.path_kind === "C"
-        ? convertFgQtyToPrimary(row.qi_qty, row.fill_qty_per_pack)
-        : normalizeNumber(row.qi_qty);
-      const blockedBaseQty = row.path_kind === "C"
-        ? convertFgQtyToPrimary(row.blocked_qty, row.fill_qty_per_pack)
-        : normalizeNumber(row.blocked_qty);
-      // Plain quantity, no reservation/net-available concept — In Transit
-      // covers both a Plant Transfer's interim state (P303 out / P305 in, the
-      // source company's own stock_snapshot view) and, added 2026-09-01, this
-      // company's own receiving-side total (inbound CSN still at TRN + any PTO
-      // targeting this company) computed further up in this handler — neither
-      // is stock that can itself be reserved against.
-      const intransitBaseQty = row.path_kind === "C"
-        ? convertFgQtyToPrimary(row.intransit_qty, row.fill_qty_per_pack)
-        : normalizeNumber(row.intransit_qty);
-      const reservedBaseDisplayQty = row.path_kind === "C"
-        ? convertFgQtyToPrimary(reservedBaseQty, row.fill_qty_per_pack)
-        : normalizeNumber(reservedBaseQty);
-      const unrestrictedQty = toDisplayQty(unrestrictedBaseQty);
-      const qiQty = toDisplayQty(qiBaseQty);
-      const blockedQty = toDisplayQty(blockedBaseQty);
-      const intransitQty = toDisplayQty(intransitBaseQty);
-      const reservedQty = toDisplayQty(reservedBaseDisplayQty);
+      // Base units throughout; the screen converts (see buildMaterialUomOptions). A Packing-PO FG row
+      // (path C) is scoped to ONE Packing PO, so its outer unit uses that PO's own fill size.
+      const baseUomCode = row.base_uom_code || toTrimmedString(material?.base_uom_code);
+      let uomOptions: UomOption[];
+      let defaultUomCode: string;
+      if (row.path_kind === "C") {
+        uomOptions = [{ kind: "BASE", uom_code: baseUomCode, factor: 1 }];
+        defaultUomCode = baseUomCode;
+        const outerUomCode = packCodeMap.get(toTrimmedString(material?.pack_code));
+        const fillQty = Number(row.fill_qty_per_pack ?? 0);
+        if (outerUomCode && Number.isFinite(fillQty) && fillQty > 0) {
+          uomOptions.push({ kind: "OUTER", uom_code: outerUomCode, factor: fillQty });
+          defaultUomCode = outerUomCode;
+        }
+      } else {
+        uomOptions = uomOptionsByMaterialId.get(row.material_id) ?? [{ kind: "BASE", uom_code: baseUomCode, factor: 1 }];
+        defaultUomCode = defaultUomByMaterialId.get(row.material_id) || baseUomCode;
+      }
+      const unrestrictedQty = normalizeNumber(row.unrestricted_qty);
+      const qiQty = normalizeNumber(row.qi_qty);
+      const blockedQty = normalizeNumber(row.blocked_qty);
+      const intransitQty = normalizeNumber(row.intransit_qty);
+      const reservedQty = normalizeNumber(reservedBaseQty);
       const planningCoverage = planningStatusByMaterialLocation.get(`${row.material_id}::${row.storage_location_id}`);
       const planning_status = planningCoverage?.status ?? "NORMAL";
 
@@ -1936,7 +1981,10 @@ export async function getCurrentStockHandler(
         material_label: materialLabel,
         external_code: toTrimmedString(material?.external_code),
         document_name: documentName,
-        uom_code: uomCode,
+        uom_code: baseUomCode,
+        base_uom_code: baseUomCode,
+        default_uom_code: defaultUomCode,
+        uom_options: uomOptions,
         storage_location_code: slocCode,
         batch_number: row.batch_number,
         packing_po_number: row.packing_po_number,
@@ -2041,6 +2089,9 @@ export async function getCurrentStockHandler(
         external_code: toTrimmedString(material.external_code),
         document_name: documentName,
         uom_code: material.base_uom_code,
+        base_uom_code: material.base_uom_code,
+        default_uom_code: material.base_uom_code,
+        uom_options: [{ kind: "BASE" as const, uom_code: material.base_uom_code, factor: 1 }],
         storage_location_code: slocMap.get(member.storage_location_id) ?? "—",
         batch_number: null,
         packing_po_number: null,
@@ -2864,7 +2915,7 @@ export async function getStockHistoryHandler(
           serviceRoleClient
             .schema("erp_master")
             .from("material_master")
-            .select("id, external_code, material_name, document_name, material_type, base_uom_code, pack_code")
+            .select("id, external_code, material_name, document_name, material_type, base_uom_code, purchase_uom_code, pack_code")
             .in("id", idChunk)),
         fetchInChunks<JsonRecord>(slocIdsForLookup, (idChunk) =>
           serviceRoleClient
@@ -2922,20 +2973,14 @@ export async function getStockHistoryHandler(
       set.add(outerUomCode);
       outerUomsByPackCode.set(packCode, set);
     }
-    const mtsDisplayByMaterialId = new Map<string, { uomCode: string; factor: number }>();
-    for (const conversion of (uomResp.data ?? []) as JsonRecord[]) {
-      const materialId = toTrimmedString(conversion.material_id);
-      const material = materialMap.get(materialId);
-      const outerUoms = outerUomsByPackCode.get(toTrimmedString(material?.pack_code));
-      const fromUomCode = toTrimmedString(conversion.from_uom_code);
-      const factor = Number(conversion.conversion_factor ?? 0);
-      if (!mtsMaterialIds.has(materialId) || toTrimmedString(material?.material_type) !== "FG"
-        || conversion.variable_conversion || !outerUoms || !outerUoms.has(fromUomCode)
-        || toTrimmedString(conversion.to_uom_code) !== toTrimmedString(material?.base_uom_code)
-        || !Number.isFinite(factor) || factor <= 0
-        || mtsDisplayByMaterialId.has(materialId)) continue;
-      mtsDisplayByMaterialId.set(materialId, { uomCode: fromUomCode, factor });
-    }
+    // Every figure below is returned in BASE units; see buildMaterialUomOptions.
+    const { optionsByMaterialId: uomOptionsByMaterialId, defaultUomByMaterialId } = buildMaterialUomOptions({
+      materialMap,
+      conversionRows: (uomResp.data ?? []) as JsonRecord[],
+      outerUomsByPackCode,
+      // MTS FG is transacted in the outer unit; MTO/HPS/MTEST stay base by default (as before).
+      outerDefaultMaterialIds: mtsMaterialIds,
+    });
 
     // §130.12 — a bucket column that is zero on EVERY returned row for this
     // executed report is hidden entirely (not just shown as an all-zero
@@ -2951,15 +2996,14 @@ export async function getStockHistoryHandler(
 
     const detailRows = rpcRows.map((row) => {
       const material = materialMap.get(row.material_id);
-      const display = mtsDisplayByMaterialId.get(row.material_id);
-      const displayFactor = display?.factor ?? 1;
       const sloc = slocMap.get(row.storage_location_id);
       const materialLabel = resolveMaterialLabel(material) || "—";
       const stockTypeCode = toTrimmedString(row.stock_type_code).toUpperCase();
       const buckets: Record<string, number> = {};
       for (const bucketCode of STOCK_HISTORY_BUCKET_ORDER) {
-        buckets[bucketCode] = normalizeNumber(Number(row.buckets?.[bucketCode] ?? 0) / displayFactor);
+        buckets[bucketCode] = normalizeNumber(Number(row.buckets?.[bucketCode] ?? 0));
       }
+      const baseUomCode = toTrimmedString(material?.base_uom_code) || "—";
       return {
         row_key: `${row.material_id}__${stockTypeCode}__${row.storage_location_id}`,
         is_total: false,
@@ -2968,13 +3012,15 @@ export async function getStockHistoryHandler(
         material_type: toTrimmedString(material?.material_type) || "—",
         material: materialLabel,
         external_code: toTrimmedString(material?.external_code) || "—",
-        base_uom_code: toTrimmedString(material?.base_uom_code) || "—",
-        uom_code: display?.uomCode || toTrimmedString(material?.base_uom_code) || "—",
+        base_uom_code: baseUomCode,
+        uom_code: baseUomCode,
+        default_uom_code: defaultUomByMaterialId.get(row.material_id) || baseUomCode,
+        uom_options: uomOptionsByMaterialId.get(row.material_id) ?? [],
         stock_status: STOCK_HISTORY_STOCK_TYPE_LABELS[stockTypeCode] || stockTypeCode || "—",
         storage_location: toTrimmedString(sloc?.code) || "—",
-        opening: normalizeNumber(Number(row.opening ?? 0) / displayFactor),
+        opening: normalizeNumber(Number(row.opening ?? 0)),
         buckets,
-        closing: normalizeNumber(Number(row.closing ?? 0) / displayFactor),
+        closing: normalizeNumber(Number(row.closing ?? 0)),
       };
     }).sort((left, right) =>
       left.material.localeCompare(right.material)
@@ -2998,6 +3044,8 @@ export async function getStockHistoryHandler(
           external_code: row.external_code,
           base_uom_code: row.base_uom_code,
           uom_code: row.uom_code,
+          default_uom_code: row.default_uom_code,
+          uom_options: row.uom_options,
           stock_status: "Total",
           storage_location: "—",
           opening: 0,

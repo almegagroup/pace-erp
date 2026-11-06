@@ -31,6 +31,11 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // This utility does not grant AI access to business data.
   "POST:/api/ai/smoke-test": { skipAcl: true },
 
+  // Common column-picker layouts: personal UI preferences for any logged-in user, scoped to the
+  // caller (or read-only Global) inside the handlers -- see _core/common/column_layout.handlers.ts.
+  "GET:/api/me/column-layouts":  { skipAcl: true },
+  "POST:/api/me/column-layouts": { skipAcl: true },
+
   // Runtime Communication configuration dynamically verifies the requested
   // page's EDIT ACL in its page-local company. A static resource here would
   // incorrectly evaluate only the session-selected company.
@@ -364,6 +369,8 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "POST:/api/procurement/opening-stock":              { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_LIST", action: "WRITE" },
   "GET:/api/procurement/opening-stock/by-number":     { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_APPROVAL", action: "VIEW"  },
   "POST:/api/procurement/opening-stock/recalculate-valuation": { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_APPROVAL", action: "APPROVE" },
+  // One-time correction of stock value for GRNs posted against GST-INCLUSIVE POs (same valuation-correction authority as above).
+  "POST:/api/procurement/grn-gst-inclusive-backfill": { skipAcl: false, resourceCode: "PROC_OPENING_STOCK_APPROVAL", action: "APPROVE" },
 
   // ── Procurement: Reports ──────────────────────────────────────────────────
   // MTS Customer Plan and its unified actuals. Two resources = two different actions
@@ -741,6 +748,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // Batch Counts sub-report, same PR24 screen/resource — just a different view, not a
   // separate page (pattern #6 guard: same action on the same conceptual resource is fine).
   "GET:/api/production/order-information-system/batch-counts": { skipAcl: false, resourceCode: "PROD_ORDER_INFO_SYSTEM", action: "VIEW" },
+  "GET:/api/production/order-information-system/stroke-options": { skipAcl: false, resourceCode: "PROD_ORDER_INFO_SYSTEM", action: "VIEW" },
   // MTS Production Register sub-report (§143), same PR24 screen/resource as Batch Counts above.
   "GET:/api/production/order-information-system/mts-register": { skipAcl: false, resourceCode: "PROD_ORDER_INFO_SYSTEM", action: "VIEW" },
   // Date-independent badge count for that same PR24 MTS register action.
@@ -1091,6 +1099,19 @@ const PATTERN_ROUTE_ACL: PatternAclEntry[] = [
   {
     pattern: /^\/api\/procurement\/csns\/[^/]+\/(hold|release)$/,
     methods: { POST: { skipAcl: false, resourceCode: "PROC_CSN_TRACKER", action: "EDIT" } },
+  },
+  {
+    pattern: /^\/api\/me\/column-layouts\/[^/]+$/,
+    methods: {
+      PATCH: { skipAcl: true },
+      DELETE: { skipAcl: true },
+    },
+  },
+  {
+    pattern: /^\/api\/me\/column-layouts\/[^/]+\/set-default$/,
+    methods: {
+      POST: { skipAcl: true },
+    },
   },
   {
     pattern: /^\/api\/procurement\/mts-requirement\/layouts\/[^/]+$/,

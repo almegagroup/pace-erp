@@ -9,8 +9,10 @@
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery } from "@tanstack/react-query";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
+import { layoutDrawerProps, useColumnLayouts } from "../../../../shared/columnLayouts/useColumnLayouts.js";
+import { pushToast } from "../../../../store/uiToast.js";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import MultiValueFilterField from "../../../../components/inputs/MultiValueFilterField.jsx";
@@ -25,15 +27,11 @@ import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import { listMachines } from "../../om/omApi.js";
 import {
-  createReportLayout,
-  deleteReportLayout,
   getStockLedgerMachineWise,
   getStockLedgerReport,
-  listReportLayouts,
   listStockLedgerMovementTypes,
   searchStockLedgerBatchNumbers,
   searchStockLedgerPackingPoNumbers,
-  setDefaultReportLayout,
 } from "../procurementApi.js";
 
 const REPORT_CODE = "IN02";
@@ -103,16 +101,6 @@ function getColumnFilterText(column, row) {
   if (typeof column.copyValue === "function") return String(column.copyValue(row) ?? "");
   const raw = row?.[column.key];
   return raw == null ? "" : String(raw);
-}
-
-function findLayout(layouts, layoutId) {
-  return layouts.find((layout) => layout.id === layoutId) || null;
-}
-
-function normalizeVisibleColumnKeys(candidateKeys, columnDefinitions) {
-  const allowedKeys = new Set(columnDefinitions.map((column) => column.key));
-  const normalized = (Array.isArray(candidateKeys) ? candidateKeys : []).filter((key) => allowedKeys.has(key));
-  return normalized.length > 0 ? normalized : DEFAULT_VISIBLE_COLUMNS.filter((key) => allowedKeys.has(key));
 }
 
 function dateSpanTooWide(dateFrom, dateTo) {
@@ -240,9 +228,7 @@ function MachineWiseStockDrawer({ visible, onClose, params }) {
 }
 
 export default function StockLedgerReportPage() {
-  const queryClient = useQueryClient();
   const { runtimeContext } = useMenu();
-  const canSaveGlobalLayout = runtimeContext?.roleCode === "SA" || runtimeContext?.roleCode === "GA";
 
   // Business decision (2026-08-04): single company at a time, never multi —
   // same rule as IN03 (see CurrentStockPage.jsx). Single-company users get it
@@ -360,9 +346,6 @@ export default function StockLedgerReportPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [columnsOpen, setColumnsOpen] = useState(false);
-  const [activeLayoutId, setActiveLayoutId] = useState("");
-  const [visibleColumns, setVisibleColumns] = useState(DEFAULT_VISIBLE_COLUMNS);
-  const [columnSelectionTouched, setColumnSelectionTouched] = useState(false);
   // Page 1 (Filters) and Page 2 (Output Grid) are separate full-page views,
   // like Process PO's step pages or SAP MB52/ZMB51's Execute -> report screen
   // — never both visible at once.
@@ -397,15 +380,6 @@ export default function StockLedgerReportPage() {
     [],
   );
 
-  const layoutsQuery = useQuery({
-    queryKey: ["procurement-report-layouts", REPORT_CODE],
-    queryFn: () => listReportLayouts({ report_code: REPORT_CODE }),
-    select: (result) => ({
-      layouts: Array.isArray(result?.data) ? result.data : [],
-      defaultLayoutId: result?.default_layout_id ?? "",
-    }),
-  });
-
   const reportQuery = useQuery({
     queryKey: ["procurement-stock-ledger-report", submittedFilters],
     enabled: Boolean(submittedFilters),
@@ -413,29 +387,14 @@ export default function StockLedgerReportPage() {
     select: (result) => result?.data ?? [],
   });
 
-  const layoutOptions = useMemo(
-    () => (layoutsQuery.data?.layouts ?? []).map((layout) => ({
-      id: layout.id,
-      label: `${layout.scope === "GLOBAL" ? "Global" : "User"} — ${layout.layout_name}`,
-      scope: layout.scope,
-      visible_columns: layout.visible_columns,
-    })),
-    [layoutsQuery.data],
+  // Common column picker: visibility + order, up to 3 saved layouts per user for this page.
+  const pickerColumns = useMemo(
+    () => columnDefinitions.map((column) => ({ ...column, defaultHidden: !DEFAULT_VISIBLE_COLUMNS.includes(column.key) })),
+    [columnDefinitions],
   );
-
-  const gridColumns = useMemo(
-    () => columnDefinitions.filter((column) => {
-      const activeLayout = findLayout(layoutsQuery.data?.layouts ?? [], activeLayoutId);
-      const defaultLayout = findLayout(layoutsQuery.data?.layouts ?? [], layoutsQuery.data?.defaultLayoutId ?? "");
-      const effectiveVisibleColumns = activeLayout
-        ? normalizeVisibleColumnKeys(activeLayout.visible_columns, columnDefinitions)
-        : columnSelectionTouched
-          ? visibleColumns
-          : normalizeVisibleColumnKeys(defaultLayout?.visible_columns ?? visibleColumns, columnDefinitions);
-      return effectiveVisibleColumns.includes(column.key);
-    }),
-    [activeLayoutId, columnDefinitions, columnSelectionTouched, layoutsQuery.data, visibleColumns],
-  );
+  const layoutMessage = useCallback((message, tone) => pushToast({ message, tone }), []);
+  const layout = useColumnLayouts("IN02", pickerColumns, layoutMessage);
+  const gridColumns = layout.columns;
 
   const reportRows = useMemo(() => (Array.isArray(reportQuery.data) ? reportQuery.data : []), [reportQuery.data]);
   const searchDisabled = !companyId || !dateFrom || !dateTo || dateSpanTooWide(dateFrom, dateTo) || dateRangeInvalid(dateFrom, dateTo);
@@ -511,78 +470,6 @@ export default function StockLedgerReportPage() {
     setPage(1);
     return true;
   });
-
-  function handleApplyLayout(layoutId) {
-    setActiveLayoutId(layoutId);
-    setColumnSelectionTouched(false);
-    if (!layoutId) {
-      const defaultLayout = findLayout(layoutsQuery.data?.layouts ?? [], layoutsQuery.data?.defaultLayoutId ?? "");
-      setVisibleColumns(normalizeVisibleColumnKeys(defaultLayout?.visible_columns ?? DEFAULT_VISIBLE_COLUMNS, columnDefinitions));
-      return;
-    }
-    const layout = findLayout(layoutsQuery.data?.layouts ?? [], layoutId);
-    setVisibleColumns(normalizeVisibleColumnKeys(layout?.visible_columns ?? DEFAULT_VISIBLE_COLUMNS, columnDefinitions));
-  }
-
-  async function handleSaveCurrentAs() {
-    const layoutName = window.prompt("Layout name");
-    if (!layoutName || !layoutName.trim()) {
-      return;
-    }
-    const scope = canSaveGlobalLayout && window.confirm("Save as Global layout?\nPress OK for Global, Cancel for User.")
-      ? "GLOBAL"
-      : "USER";
-    try {
-      setError("");
-      setNotice("");
-      await createReportLayout({
-        report_code: REPORT_CODE,
-        scope,
-        layout_name: layoutName.trim(),
-        visible_columns: visibleColumns,
-      });
-      await queryClient.invalidateQueries({ queryKey: ["procurement-report-layouts", REPORT_CODE] });
-      setNotice("Layout saved.");
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "REPORT_LAYOUT_CREATE_FAILED");
-    }
-  }
-
-  async function handleSetDefaultLayout() {
-    if (!activeLayoutId) {
-      setError("Select a saved layout first.");
-      return;
-    }
-    try {
-      setError("");
-      setNotice("");
-      await setDefaultReportLayout(activeLayoutId);
-      await queryClient.invalidateQueries({ queryKey: ["procurement-report-layouts", REPORT_CODE] });
-      setNotice("Default layout updated.");
-    } catch (setDefaultError) {
-      setError(setDefaultError instanceof Error ? setDefaultError.message : "REPORT_LAYOUT_DEFAULT_SET_FAILED");
-    }
-  }
-
-  async function handleDeleteLayout(layoutId) {
-    if (!layoutId) {
-      return;
-    }
-    if (!window.confirm("Delete this saved layout?")) {
-      return;
-    }
-    try {
-      setError("");
-      setNotice("");
-      await deleteReportLayout(layoutId);
-      setActiveLayoutId("");
-      setColumnSelectionTouched(false);
-      await queryClient.invalidateQueries({ queryKey: ["procurement-report-layouts", REPORT_CODE] });
-      setNotice("Layout deleted.");
-    } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "REPORT_LAYOUT_DELETE_FAILED");
-    }
-  }
 
   function handleExport() {
     if (filteredRows.length === 0) {
@@ -811,30 +698,7 @@ export default function StockLedgerReportPage() {
 
       <ErpColumnVisibilityDrawer
         visible={columnsOpen}
-        columns={columnDefinitions}
-        visibleColumnKeys={visibleColumns}
-        layoutOptions={layoutOptions}
-        activeLayoutId={activeLayoutId}
-        defaultLayoutId={layoutsQuery.data?.defaultLayoutId ?? ""}
-        onSelectLayout={handleApplyLayout}
-        onSaveCurrentAs={handleSaveCurrentAs}
-        onSetDefaultLayout={handleSetDefaultLayout}
-        onDeleteLayout={handleDeleteLayout}
-        onToggleColumn={(columnKey) =>
-          setVisibleColumns((current) => {
-            setActiveLayoutId("");
-            setColumnSelectionTouched(true);
-            if (current.includes(columnKey)) {
-              return current.length === 1 ? current : current.filter((entry) => entry !== columnKey);
-            }
-            return [...current, columnKey];
-          })
-        }
-        onResetColumns={() => {
-          setActiveLayoutId("");
-          setColumnSelectionTouched(false);
-          setVisibleColumns(DEFAULT_VISIBLE_COLUMNS);
-        }}
+        {...layoutDrawerProps(layout)}
         onClose={() => setColumnsOpen(false)}
       />
 

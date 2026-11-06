@@ -8,9 +8,11 @@
  * Authority: Frontend
  */
 
-import { useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo, useState, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
+import { layoutDrawerProps, useColumnLayouts } from "../../../../shared/columnLayouts/useColumnLayouts.js";
+import { pushToast } from "../../../../store/uiToast.js";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import MultiValueFilterField from "../../../../components/inputs/MultiValueFilterField.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
@@ -23,11 +25,7 @@ import { useScreenBackInterceptor } from "../../../../hooks/useScreenBackInterce
 import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
 import { useMenu } from "../../../../context/useMenu.js";
 import {
-  createReportLayout,
-  deleteReportLayout,
-  listReportLayouts,
   listReservations,
-  setDefaultReportLayout,
 } from "../procurementApi.js";
 
 const REPORT_CODE = "IN12";
@@ -97,16 +95,6 @@ function getColumnFilterText(column, row) {
   return raw == null ? "" : String(raw);
 }
 
-function findLayout(layouts, layoutId) {
-  return layouts.find((layout) => layout.id === layoutId) || null;
-}
-
-function normalizeVisibleColumnKeys(candidateKeys, columnDefinitions) {
-  const allowedKeys = new Set(columnDefinitions.map((column) => column.key));
-  const normalized = (Array.isArray(candidateKeys) ? candidateKeys : []).filter((key) => allowedKeys.has(key));
-  return normalized.length > 0 ? normalized : DEFAULT_VISIBLE_COLUMNS.filter((key) => allowedKeys.has(key));
-}
-
 function dateSpanTooWide(dateFrom, dateTo) {
   if (!dateFrom || !dateTo) {
     return false;
@@ -132,9 +120,7 @@ function dateRangeInvalid(dateFrom, dateTo) {
 }
 
 export default function ReservationListPage() {
-  const queryClient = useQueryClient();
   const { runtimeContext } = useMenu();
-  const canSaveGlobalLayout = runtimeContext?.roleCode === "SA" || runtimeContext?.roleCode === "GA";
 
   // Same Law-12 single-company pattern as IN02/IN03 — single-company users
   // get it auto-resolved and locked, multi-company users pick one.
@@ -181,9 +167,6 @@ export default function ReservationListPage() {
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
   const [columnsOpen, setColumnsOpen] = useState(false);
-  const [activeLayoutId, setActiveLayoutId] = useState("");
-  const [visibleColumns, setVisibleColumns] = useState(DEFAULT_VISIBLE_COLUMNS);
-  const [columnSelectionTouched, setColumnSelectionTouched] = useState(false);
   // Page 1 (Filters) and Page 2 (Output Grid) are separate full-page views —
   // same split as IN02/IN03/PR14/PR24, never both visible at once.
   const [page, setPage] = useState(1);
@@ -210,15 +193,6 @@ export default function ReservationListPage() {
     [],
   );
 
-  const layoutsQuery = useQuery({
-    queryKey: ["procurement-report-layouts", REPORT_CODE],
-    queryFn: () => listReportLayouts({ report_code: REPORT_CODE }),
-    select: (result) => ({
-      layouts: Array.isArray(result?.data) ? result.data : [],
-      defaultLayoutId: result?.default_layout_id ?? "",
-    }),
-  });
-
   const reportQuery = useQuery({
     queryKey: ["procurement-reservation-list", submittedFilters],
     enabled: Boolean(submittedFilters),
@@ -226,29 +200,14 @@ export default function ReservationListPage() {
     select: (result) => result?.data ?? [],
   });
 
-  const layoutOptions = useMemo(
-    () => (layoutsQuery.data?.layouts ?? []).map((layout) => ({
-      id: layout.id,
-      label: `${layout.scope === "GLOBAL" ? "Global" : "User"} — ${layout.layout_name}`,
-      scope: layout.scope,
-      visible_columns: layout.visible_columns,
-    })),
-    [layoutsQuery.data],
+  // Common column picker: visibility + order, up to 3 saved layouts per user for this page.
+  const pickerColumns = useMemo(
+    () => columnDefinitions.map((column) => ({ ...column, defaultHidden: !DEFAULT_VISIBLE_COLUMNS.includes(column.key) })),
+    [columnDefinitions],
   );
-
-  const gridColumns = useMemo(
-    () => columnDefinitions.filter((column) => {
-      const activeLayout = findLayout(layoutsQuery.data?.layouts ?? [], activeLayoutId);
-      const defaultLayout = findLayout(layoutsQuery.data?.layouts ?? [], layoutsQuery.data?.defaultLayoutId ?? "");
-      const effectiveVisibleColumns = activeLayout
-        ? normalizeVisibleColumnKeys(activeLayout.visible_columns, columnDefinitions)
-        : columnSelectionTouched
-          ? visibleColumns
-          : normalizeVisibleColumnKeys(defaultLayout?.visible_columns ?? visibleColumns, columnDefinitions);
-      return effectiveVisibleColumns.includes(column.key);
-    }),
-    [activeLayoutId, columnDefinitions, columnSelectionTouched, layoutsQuery.data, visibleColumns],
-  );
+  const layoutMessage = useCallback((message, tone) => pushToast({ message, tone }), []);
+  const layout = useColumnLayouts("IN12", pickerColumns, layoutMessage);
+  const gridColumns = layout.columns;
 
   const reportRows = useMemo(() => (Array.isArray(reportQuery.data) ? reportQuery.data : []), [reportQuery.data]);
   const searchDisabled = !companyId || !dateFrom || !dateTo || dateSpanTooWide(dateFrom, dateTo) || dateRangeInvalid(dateFrom, dateTo);
@@ -319,78 +278,6 @@ export default function ReservationListPage() {
     setPage(1);
     return true;
   });
-
-  function handleApplyLayout(layoutId) {
-    setActiveLayoutId(layoutId);
-    setColumnSelectionTouched(false);
-    if (!layoutId) {
-      const defaultLayout = findLayout(layoutsQuery.data?.layouts ?? [], layoutsQuery.data?.defaultLayoutId ?? "");
-      setVisibleColumns(normalizeVisibleColumnKeys(defaultLayout?.visible_columns ?? DEFAULT_VISIBLE_COLUMNS, columnDefinitions));
-      return;
-    }
-    const layout = findLayout(layoutsQuery.data?.layouts ?? [], layoutId);
-    setVisibleColumns(normalizeVisibleColumnKeys(layout?.visible_columns ?? DEFAULT_VISIBLE_COLUMNS, columnDefinitions));
-  }
-
-  async function handleSaveCurrentAs() {
-    const layoutName = window.prompt("Layout name");
-    if (!layoutName || !layoutName.trim()) {
-      return;
-    }
-    const scope = canSaveGlobalLayout && window.confirm("Save as Global layout?\nPress OK for Global, Cancel for User.")
-      ? "GLOBAL"
-      : "USER";
-    try {
-      setError("");
-      setNotice("");
-      await createReportLayout({
-        report_code: REPORT_CODE,
-        scope,
-        layout_name: layoutName.trim(),
-        visible_columns: visibleColumns,
-      });
-      await queryClient.invalidateQueries({ queryKey: ["procurement-report-layouts", REPORT_CODE] });
-      setNotice("Layout saved.");
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "REPORT_LAYOUT_CREATE_FAILED");
-    }
-  }
-
-  async function handleSetDefaultLayout() {
-    if (!activeLayoutId) {
-      setError("Select a saved layout first.");
-      return;
-    }
-    try {
-      setError("");
-      setNotice("");
-      await setDefaultReportLayout(activeLayoutId);
-      await queryClient.invalidateQueries({ queryKey: ["procurement-report-layouts", REPORT_CODE] });
-      setNotice("Default layout updated.");
-    } catch (setDefaultError) {
-      setError(setDefaultError instanceof Error ? setDefaultError.message : "REPORT_LAYOUT_DEFAULT_SET_FAILED");
-    }
-  }
-
-  async function handleDeleteLayout(layoutId) {
-    if (!layoutId) {
-      return;
-    }
-    if (!window.confirm("Delete this saved layout?")) {
-      return;
-    }
-    try {
-      setError("");
-      setNotice("");
-      await deleteReportLayout(layoutId);
-      setActiveLayoutId("");
-      setColumnSelectionTouched(false);
-      await queryClient.invalidateQueries({ queryKey: ["procurement-report-layouts", REPORT_CODE] });
-      setNotice("Layout deleted.");
-    } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "REPORT_LAYOUT_DELETE_FAILED");
-    }
-  }
 
   function handleExport() {
     if (filteredRows.length === 0) {
@@ -621,30 +508,7 @@ export default function ReservationListPage() {
 
       <ErpColumnVisibilityDrawer
         visible={columnsOpen}
-        columns={columnDefinitions}
-        visibleColumnKeys={visibleColumns}
-        layoutOptions={layoutOptions}
-        activeLayoutId={activeLayoutId}
-        defaultLayoutId={layoutsQuery.data?.defaultLayoutId ?? ""}
-        onSelectLayout={handleApplyLayout}
-        onSaveCurrentAs={handleSaveCurrentAs}
-        onSetDefaultLayout={handleSetDefaultLayout}
-        onDeleteLayout={handleDeleteLayout}
-        onToggleColumn={(columnKey) =>
-          setVisibleColumns((current) => {
-            setActiveLayoutId("");
-            setColumnSelectionTouched(true);
-            if (current.includes(columnKey)) {
-              return current.length === 1 ? current : current.filter((entry) => entry !== columnKey);
-            }
-            return [...current, columnKey];
-          })
-        }
-        onResetColumns={() => {
-          setActiveLayoutId("");
-          setColumnSelectionTouched(false);
-          setVisibleColumns(DEFAULT_VISIBLE_COLUMNS);
-        }}
+        {...layoutDrawerProps(layout)}
         onClose={() => setColumnsOpen(false)}
       />
     </ErpScreenScaffold>

@@ -6,10 +6,12 @@
  *          3 tabs: Create FO | Edit FO (+ Packing PO allocation) | Total Table.
  */
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../components/templates/ErpScreenScaffold.jsx";
 import ErpDenseGrid from "../../../components/data/ErpDenseGrid.jsx";
+import ErpColumnVisibilityDrawer from "../../../components/ErpColumnVisibilityDrawer.jsx";
+import { layoutDrawerProps, useColumnLayouts } from "../../../shared/columnLayouts/useColumnLayouts.js";
 import { pushToast } from "../../../store/uiToast.js";
 import ErpComboboxField from "../../../components/forms/ErpComboboxField.jsx";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
@@ -904,8 +906,11 @@ export default function PlanFeedPage() {
   });
   const summary = summaryQ.data ?? EMPTY_ARRAY;
   const [totalSearch, setTotalSearch] = useState("");
-  const [totalColumnFilters, setTotalColumnFilters] = useState({});
-  const [totalFiltersOpen, setTotalFiltersOpen] = useState(false);
+  // Excel-style per-column filters live inside the grid itself (header filter icons); this is what survives them, for the count + Excel export.
+  const [shownTotalRows, setShownTotalRows] = useState(null);
+  // Bumped by Clear Filters: remounts the grid, which resets its own header filters.
+  const [totalGridKey, setTotalGridKey] = useState(0);
+  const [totalColumnsOpen, setTotalColumnsOpen] = useState(false);
   const [exportingTotal, setExportingTotal] = useState(false);
   // Date-range search: the two date inputs + column dropdown are draft state
   // (typing/picking doesn't filter anything by itself); appliedDateFilter is
@@ -916,7 +921,7 @@ export default function PlanFeedPage() {
   const [dateRangeTo, setDateRangeTo] = useState("");
   const [dateRangeColumn, setDateRangeColumn] = useState("");
   const [appliedDateFilter, setAppliedDateFilter] = useState(null);
-  const totalColumns = useMemo(() => [
+  const allTotalColumns = useMemo(() => [
     // "Prioritize" (business owner ask) -- read-only here, editable only via
     // the dedicated Prioritize page. Values stay visible even after an FO
     // becomes FULLY_MAPPED (history) -- only the row's priority background
@@ -970,20 +975,21 @@ export default function PlanFeedPage() {
     { key: "site_contact_person", label: "Site Contact Person", width: "140px", render: (r) => r.site_contact_person || "--" },
     { key: "site_contact_number", label: "Contact Person Number", width: "140px", render: (r) => <span className="font-mono">{r.site_contact_number || "--"}</span> },
   ], []);
+  // Common column picker for the Total Table (visibility + order, up to 3 saved layouts per user).
+  const layoutMessage = useCallback((message, tone) => pushToast({ message, tone }), []);
+  const totalLayout = useColumnLayouts("PR00_TOTAL", allTotalColumns, layoutMessage);
+  const totalColumns = totalLayout.columns;
   const totalSuggestions = useMemo(() => [...new Set(summary.flatMap((row) => totalColumns.map((column) => gridCellValue(row, column)).filter(Boolean)))].sort((a, b) => a.localeCompare(b)).slice(0, 300), [summary, totalColumns]);
-  const totalSuggestionsByColumn = useMemo(() => Object.fromEntries(totalColumns.map((column) => [column.key, [...new Set(summary.map((row) => gridCellValue(row, column)).filter(Boolean))].sort((a, b) => a.localeCompare(b)).slice(0, 150)])), [summary, totalColumns]);
   const filteredSummary = useMemo(() => {
     const needle = totalSearch.trim().toLowerCase();
     return summary.filter((row) => {
       const globalMatch = !needle || totalColumns.some((column) => gridCellValue(row, column).toLowerCase().includes(needle));
-      const columnMatch = Object.entries(totalColumnFilters).every(([key, value]) => {
-        if (!value?.trim()) return true;
-        const column = totalColumns.find((entry) => entry.key === key);
-        return column ? gridCellValue(row, column).toLowerCase().includes(value.trim().toLowerCase()) : true;
-      });
-      return globalMatch && columnMatch && rowMatchesDateFilter(row, appliedDateFilter);
+      return globalMatch && rowMatchesDateFilter(row, appliedDateFilter);
     });
-  }, [summary, totalSearch, totalColumnFilters, totalColumns, appliedDateFilter]);
+  }, [summary, totalSearch, totalColumns, appliedDateFilter]);
+  // What the grid shows after its own header filters -- the count and the Excel export use exactly these rows.
+  // (The grid is not mounted while there are no rows, so a stale shownTotalRows must not outlive that.)
+  const exportTotalRows = filteredSummary.length === 0 ? [] : (shownTotalRows ?? filteredSummary);
   function handleDateRangeSearch() {
     if (!dateRangeColumn || (!dateRangeFrom && !dateRangeTo)) return;
     setAppliedDateFilter({ column: dateRangeColumn, from: dateRangeFrom, to: dateRangeTo });
@@ -1002,7 +1008,7 @@ export default function PlanFeedPage() {
         fileName: `plan_feed_total_${new Date().toISOString().slice(0, 10)}.xlsx`,
         sheetName: "Plan Feed Total",
         columns: totalColumns,
-        rows: filteredSummary,
+        rows: exportTotalRows,
         // gridCellValue always coerces to a display string (it also drives search/copy, which
         // genuinely need one) -- Excel export must NOT do that for numeric columns, or every
         // cell lands as text and can't be SUM()'d. excelValue (raw number) takes priority when set.
@@ -1017,7 +1023,7 @@ export default function PlanFeedPage() {
     <ErpScreenScaffold
       title="Plan Feed"
       subtitle="Firm Order visibility — what customers ordered, and its current production/dispatch state"
-      actions={tab === "total" ? [{ key: "plan-feed-total-columns", label: totalFiltersOpen ? "Hide Column Filters" : "Column Filters", onClick: () => setTotalFiltersOpen((open) => !open) }, { key: "plan-feed-total-export", label: exportingTotal ? "Exporting..." : "Export Excel", onClick: () => void handleExportTotalExcel(), disabled: exportingTotal || filteredSummary.length === 0 }] : []}
+      actions={tab === "total" ? [{ key: "plan-feed-total-pick-columns", label: `Columns${totalLayout.activeLayoutName ? ` · ${totalLayout.activeLayoutName}` : ""}`, onClick: () => setTotalColumnsOpen(true) }, { key: "plan-feed-total-export", label: exportingTotal ? "Exporting..." : "Export Excel", onClick: () => void handleExportTotalExcel(), disabled: exportingTotal || exportTotalRows.length === 0 }] : []}
     >
       <ErpSectionCard>
         <div className="flex gap-3 items-end flex-wrap">
@@ -1842,8 +1848,8 @@ export default function PlanFeedPage() {
               Search Any Column
               <input value={totalSearch} onChange={(event) => setTotalSearch(event.target.value)} list="plan-feed-total-search-suggestions" placeholder="FO, party, SKU, batch, status, invoice..." className="h-8 border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500" />
             </label>
-            <button type="button" onClick={() => { setTotalSearch(""); setTotalColumnFilters({}); handleDateRangeClear(); }} disabled={!totalSearch && Object.values(totalColumnFilters).every((value) => !value) && !appliedDateFilter} className="h-8 border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">Clear Filters</button>
-            <span className="pb-1 text-xs text-slate-500">{filteredSummary.length.toLocaleString()} of {summary.length.toLocaleString()} FOs</span>
+            <button type="button" onClick={() => { setTotalSearch(""); handleDateRangeClear(); setTotalGridKey((key) => key + 1); }} disabled={!totalSearch && !appliedDateFilter && exportTotalRows.length === filteredSummary.length} className="h-8 border border-slate-300 bg-white px-3 text-xs font-medium text-slate-700 hover:bg-slate-50 disabled:opacity-50">Clear Filters</button>
+            <span className="pb-1 text-xs text-slate-500">{exportTotalRows.length.toLocaleString()} of {summary.length.toLocaleString()} FOs</span>
             <datalist id="plan-feed-total-search-suggestions">{totalSuggestions.map((value) => <option key={value} value={value} />)}</datalist>
           </div>
           <div className="mb-3 flex flex-wrap items-end gap-3 border-b border-slate-200 pb-3">
@@ -1874,18 +1880,6 @@ export default function PlanFeedPage() {
               </span>
             ) : null}
           </div>
-          {totalFiltersOpen ? (
-            <div className="mb-3 grid gap-2 border border-slate-200 bg-slate-50 p-3 sm:grid-cols-2 xl:grid-cols-4">
-              {totalColumns.map((column) => {
-                const listId = `plan-feed-total-${column.key}-suggestions`;
-                return <label key={column.key} className="grid gap-1 text-[11px] font-medium text-slate-600">
-                  {column.label}
-                  <input value={totalColumnFilters[column.key] ?? ""} onChange={(event) => setTotalColumnFilters((filters) => ({ ...filters, [column.key]: event.target.value }))} list={listId} placeholder={`Filter ${column.label}`} className="h-7 border border-slate-300 bg-white px-2 text-xs outline-none focus:border-sky-500" />
-                  <datalist id={listId}>{(totalSuggestionsByColumn[column.key] ?? []).map((value) => <option key={value} value={value} />)}</datalist>
-                </label>;
-              })}
-            </div>
-          ) : null}
           {summaryQ.isLoading ? (
             <p className="text-slate-400 text-sm py-6 text-center">Loading summary...</p>
           ) : summary.length === 0 ? (
@@ -1895,13 +1889,19 @@ export default function PlanFeedPage() {
           ) : (
             <>
               <p className="mb-2 text-xs text-slate-500">Arrow keys move cell-to-cell. Shift+Click, click-drag, or Shift+Arrow selects a range; Ctrl+C copies it like Excel.</p>
-              <ErpDenseGrid columns={totalColumns} rows={filteredSummary} rowKey={(row) => row.id ?? row.fo_number} getRowProps={(row) => ({ className: priorityRowClassName(row) })} virtualize rangeSelect stickyFirstColumn fitColumnWidths maxHeight="calc(100vh - 290px)" emptyMessage="No FOs matched the selected filters." />
+              <ErpDenseGrid key={totalGridKey} columns={totalColumns} rows={filteredSummary} columnFilter onFilteredRowsChange={setShownTotalRows} rowKey={(row) => row.id ?? row.fo_number} getRowProps={(row) => ({ className: priorityRowClassName(row) })} virtualize rangeSelect stickyFirstColumn fitColumnWidths maxHeight="calc(100vh - 290px)" emptyMessage="No FOs matched the selected filters." />
             </>
           )}
         </ErpSectionCard>
       )}
       {tab === "prioritize" && <PlanFeedPrioritizeSection />}
       {tab === "report" && <PlanFeedCategoryReportSection />}
+      <ErpColumnVisibilityDrawer
+        visible={totalColumnsOpen}
+        title="Total Table Columns"
+        {...layoutDrawerProps(totalLayout)}
+        onClose={() => setTotalColumnsOpen(false)}
+      />
     </ErpScreenScaffold>
   );
 }

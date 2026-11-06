@@ -42,11 +42,18 @@ function materialLabel(m) {
 function availabilityNote(row) {
   const dispatched = Number(row.dispatched_qty ?? 0);
   const foMapped = Number(row.fo_mapped_qty ?? 0);
-  if (dispatched <= 1e-6 && foMapped <= 1e-6) return null;
+  const returned = Number(row.returned_qty ?? 0);
+  const physical = row.physical_unrestricted_qty == null ? null : Number(row.physical_unrestricted_qty);
+  const total = Number(row.total_qty ?? 0);
+  const physicalLimited = physical != null && physical + 1e-6 < total - dispatched + returned - foMapped;
+  if (dispatched <= 1e-6 && foMapped <= 1e-6 && returned <= 1e-6 && !physicalLimited) return null;
   const parts = [];
   if (dispatched > 1e-6) parts.push(`${fmt(dispatched)} KG dispatched or on an active Delivery Order`);
+  if (returned > 1e-6) parts.push(`${fmt(returned)} KG of it returned by the customer`);
   if (foMapped > 1e-6) parts.push(`${fmt(foMapped)} KG mapped to an FO`);
-  return `Only ${fmt(row.available_qty)} of ${fmt(row.total_qty ?? 0)} KG available (${parts.join(", ")})`;
+  // Returned stock lands in Blocked until QA releases it, and PR19 can only reverse what is in Unrestricted.
+  if (physicalLimited) parts.push(`${fmt(physical)} KG currently in Unrestricted stock for this batch`);
+  return `Only ${fmt(row.available_qty)} of ${fmt(total)} KG available (${parts.join(", ")})`;
 }
 function storageLocationLabel(loc) {
   if (!loc) return "--";
@@ -80,6 +87,9 @@ export default function PartialBatchReversalPage() {
   const [numPacksToReverse, setNumPacksToReverse] = useState("");
   const [salvageBatchNumber, setSalvageBatchNumber] = useState("");
   const [pmExclusions, setPmExclusions] = useState(() => new Set());
+  // Packaging (PM) return quantities the user edited on Page 3, keyed by packing_order_line_id.
+  // Anything not edited uses the server's whole-pack default for the entered KG.
+  const [pmQtyOverrides, setPmQtyOverrides] = useState({});
   const [submitting, setSubmitting] = useState(false);
 
   function toast(msg, tone = "success") {
@@ -135,9 +145,11 @@ export default function PartialBatchReversalPage() {
     setNumPacksToReverse("");
     setSalvageBatchNumber("");
     setPmExclusions(new Set());
+    setPmQtyOverrides({});
   }
 
   function handleNumPacksChange(value) {
+    setPmQtyOverrides({});
     setNumPacksToReverse(value);
     const packs = Number(value);
     const fillQty = Number(selectedRow?.fill_qty_per_pack ?? 0);
@@ -175,6 +187,19 @@ export default function PartialBatchReversalPage() {
     enabled: Boolean(resolvedPo?.id && selectedRow && validQty),
   });
 
+  // What this PM line will actually be returned for: the user's edit, else the server's default.
+  function pmQtyFor(line) {
+    const edited = pmQtyOverrides[line.packing_order_line_id];
+    return edited !== undefined ? edited : String(line.default_qty ?? line.proportional_qty ?? 0);
+  }
+  function pmQtyProblem(line) {
+    const raw = pmQtyFor(line);
+    if (raw === "" || !Number.isFinite(Number(raw)) || Number(raw) < 0) return "Enter 0 or more";
+    if (line.is_discrete && Math.abs(Number(raw) - Math.round(Number(raw))) > 1e-6) return "Whole number only";
+    if (Number(raw) > Number(line.max_qty ?? 0) + 1e-6) return `At most ${fmt(line.max_qty)} can still be returned`;
+    return "";
+  }
+
   function togglePmExclusion(lineId) {
     setPmExclusions((prev) => {
       const next = new Set(prev);
@@ -185,10 +210,16 @@ export default function PartialBatchReversalPage() {
 
   async function handleSubmit() {
     if (!resolvedPo || !selectedRow || !validQty) return;
+    const pmLines = selectedRow.row_type === "SKU" ? (detailQ.data?.pm_lines ?? []) : [];
+    const badPm = pmLines.find((line) => !pmExclusions.has(line.packing_order_line_id) && pmQtyProblem(line));
+    if (badPm) {
+      toast(`${materialLabel(badPm.material)}: ${pmQtyProblem(badPm)}`, "error");
+      return;
+    }
     const confirmed = await openActionConfirm({
       eyebrow: "Partial Batch Reversal",
       title: `Reverse ${fmt(parsedReverseQty)} KG from batch ${resolvedPo.batch_number}?`,
-      message: "This posts proportional RM/PM/INT reversal movements. This action cannot be undone from this screen.",
+      message: "This posts the RM/INT/SFG/FG reversal in proportion to the KG, and returns packaging (barrels, labels...) in the whole quantities shown. This action cannot be undone from this screen.",
       confirmLabel: "Reverse",
     });
     if (!confirmed) return;
@@ -201,6 +232,9 @@ export default function PartialBatchReversalPage() {
         reverse_qty: parsedReverseQty,
         salvage_batch_number: salvageBatchNumber || undefined,
         pm_line_exclusions: [...pmExclusions],
+        pm_line_quantities: Object.fromEntries(
+          pmLines.filter((line) => !pmExclusions.has(line.packing_order_line_id)).map((line) => [line.packing_order_line_id, Number(pmQtyFor(line))]),
+        ),
       });
       toast("Partial batch reversal posted.");
       qc.invalidateQueries({ queryKey: ["pr19-stock-lines"] });
@@ -213,6 +247,7 @@ export default function PartialBatchReversalPage() {
       setReverseQty("");
       setSalvageBatchNumber("");
       setPmExclusions(new Set());
+      setPmQtyOverrides({});
     } catch (error) {
       // The stock postings and the trailing Reco/Costing write are not one atomic
       // transaction (§8D) -- an error here can still mean the reversal actually
@@ -410,7 +445,7 @@ export default function PartialBatchReversalPage() {
                 step="0.001"
                 className="h-9 rounded border border-slate-300 px-2 text-sm"
                 value={reverseQty}
-                onChange={(e) => { setReverseQty(e.target.value); setNumPacksToReverse(""); }}
+                onChange={(e) => { setReverseQty(e.target.value); setNumPacksToReverse(""); setPmQtyOverrides({}); }}
                 max={selectedRow.available_qty}
               />
               {reverseQty && !validQty ? (
@@ -428,10 +463,10 @@ export default function PartialBatchReversalPage() {
               onChange={setSalvageBatchNumber}
               options={(salvageBatchesQ.data ?? []).map((po) => ({
                 value: po.batch_number,
-                label: `${po.batch_number} (${po.po_number}, ${po.status})`,
+                label: `${po.batch_number} (${po.po_number}, ${po.status})${po.same_prodshade ? " · same prodshade" : po.prodshade_label ? ` · ${po.prodshade_label}` : ""}`,
               }))}
               placeholder="-- None --"
-              emptyStateLabel={salvageBatchesQ.isLoading ? "Loading..." : "No other batches for this prodshade yet"}
+              emptyStateLabel={salvageBatchesQ.isLoading ? "Loading..." : "No other started or verified batch of this PO type"}
             />
           </div>
 
@@ -495,8 +530,8 @@ export default function PartialBatchReversalPage() {
                         <th className="py-2 px-3"></th>
                         <th className="text-left py-2 px-3 text-[10px] uppercase text-slate-500">PM Material</th>
                         <th className="text-left py-2 px-3 text-[10px] uppercase text-slate-500">Returns To</th>
-                        <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Qty</th>
-                        <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Proportional Reversal</th>
+                        <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Used in this Packing PO</th>
+                        <th className="text-right py-2 px-3 text-[10px] uppercase text-slate-500">Return Qty</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -512,12 +547,32 @@ export default function PartialBatchReversalPage() {
                           <td className="py-2 px-3">{materialLabel(line.material)}</td>
                           <td className="py-2 px-3 font-mono">{storageLocationLabel(line.storage_location)}</td>
                           <td className="py-2 px-3 text-right font-mono">{fmt(line.qty)}</td>
-                          <td className="py-2 px-3 text-right font-mono">{fmt(line.proportional_qty)}</td>
+                          <td className="py-2 px-3 text-right">
+                            <input
+                              type="number"
+                              min="0"
+                              step={line.is_discrete ? "1" : "0.001"}
+                              max={line.max_qty}
+                              disabled={pmExclusions.has(line.packing_order_line_id)}
+                              value={pmQtyFor(line)}
+                              onChange={(e) => setPmQtyOverrides((prev) => ({ ...prev, [line.packing_order_line_id]: e.target.value }))}
+                              className="h-8 w-24 rounded border border-slate-300 px-2 text-right font-mono text-sm disabled:bg-slate-100"
+                            />
+                            {!pmExclusions.has(line.packing_order_line_id) && pmQtyProblem(line) ? (
+                              <div className="text-[10px] text-rose-600">{pmQtyProblem(line)}</div>
+                            ) : null}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
                   </table>
-                  <p className="px-3 py-2 text-[11px] text-slate-500">Uncheck a PM line if that packaging is single-use / already consumed and should not be returned to stock.</p>
+                  <p className="px-3 py-2 text-[11px] text-slate-500">
+                    Counted packaging (barrels, labels...) is returned in <strong>whole numbers</strong> — only the packs that are fully emptied.
+                    {detailQ.data.pm_mode === "FIXED_FILL"
+                      ? ` For ${fmt(parsedReverseQty)} KG that is ${detailQ.data.pm_packs_default} of ${detailQ.data.pm_total_packs} packs (the rest stays in a part-filled pack); change the quantity if you emptied a different number of barrels.`
+                      : ` A single container (tanker / IBC) is returned only once it is completely emptied: ${detailQ.data.pm_packs_default > 0 ? "this reversal empties it." : "not emptied by this reversal, so nothing yet."}`}
+                    {" "}Uncheck a PM line if that packaging is single-use / already consumed and should not be returned to stock.
+                  </p>
                 </div>
               ) : null}
             </>

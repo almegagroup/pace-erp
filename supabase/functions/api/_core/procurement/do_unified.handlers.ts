@@ -1051,6 +1051,7 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
     const allocationUsedInThisSubmission = new Map<string, number>();
     const directSoUsedInThisSubmission = new Map<string, number>();
     const stoUsedInThisSubmission = new Map<string, number>();
+    const stoPackUnitCache = new Map<string, StoPackUnit | null>();
     const stockUsedInThisSubmission = new Map<string, number>();
 
     // SO ids referenced (directly or via an allocation) + STO ids, for the
@@ -1204,13 +1205,18 @@ async function prepareAndValidateDoLines(companyId: string, rawLines: JsonRecord
         const sourceLine = stoLineMap.get(stoLineId);
         if (!sourceLine) throw new Error("DO_SOURCE_LINE_NOT_FOUND");
         // STO commercial values use the same base-UOM snapshot as SO lines.
-        // FG STO: invoice/DO rate = transfer price + AC04 conversion cost (NULL on RM/PM/INT lines).
+        // The sender's DO / invoice rate is the transfer price the user entered, nothing more. The AC04
+        // conversion cost (conversion_cost_per_unit) belongs to the RECEIVER's valuation only (GRN).
+        materialId = toTrimmedString(sourceLine.material_id);
+        // DEPENDENT-free but sequential on purpose: a handful of DO lines, each material resolved once (cached).
+        const stoPackUnit = await resolveStoPackUnit(materialId, stoPackUnitCache);
         salesSourceLine = {
           ...sourceLine,
-          rate: Number((Number(sourceLine.transfer_price ?? 0) + Number(sourceLine.conversion_cost_per_unit ?? 0)).toFixed(6)),
+          rate: Number(Number(sourceLine.transfer_price ?? 0).toFixed(6)),
           rate_basis: "BASE_UOM",
+          per_pack_qty: stoPackUnit?.perPackQty ?? null,
+          pack_uom_code: stoPackUnit?.packUomCode ?? null,
         };
-        materialId = toTrimmedString(sourceLine.material_id);
         uomCode = toTrimmedString(sourceLine.uom_code);
         remaining = Number(sourceLine.quantity ?? 0) - (drawnByStoLine.get(stoLineId) ?? 0) - (stoUsedInThisSubmission.get(stoLineId) ?? 0);
         sourceType = "STO";
@@ -1859,6 +1865,37 @@ export async function getDeliveryOrderUnifiedHandler(req: Request, ctx: Procurem
 //     share one Ship-To per SO, so "per delivery address" collapses to one
 //     bucket here).
 //   - SO and STO never merge into the same invoice.
+
+// An STO line is stored in the material's BASE unit (KG). The business verifies a dispatch in the pack unit
+// (1450 BAG), so every STO DO line also freezes its pack quantity + pack UoM. The pack unit is the material's
+// fixed (non-variable) conversion row to its base UoM; when the SKU has more than one, the one matching its
+// pack code's outer (dispatch) UoM wins, and an ambiguous SKU simply gets no pack figures (never a guess).
+type StoPackUnit = { perPackQty: number; packUomCode: string };
+async function resolveStoPackUnit(materialId: string, cache: Map<string, StoPackUnit | null>): Promise<StoPackUnit | null> {
+  if (cache.has(materialId)) return cache.get(materialId) ?? null;
+  const { data: material } = await serviceRoleClient.schema("erp_master").from("material_master")
+    .select("base_uom_code, pack_code").eq("id", materialId).maybeSingle();
+  const baseUom = toTrimmedString((material as JsonRecord | null)?.base_uom_code);
+  const { data: conversions } = baseUom
+    ? await serviceRoleClient.schema("erp_master").from("material_uom_conversion")
+        .select("from_uom_code, to_uom_code, conversion_factor, variable_conversion").eq("material_id", materialId)
+    : { data: [] as JsonRecord[] };
+  const usable = ((conversions ?? []) as JsonRecord[]).filter((row) =>
+    toTrimmedString(row.to_uom_code) === baseUom && toTrimmedString(row.from_uom_code) !== baseUom
+    && row.variable_conversion !== true && Number(row.conversion_factor) > 0);
+  let chosen: JsonRecord | null = usable.length === 1 ? usable[0] : null;
+  if (!chosen && usable.length > 1) {
+    const packCode = toTrimmedString((material as JsonRecord | null)?.pack_code);
+    const { data: pack } = packCode
+      ? await serviceRoleClient.schema("erp_production").from("pack_code_master").select("outer_uom_code").eq("pack_code", packCode).maybeSingle()
+      : { data: null };
+    const outer = toTrimmedString((pack as JsonRecord | null)?.outer_uom_code);
+    chosen = usable.find((row) => toTrimmedString(row.from_uom_code) === outer) ?? null;
+  }
+  const result = chosen ? { perPackQty: Number(chosen.conversion_factor), packUomCode: toTrimmedString(chosen.from_uom_code) } : null;
+  cache.set(materialId, result);
+  return result;
+}
 
 export async function canMaintainSalesInvoice(ctx: ProcurementHandlerContext, companyId: string, actionCode: "VIEW" | "WRITE" | "EDIT" = "WRITE"): Promise<boolean> {
   if (ctx.context.isAdmin) return true;

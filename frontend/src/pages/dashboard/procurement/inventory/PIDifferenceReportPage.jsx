@@ -11,10 +11,12 @@
  * virtualized + range-select for Excel-like navigation, Export Excel, saved column layouts
  * reusing the same erp_inventory.report_column_layout mechanism IN02 built first).
  */
-import { useMemo, useState } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMemo, useState, useCallback } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
+import { layoutDrawerProps, useColumnLayouts } from "../../../../shared/columnLayouts/useColumnLayouts.js";
+import { pushToast } from "../../../../store/uiToast.js";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import MultiValueFilterField from "../../../../components/inputs/MultiValueFilterField.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
@@ -31,13 +33,9 @@ import { openScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
 import { downloadCsvFile } from "../../../../shared/downloadTabularFile.js";
 import {
-  createReportLayout,
-  deleteReportLayout,
   listPIDifferences,
-  listReportLayouts,
   searchPIBatchNumbers,
   searchPIDocumentNumbers,
-  setDefaultReportLayout,
 } from "../procurementApi.js";
 
 const REPORT_CODE = "MI20";
@@ -64,10 +62,6 @@ function toneForDifference(value) {
 
 function joinSelectedValues(entries) {
   return (Array.isArray(entries) ? entries : []).map((entry) => entry.value).filter(Boolean).join(",");
-}
-
-function findLayout(layouts, layoutId) {
-  return layouts.find((layout) => layout.id === layoutId) || null;
 }
 
 const COLUMN_DEFINITIONS = [
@@ -133,12 +127,6 @@ const COLUMN_DEFINITIONS = [
 ];
 const DEFAULT_VISIBLE_COLUMNS = COLUMN_DEFINITIONS.map((column) => column.key);
 
-function normalizeVisibleColumnKeys(candidateKeys) {
-  const allowedKeys = new Set(DEFAULT_VISIBLE_COLUMNS);
-  const normalized = (Array.isArray(candidateKeys) ? candidateKeys : []).filter((key) => allowedKeys.has(key));
-  return normalized.length > 0 ? normalized : DEFAULT_VISIBLE_COLUMNS;
-}
-
 // Business owner ask (2026-09-03) — reuses copyValue when present so a
 // JSX-rendered cell still filters against plain text.
 function getColumnFilterText(column, row) {
@@ -149,9 +137,7 @@ function getColumnFilterText(column, row) {
 
 export default function PIDifferenceReportPage() {
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
   const { runtimeContext } = useMenu();
-  const canSaveGlobalLayout = runtimeContext?.roleCode === "SA" || runtimeContext?.roleCode === "GA";
 
   const [companyId, setCompanyId] = useState("");
   const effectiveCompanyId = companyId || resolveDefaultTransactionCompanyId(runtimeContext);
@@ -201,18 +187,6 @@ export default function PIDifferenceReportPage() {
   const [notice, setNotice] = useState("");
   const [page, setPage] = useState(1);
   const [columnsOpen, setColumnsOpen] = useState(false);
-  const [activeLayoutId, setActiveLayoutId] = useState("");
-  const [visibleColumns, setVisibleColumns] = useState(DEFAULT_VISIBLE_COLUMNS);
-  const [columnSelectionTouched, setColumnSelectionTouched] = useState(false);
-
-  const layoutsQuery = useQuery({
-    queryKey: ["procurement-report-layouts", REPORT_CODE],
-    queryFn: () => listReportLayouts({ report_code: REPORT_CODE }),
-    select: (result) => ({
-      layouts: Array.isArray(result?.data) ? result.data : [],
-      defaultLayoutId: result?.default_layout_id ?? "",
-    }),
-  });
 
   const reportQuery = useQuery({
     queryKey: ["procurement-pi-differences", submittedFilters],
@@ -223,29 +197,14 @@ export default function PIDifferenceReportPage() {
   const rows = useMemo(() => (Array.isArray(reportQuery.data) ? reportQuery.data : []), [reportQuery.data]);
   const activeError = error || (reportQuery.error instanceof Error ? reportQuery.error.message : "");
 
-  const layoutOptions = useMemo(
-    () => (layoutsQuery.data?.layouts ?? []).map((layout) => ({
-      id: layout.id,
-      label: `${layout.scope === "GLOBAL" ? "Global" : "User"} — ${layout.layout_name}`,
-      scope: layout.scope,
-      visible_columns: layout.visible_columns,
-    })),
-    [layoutsQuery.data],
+  // Common column picker: visibility + order, up to 3 saved layouts per user for this page.
+  const pickerColumns = useMemo(
+    () => COLUMN_DEFINITIONS.map((column) => ({ ...column, defaultHidden: !DEFAULT_VISIBLE_COLUMNS.includes(column.key) })),
+    [],
   );
-
-  const gridColumns = useMemo(
-    () => COLUMN_DEFINITIONS.filter((column) => {
-      const activeLayout = findLayout(layoutsQuery.data?.layouts ?? [], activeLayoutId);
-      const defaultLayout = findLayout(layoutsQuery.data?.layouts ?? [], layoutsQuery.data?.defaultLayoutId ?? "");
-      const effectiveVisibleColumns = activeLayout
-        ? normalizeVisibleColumnKeys(activeLayout.visible_columns)
-        : columnSelectionTouched
-          ? visibleColumns
-          : normalizeVisibleColumnKeys(defaultLayout?.visible_columns ?? visibleColumns);
-      return effectiveVisibleColumns.includes(column.key);
-    }),
-    [activeLayoutId, columnSelectionTouched, layoutsQuery.data, visibleColumns],
-  );
+  const layoutMessage = useCallback((message, tone) => pushToast({ message, tone }), []);
+  const layout = useColumnLayouts("MI20", pickerColumns, layoutMessage);
+  const gridColumns = layout.columns;
 
   useErpScreenHotkeys({
     refresh: { disabled: reportQuery.isFetching, perform: () => void handleSearch() },
@@ -283,66 +242,6 @@ export default function PIDifferenceReportPage() {
     }
     setSubmittedFilters(nextParams);
     setPage(2);
-  }
-
-  function handleApplyLayout(layoutId) {
-    setActiveLayoutId(layoutId);
-    setColumnSelectionTouched(false);
-    if (!layoutId) {
-      const defaultLayout = findLayout(layoutsQuery.data?.layouts ?? [], layoutsQuery.data?.defaultLayoutId ?? "");
-      setVisibleColumns(normalizeVisibleColumnKeys(defaultLayout?.visible_columns ?? DEFAULT_VISIBLE_COLUMNS));
-      return;
-    }
-    const layout = findLayout(layoutsQuery.data?.layouts ?? [], layoutId);
-    setVisibleColumns(normalizeVisibleColumnKeys(layout?.visible_columns ?? DEFAULT_VISIBLE_COLUMNS));
-  }
-
-  async function handleSaveCurrentAs() {
-    const layoutName = window.prompt("Layout name");
-    if (!layoutName || !layoutName.trim()) return;
-    const scope = canSaveGlobalLayout && window.confirm("Save as Global layout?\nPress OK for Global, Cancel for User.")
-      ? "GLOBAL"
-      : "USER";
-    try {
-      setError("");
-      setNotice("");
-      await createReportLayout({ report_code: REPORT_CODE, scope, layout_name: layoutName.trim(), visible_columns: visibleColumns });
-      await queryClient.invalidateQueries({ queryKey: ["procurement-report-layouts", REPORT_CODE] });
-      setNotice("Layout saved.");
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "REPORT_LAYOUT_CREATE_FAILED");
-    }
-  }
-
-  async function handleSetDefaultLayout() {
-    if (!activeLayoutId) {
-      setError("Select a saved layout first.");
-      return;
-    }
-    try {
-      setError("");
-      setNotice("");
-      await setDefaultReportLayout(activeLayoutId);
-      await queryClient.invalidateQueries({ queryKey: ["procurement-report-layouts", REPORT_CODE] });
-      setNotice("Default layout updated.");
-    } catch (setDefaultError) {
-      setError(setDefaultError instanceof Error ? setDefaultError.message : "REPORT_LAYOUT_DEFAULT_SET_FAILED");
-    }
-  }
-
-  async function handleDeleteLayout(layoutId) {
-    if (!layoutId || !window.confirm("Delete this saved layout?")) return;
-    try {
-      setError("");
-      setNotice("");
-      await deleteReportLayout(layoutId);
-      setActiveLayoutId("");
-      setColumnSelectionTouched(false);
-      await queryClient.invalidateQueries({ queryKey: ["procurement-report-layouts", REPORT_CODE] });
-      setNotice("Layout deleted.");
-    } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "REPORT_LAYOUT_DELETE_FAILED");
-    }
   }
 
   const gainCount = rows.filter((row) => Number(row.difference_qty) > 0).length;
@@ -544,30 +443,7 @@ export default function PIDifferenceReportPage() {
 
       <ErpColumnVisibilityDrawer
         visible={columnsOpen}
-        columns={COLUMN_DEFINITIONS}
-        visibleColumnKeys={visibleColumns}
-        layoutOptions={layoutOptions}
-        activeLayoutId={activeLayoutId}
-        defaultLayoutId={layoutsQuery.data?.defaultLayoutId ?? ""}
-        onSelectLayout={handleApplyLayout}
-        onSaveCurrentAs={handleSaveCurrentAs}
-        onSetDefaultLayout={handleSetDefaultLayout}
-        onDeleteLayout={handleDeleteLayout}
-        onToggleColumn={(columnKey) =>
-          setVisibleColumns((current) => {
-            setActiveLayoutId("");
-            setColumnSelectionTouched(true);
-            if (current.includes(columnKey)) {
-              return current.length === 1 ? current : current.filter((entry) => entry !== columnKey);
-            }
-            return [...current, columnKey];
-          })
-        }
-        onResetColumns={() => {
-          setActiveLayoutId("");
-          setColumnSelectionTouched(false);
-          setVisibleColumns(DEFAULT_VISIBLE_COLUMNS);
-        }}
+        {...layoutDrawerProps(layout)}
         onClose={() => setColumnsOpen(false)}
       />
     </ErpScreenScaffold>
