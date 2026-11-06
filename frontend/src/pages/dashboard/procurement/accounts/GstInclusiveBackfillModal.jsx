@@ -57,7 +57,7 @@ export default function GstInclusiveBackfillModal({ visible, onClose }) {
     <ModalBase
       visible={visible}
       eyebrow="AC01"
-      title="GST-inclusive GRN correction"
+      title="GRN stock-value correction"
       onEscape={onClose}
       actions={(
         <>
@@ -70,8 +70,10 @@ export default function GstInclusiveBackfillModal({ visible, onClose }) {
     >
       <div className="grid gap-3 text-sm text-slate-700">
         <p>
-          GRNs received against a GST-<b>inclusive</b> PO were valued at the PO rate with the GST still inside it, and AC01 then added GST again.
-          Check lists what would change; Apply corrects one material at a time (its stock value and every SFG/FG cost built on it). Safe to repeat.
+          Lists GRNs whose stock was valued at a rate that is not their real commercial rate: (1) received against a GST-<b>inclusive</b> PO
+          with the GST still inside the rate (AC01 then added GST again), and (2) invoice-later Bulk GRNs whose rate was set after the stock
+          had already left Quality Inspection. Check shows what would change; Apply corrects one material at a time (its stock value and
+          every SFG/FG cost built on it). Safe to repeat. A GRN that carries AC01 landed cost is skipped - re-save it in AC01.
         </p>
         {error ? <p className="border border-rose-200 bg-rose-50 px-3 py-2 text-rose-800">{error}</p> : null}
         {plan && materials.length === 0 ? <p className="border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-800">Nothing left to correct.</p> : null}

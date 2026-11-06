@@ -963,7 +963,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         title={readOnly ? "AC03 · Landed Costs (View)" : "AC01 · Invoice Verifications"}
         notices={error ? [{ key: "ac01-error", tone: "error", message: error }] : []}
         actions={[
-          ...(!readOnly ? [{ key: "gst-inclusive-backfill", label: "GST-inclusive Correction", onClick: () => setShowGstBackfill(true) }] : []),
+          ...(!readOnly ? [{ key: "gst-inclusive-backfill", label: "GRN Stock-value Correction", onClick: () => setShowGstBackfill(true) }] : []),
           ...(!readOnly ? [{
             key: "bulk-component-map",
             label: "Bulk Component Map",

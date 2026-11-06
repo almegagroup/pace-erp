@@ -2086,8 +2086,17 @@ export async function mapGrnInvoiceHandler(
         results.push({ grn_id: grn.id, ok: true, recalculated: false });
         continue;
       }
+      // The invoice rate is per the GRN's transaction UoM (e.g. per MT) while the receipt leg lives in the base
+      // UoM (KG): passing 15825 per MT as "per KG" valued the stock 1000x too high (found live 2026-11-02, GRN
+      // Invoice Mapping on a White Cement JK MT receipt). Divide by the base quantity per transaction unit,
+      // taken from the leg itself so it matches exactly what the receipt posted (1 when GRN UoM = base UoM).
+      const { data: receiptLeg } = await serviceRoleClient.schema("erp_inventory").from("stock_ledger")
+        .select("quantity").eq("id", ledgerId).maybeSingle();
+      const receivedQty = Number(grn.received_qty ?? 0);
+      const legQty = Number(receiptLeg?.quantity ?? 0);
+      const baseUnitFactor = receivedQty > 0 && legQty > 0 ? legQty / receivedQty : 1;
       const cascadeResults = await cascadeRecalculate(
-        [{ ledgerId, newRate: invoiceRate }],
+        [{ ledgerId, newRate: invoiceRate / baseUnitFactor }],
         ctx.auth_user_id,
         `GRN Invoice Mapping — ${invoiceNumber}`,
       );
