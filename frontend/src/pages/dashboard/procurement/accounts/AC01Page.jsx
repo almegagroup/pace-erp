@@ -637,6 +637,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   const columns = useMemo(() => buildColumns(components), [components]);
 
   const [exporting, setExporting] = useState(false);
+  // Rows the grid shows after its own header (Excel-style) filters -- Export Excel uses exactly these.
+  const [shownRows, setShownRows] = useState(null);
   async function handleExportExcel() {
     setExporting(true);
     try {
@@ -648,7 +650,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         fileName: `${readOnly ? "ac03_landed_costs" : "ac01_grn_landed_cost"}_${dateFrom || "from"}_${dateTo || "to"}.xlsx`,
         sheetName: readOnly ? "AC03 Landed Costs" : "AC01 GRN Landed Cost",
         columns,
-        rows,
+        rows: shownRows ?? rows,
         getCellValue: (row, column) =>
           typeof column.excelValue === "function" ? column.excelValue(row)
             : typeof column.copyValue === "function" ? column.copyValue(row) : (row?.[column.key] ?? ""),
@@ -935,7 +937,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
             key: "export",
             label: exporting ? "Exporting..." : "Export Excel",
             onClick: () => void handleExportExcel(),
-            disabled: exporting || rows.length === 0,
+            disabled: exporting || (shownRows ?? rows).length === 0,
           },
         ]}
         filterSection={{
@@ -998,6 +1000,8 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
               onRowActivate={openDrawer}
               rangeSelect
               virtualize
+              columnFilter
+              onFilteredRowsChange={setShownRows}
               emptyMessage={listQuery.isLoading ? "Loading GRNs..." : "No GRNs matched the current filter."}
               getRowProps={(row) => (
                 row.is_editable_for_viewer === false
