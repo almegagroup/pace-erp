@@ -1620,6 +1620,12 @@ export function postOpeningStockDocument(id) {
   return fetchProcurement("POST", `/api/procurement/opening-stock/${encodeURIComponent(id)}/post`);
 }
 
+// One-time correction of GRNs posted against GST-inclusive POs: { apply?, material_id?, reason? }. Returns the whole payload
+// ({ data: ... } is unwrapped by fetchProcurement to the inner object here, which has no `total`).
+export function grnGstInclusiveBackfill(payload) {
+  return fetchProcurement("POST", "/api/procurement/grn-gst-inclusive-backfill", payload);
+}
+
 export function recalculateValuation(data) {
   return fetchProcurement("POST", "/api/procurement/opening-stock/recalculate-valuation", data);
 }

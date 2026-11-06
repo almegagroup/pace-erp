@@ -17,6 +17,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import DrawerBase from "../../../../components/layer/DrawerBase.jsx";
 import ModalBase from "../../../../components/layer/ModalBase.jsx";
+import GstInclusiveBackfillModal from "./GstInclusiveBackfillModal.jsx";
 import ErpMasterListTemplate from "../../../../components/templates/ErpMasterListTemplate.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
@@ -537,6 +538,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
   const [rateStatus, setRateStatus] = useState("");
   // A SPLIT source GRN repeats the same qty and landed cost as its invoice GRNs, so it is hidden by default (totals and Excel stay single).
   const [showSplitSources, setShowSplitSources] = useState(false);
+  const [showGstBackfill, setShowGstBackfill] = useState(false);
   const [selectedGrnId, setSelectedGrnId] = useState(initialGrnId);
   const [drawerOpen, setDrawerOpen] = useState(Boolean(initialGrnId));
   const [draft, setDraft] = useState(null);
@@ -920,6 +922,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
         title={readOnly ? "AC03 · Landed Costs (View)" : "AC01 · Invoice Verifications"}
         notices={error ? [{ key: "ac01-error", tone: "error", message: error }] : []}
         actions={[
+          ...(!readOnly ? [{ key: "gst-inclusive-backfill", label: "GST-inclusive Correction", onClick: () => setShowGstBackfill(true) }] : []),
           ...(!readOnly ? [{
             key: "bulk-component-map",
             label: "Bulk Component Map",
@@ -1573,6 +1576,7 @@ export default function AC01Page({ readOnly = false, initialGrnId = null }) {
           </div>
         )}
       </DrawerBase>
+      <GstInclusiveBackfillModal visible={showGstBackfill} onClose={() => setShowGstBackfill(false)} />
       <ModalBase
         visible={gstCorrectionReasonOpen}
         eyebrow="AC01 · GST Correction"
