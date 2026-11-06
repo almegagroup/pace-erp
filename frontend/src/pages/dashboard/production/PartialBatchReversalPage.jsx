@@ -463,10 +463,10 @@ export default function PartialBatchReversalPage() {
               onChange={setSalvageBatchNumber}
               options={(salvageBatchesQ.data ?? []).map((po) => ({
                 value: po.batch_number,
-                label: `${po.batch_number} (${po.po_number}, ${po.status})`,
+                label: `${po.batch_number} (${po.po_number}, ${po.status})${po.same_prodshade ? " · same prodshade" : po.prodshade_label ? ` · ${po.prodshade_label}` : ""}`,
               }))}
               placeholder="-- None --"
-              emptyStateLabel={salvageBatchesQ.isLoading ? "Loading..." : "No other batches for this prodshade yet"}
+              emptyStateLabel={salvageBatchesQ.isLoading ? "Loading..." : "No other started or verified batch of this PO type"}
             />
           </div>
 

@@ -704,21 +704,43 @@ export async function listSalvageBatchOptionsHandler(req: Request, ctx: ProdHand
     // been Verified (the normal end state), the list always went empty and
     // there was no way to reference which batch the salvage was actually
     // meant for. VERIFIED batches are now included alongside BATCH_STARTED.
+    // Found live 2026-11-06 (CMP006, batch BM05911): this used to be limited to OTHER batches of the SAME
+    // prodshade, so a prodshade with a single batch (1 of 389 MTO batches) got an empty dropdown and the
+    // tag could never be set. The tag is a free traceability reference, so any batch of the same company
+    // and PO type is offered; same-prodshade batches are listed first and flagged.
     let query = serviceRoleClient
       .schema("erp_production")
       .from("process_order")
-      .select("id, po_number, batch_number, status, created_at")
+      .select("id, po_number, batch_number, status, created_at, material_id")
       .eq("company_id", companyId)
       .eq("po_type", poType)
-      .eq("material_id", prodshadeMaterialId)
+      .not("batch_number", "is", null)
       .in("status", ["BATCH_STARTED", "VERIFIED"])
       .order("created_at", { ascending: false })
-      .limit(100);
+      .limit(300);
     if (excludeProcessOrderId) query = query.neq("id", excludeProcessOrderId);
     const { data, error } = await query;
     if (error) throw new Error("PR19_SALVAGE_LOOKUP_FAILED");
 
-    return okResponse({ data: data ?? [] }, ctx.request_id, req);
+    const batchRows = (data ?? []) as JsonRecord[];
+    const materialMap = await getMaterialMapByIds(
+      [...new Set(batchRows.map((row) => String(row.material_id ?? "")).filter(Boolean))],
+      "id, pace_code, material_name",
+    );
+    const items = batchRows.map((row) => {
+      const material = materialMap.get(String(row.material_id ?? ""));
+      return {
+        id: row.id,
+        po_number: row.po_number,
+        batch_number: row.batch_number,
+        status: row.status,
+        created_at: row.created_at,
+        same_prodshade: String(row.material_id ?? "") === prodshadeMaterialId,
+        prodshade_label: [material?.pace_code, material?.material_name].filter(Boolean).join(" — ") || null,
+      };
+    }).sort((left, right) => Number(right.same_prodshade) - Number(left.same_prodshade));
+
+    return okResponse({ data: items }, ctx.request_id, req);
   } catch (err) {
     const code = err instanceof Error ? err.message : "PR19_SALVAGE_LOOKUP_FAILED";
     return prErr(req, ctx, code, code === "PR19_INVALID" ? 400 : 500, "Salvage batch lookup failed");
@@ -1203,8 +1225,8 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
     const sfgSlocId = toTrimmedString((stroke as JsonRecord | null)?.default_storage_location_id);
     if (!sfgSlocId) return prErr(req, ctx, "PR19_CREATE_FAILED", 422, "Stroke has no default storage location");
 
-    // Salvage batch (optional) — traceability tag only, must be BATCH_STARTED
-    // (not yet FINAL), same PO type/prodshade family.
+    // Salvage batch (optional) — traceability tag only, must be BATCH_STARTED or VERIFIED, same company
+    // and PO type (any prodshade -- see listSalvageBatchOptionsHandler), and never the batch being reversed.
     let salvageProcessOrderId: string | null = null;
     if (salvageBatchNumber) {
       const { data: salvagePo, error: salvageErr } = await serviceRoleClient
@@ -1213,8 +1235,9 @@ export async function createPartialBatchReversalHandler(req: Request, ctx: ProdH
         .select("id, status")
         .eq("company_id", companyId)
         .eq("po_type", String(poData.po_type ?? ""))
-        .eq("material_id", String(poData.material_id ?? ""))
         .eq("batch_number", salvageBatchNumber)
+        .neq("id", String(poData.id ?? ""))
+        .limit(1)
         .maybeSingle();
       if (salvageErr) throw new Error("PR19_CREATE_FAILED");
       const salvageStatus = (salvagePo as JsonRecord | null)?.status;
