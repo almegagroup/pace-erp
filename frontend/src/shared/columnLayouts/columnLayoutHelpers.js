@@ -11,22 +11,22 @@ export function pickableColumns(columns, alwaysVisible = (c) => c.group === "ide
 }
 
 /** Saved list -> keys to hide. A key that is not in the saved list but exists in `columns` was added after the layout was saved: shown. */
-export function hiddenFromSaved(savedVisible, columns, knownAtSave = null) {
+export function hiddenFromSaved(savedVisible, columns, knownAtSave = null, alwaysVisible = undefined) {
   if (!Array.isArray(savedVisible)) return new Set();
   const saved = new Set(savedVisible);
   const known = knownAtSave ? new Set(knownAtSave) : null;
   const hidden = new Set();
-  for (const c of pickableColumns(columns)) if (!saved.has(c.key) && (!known || known.has(c.key))) hidden.add(c.key);
+  for (const c of pickableColumns(columns, alwaysVisible)) if (!saved.has(c.key) && (!known || known.has(c.key))) hidden.add(c.key);
   return hidden;
 }
 
-export function visibleKeys(columns, hidden) {
-  return pickableColumns(columns).map((c) => c.key).filter((key) => !hidden.has(key));
+export function visibleKeys(columns, hidden, alwaysVisible = undefined) {
+  return pickableColumns(columns, alwaysVisible).map((c) => c.key).filter((key) => !hidden.has(key));
 }
 
 /** Columns the grid and the Excel show. */
-export function applyHidden(columns, hidden) {
-  const pickable = new Set(pickableColumns(columns).map((c) => c.key));
+export function applyHidden(columns, hidden, alwaysVisible = undefined) {
+  const pickable = new Set(pickableColumns(columns, alwaysVisible).map((c) => c.key));
   return columns.filter((c) => !pickable.has(c.key) || !hidden.has(c.key));
 }
 
@@ -37,16 +37,16 @@ export function toggleHidden(hidden, key) {
 }
 
 /** Default order of the pickable columns (as the report defines them). */
-export function defaultOrderKeys(columns) {
-  return pickableColumns(columns).map((c) => c.key);
+export function defaultOrderKeys(columns, alwaysVisible = undefined) {
+  return pickableColumns(columns, alwaysVisible).map((c) => c.key);
 }
 
 /**
  * Full pickable order for a saved layout: its saved keys first, in the saved order, then every other pickable
  * column (hidden by that layout, or added later) in the report's own order. Saved keys that no longer exist are dropped.
  */
-export function orderFromSaved(savedVisible, columns) {
-  const base = defaultOrderKeys(columns);
+export function orderFromSaved(savedVisible, columns, alwaysVisible = undefined) {
+  const base = defaultOrderKeys(columns, alwaysVisible);
   if (!Array.isArray(savedVisible)) return base;
   const exists = new Set(base);
   const first = [];
@@ -58,9 +58,9 @@ export function orderFromSaved(savedVisible, columns) {
  * Re-order the pickable columns without disturbing the always-visible ones: the pickable columns fill the slots
  * the pickable columns originally occupied, in `orderKeys` order. A pickable column missing from `orderKeys` (added later) goes last.
  */
-export function applyOrder(columns, orderKeys) {
+export function applyOrder(columns, orderKeys, alwaysVisible = undefined) {
   if (!Array.isArray(orderKeys) || orderKeys.length === 0) return columns;
-  const pickableSet = new Set(pickableColumns(columns).map((c) => c.key));
+  const pickableSet = new Set(pickableColumns(columns, alwaysVisible).map((c) => c.key));
   const byKey = new Map(columns.filter((c) => pickableSet.has(c.key)).map((c) => [c.key, c]));
   const sequence = [];
   for (const key of orderKeys) if (byKey.has(key)) sequence.push(byKey.get(key));
@@ -82,6 +82,6 @@ export function moveKey(orderKeys, hidden, key, delta) {
 }
 
 /** Keys hidden when the user has no layout (columns flagged `defaultHidden: true`). */
-export function defaultHiddenKeys(columns) {
-  return new Set(pickableColumns(columns).filter((c) => c.defaultHidden === true).map((c) => c.key));
+export function defaultHiddenKeys(columns, alwaysVisible = undefined) {
+  return new Set(pickableColumns(columns, alwaysVisible).filter((c) => c.defaultHidden === true).map((c) => c.key));
 }
