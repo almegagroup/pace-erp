@@ -929,7 +929,7 @@ export default function PlanFeedPage() {
     { key: "priority_date", label: "Priority Date", width: "100px", render: (r) => r.priority_date || "--" },
     { key: "priority_number", label: "Priority #", width: "80px", align: "right", copyValue: (r) => r.priority_number ?? "--", excelValue: (r) => (r.priority_number ?? "") === "" ? "" : Number(r.priority_number), render: (r) => <span className="font-mono">{r.priority_number ?? "--"}</span> },
     { key: "order_serial_number", label: "Order Serial No.", width: "100px", render: (r) => <span className="font-mono">{r.order_serial_number || "--"}</span> },
-    { key: "fo_number", pinned: true, label: "FO #", width: "100px", render: (r) => <span className="font-mono font-semibold text-sky-700">{r.fo_number || "--"}</span> },
+    { key: "fo_number", label: "FO #", width: "100px", render: (r) => <span className="font-mono font-semibold text-sky-700">{r.fo_number || "--"}</span> },
     { key: "order_date", label: "Order Date", width: "95px" },
     { key: "original_fo_number", label: "Original FO #", width: "110px", render: (r) => <span className="font-mono">{r.original_fo_number || r.fo_number || "--"}</span> },
     // business owner, 2026-09-26 (main) -- the backend already returns
