@@ -109,6 +109,21 @@ function StatusChips({ selected, onToggle, statuses, colors }) {
   );
 }
 
+// Both list endpoints are paginated (max 100/page, packing defaults to 20).
+// The page filters/searches client-side, so it must hold the full list --
+// otherwise older orders silently vanish from the screen.
+async function fetchAllPages(fetchPage, params) {
+  const rows = [];
+  for (let page = 1; page <= 50; page += 1) {
+    const res = await fetchPage({ ...params, page, per_page: 100 });
+    if (Array.isArray(res)) return res;
+    rows.push(...(res?.data ?? []));
+    const totalPages = Number(res?.pagination?.total_pages ?? 1);
+    if (page >= totalPages) break;
+  }
+  return rows;
+}
+
 export default function OrderListPage() {
   const [activeTab, setActiveTab] = useState(0);
   const [companyId, setCompanyId] = useState("");
@@ -129,10 +144,9 @@ export default function OrderListPage() {
 
   const processQ = useQuery({
     queryKey: ["process-orders", effectiveCompanyId, processStatus],
-    queryFn: () => listProcessOrders({
+    queryFn: () => fetchAllPages(listProcessOrders, {
       company_id: effectiveCompanyId || undefined,
       status: processStatus || undefined,
-      per_page: 100,
     }),
     select: (data) => Array.isArray(data) ? data : data?.data ?? [],
     enabled: activeTab === 0 && Boolean(effectiveCompanyId),
@@ -140,7 +154,7 @@ export default function OrderListPage() {
 
   const packingQ = useQuery({
     queryKey: ["packing-orders", effectiveCompanyId, packingStatus],
-    queryFn: () => listPackingOrders({
+    queryFn: () => fetchAllPages(listPackingOrders, {
       company_id: effectiveCompanyId || undefined,
       status: packingStatus || undefined,
     }),
