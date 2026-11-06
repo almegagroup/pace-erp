@@ -8,6 +8,7 @@
 import { useState } from "react";
 import ModalBase from "../../../../components/layer/ModalBase.jsx";
 import { grnGstInclusiveBackfill } from "../procurementApi.js";
+import { openActionConfirm } from "../../../../store/actionConfirm.js";
 
 const money = (value) => Number(value ?? 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -31,7 +32,13 @@ export default function GstInclusiveBackfillModal({ visible, onClose }) {
   }
 
   async function apply(row) {
-    if (!window.confirm(`Correct ${row.grns} GRN(s) of ${row.material}?\nStock value changes by ${money(row.value_change)} and every later SFG/FG cost that used it is recalculated. This takes a while - keep this window open.`)) return;
+    const approved = await openActionConfirm({
+      eyebrow: "GST-Inclusive Correction",
+      title: `Correct ${row.grns} GRN(s)?`,
+      message: `${row.material}\nStock value changes by ${money(row.value_change)} and every later SFG/FG cost that used it is recalculated. This takes a while - keep this window open.`,
+      confirmLabel: "Apply correction",
+    });
+    if (!approved) return;
     setApplyingId(row.material_id);
     setError("");
     try {
