@@ -330,6 +330,11 @@ function riskMatch(row, filter) {
   }
 }
 
+// PO22: every column can be hidden / re-ordered in the picker, except the per-row "Sources" expand button.
+const isFixedRequirementColumn = (column) => column.key === "sources";
+// These were always-visible (not in the picker) until 2026-11-06; layouts saved before that list none of them and must keep showing them.
+const LEGACY_FIXED_REQUIREMENT_KEYS = ["material_name", "material_code", "material_type", "base_uom_code", "priority_score", "reorder_flag", "identifier", "group_cover_note", "user_pack_qty"];
+
 function buildReportColumns(expanded, toggleExpanded, showPackQty, togglePackQty, du) {
   const qtyColumn = (key, label, group, options = {}) => baseQtyColumn(key, label, group, { ...options, du });
   return [
@@ -586,7 +591,7 @@ function ReportTab({ companyId, companyText, planMonth, asOf, demandAt }) {
   const allColumns = useMemo(() => buildReportColumns(expanded, toggleExpanded, showPackQty, togglePackQty, du), [expanded, toggleExpanded, showPackQty, togglePackQty, du]);
   const [columnsOpen, setColumnsOpen] = useState(false);
   const layoutMessage = useCallback((message, tone) => pushToast({ message, tone }), []);
-  const layout = useColumnLayouts("PO22_REQUIREMENT", allColumns, layoutMessage);
+  const layout = useColumnLayouts("PO22_REQUIREMENT", allColumns, layoutMessage, { alwaysVisible: isFixedRequirementColumn, legacyVisibleKeys: LEGACY_FIXED_REQUIREMENT_KEYS });
   // Same list feeds the grid and the Excel: the user's chosen layout, then the quick column-group switches.
   const columns = useMemo(() => layout.columns.filter((c) => c.group === "identity" || !hiddenGroups.has(c.group)), [layout.columns, hiddenGroups]);
   const rows = useMemo(() => (report?.rows ?? [])

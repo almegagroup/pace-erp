@@ -23,7 +23,13 @@ import {
 // A user keeps at most this many personal layouts per page (the backend enforces the same limit).
 export const MAX_USER_LAYOUTS = 3;
 
-export function useColumnLayouts(reportCode, allColumns, onMessage) {
+// `options.legacyVisibleKeys`: columns that used to be fixed (not pickable) before the page opened them up to the picker; a layout saved
+// back then lists none of them, so it is treated as showing them (first, in the page's order) instead of silently hiding them.
+// `options.alwaysVisible(column)` -> true for columns that stay fixed and are not offered in the picker
+// (default: columns with group "identity" or pinned: true). Pass `() => false` to make every column pickable.
+export function useColumnLayouts(reportCode, allColumns, onMessage, options = {}) {
+  const alwaysVisible = options.alwaysVisible;
+  const legacyVisibleKeys = options.legacyVisibleKeys;
   const queryClient = useQueryClient();
   // Set once the user changes something by hand; holds the working copy (hidden set + full pickable order).
   const [touched, setTouched] = useState(null);
@@ -49,19 +55,22 @@ export function useColumnLayouts(reportCode, allColumns, onMessage) {
   const working = useMemo(() => {
     if (touched) return touched;
     if (baseLayout) {
-      return { hidden: hiddenFromSaved(baseLayout.visible_columns, allColumns), order: orderFromSaved(baseLayout.visible_columns, allColumns) };
+      const saved = Array.isArray(baseLayout.visible_columns) ? baseLayout.visible_columns : [];
+      const legacy = (legacyVisibleKeys ?? []).filter((key) => allColumns.some((c) => c.key === key));
+      const effective = legacy.length > 0 && !legacy.some((key) => saved.includes(key)) ? [...legacy, ...saved] : saved;
+      return { hidden: hiddenFromSaved(effective, allColumns, null, alwaysVisible), order: orderFromSaved(effective, allColumns, alwaysVisible) };
     }
-    return { hidden: defaultHiddenKeys(allColumns), order: defaultOrderKeys(allColumns) };
-  }, [touched, baseLayout, allColumns]);
+    return { hidden: defaultHiddenKeys(allColumns, alwaysVisible), order: defaultOrderKeys(allColumns, alwaysVisible) };
+  }, [touched, baseLayout, allColumns, alwaysVisible, legacyVisibleKeys]);
 
-  const columns = useMemo(() => applyOrder(applyHidden(allColumns, working.hidden), working.order), [allColumns, working]);
+  const columns = useMemo(() => applyOrder(applyHidden(allColumns, working.hidden, alwaysVisible), working.order, alwaysVisible), [allColumns, working, alwaysVisible]);
   // Picker list: every pickable column, in the working order (hidden ones included so they can be ticked back on).
   const pickable = useMemo(() => {
-    const byKey = new Map(pickableColumns(allColumns).map((c) => [c.key, c]));
+    const byKey = new Map(pickableColumns(allColumns, alwaysVisible).map((c) => [c.key, c]));
     const ordered = working.order.filter((key) => byKey.has(key)).map((key) => byKey.get(key));
     for (const [key, column] of byKey) if (!working.order.includes(key)) ordered.push(column);
     return ordered;
-  }, [allColumns, working]);
+  }, [allColumns, working, alwaysVisible]);
   const visibleColumnKeys = useMemo(() => pickable.map((c) => c.key).filter((key) => !working.hidden.has(key)), [pickable, working]);
 
   const userLayoutCount = useMemo(() => layouts.filter((l) => l.scope === "USER").length, [layouts]);
@@ -81,9 +90,9 @@ export function useColumnLayouts(reportCode, allColumns, onMessage) {
   }, [working]);
   const selectLayout = useCallback((id) => { setTouched(null); setActiveLayoutId(id); }, []);
   const resetColumns = useCallback(() => {
-    setTouched({ hidden: defaultHiddenKeys(allColumns), order: defaultOrderKeys(allColumns) });
+    setTouched({ hidden: defaultHiddenKeys(allColumns, alwaysVisible), order: defaultOrderKeys(allColumns, alwaysVisible) });
     setActiveLayoutId("");
-  }, [allColumns]);
+  }, [allColumns, alwaysVisible]);
 
   const refresh = useCallback(() => queryClient.invalidateQueries({ queryKey }), [queryClient, queryKey]);
 
