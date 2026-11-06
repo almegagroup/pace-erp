@@ -711,8 +711,15 @@ function buildListRow(
     invoice_rate: grn.invoice_rate,
     confirmed_rate: grn.confirmed_rate,
     rate_confirmed: grn.rate_confirmed,
+    // An INCLUSIVE PO's po_rate carries GST while the invoice rate is the taxable (net) rate, so compare against the
+    // PO rate net of the GRN's GST % (to the 4 decimals the rates are stored in).
     rate_mismatch: grn.invoice_rate != null && grn.po_rate != null
-      && Number(grn.invoice_rate) !== Number(grn.po_rate) && !grn.rate_confirmed,
+      && !grn.rate_confirmed
+      && Number(Number(grn.invoice_rate).toFixed(4)) !== Number(
+        (toUpperTrimmedString(po?.gst_terms) === "INCLUSIVE" && Number(grn.gst_pct ?? 0) > 0
+          ? Number(grn.po_rate) / (1 + Number(grn.gst_pct) / 100)
+          : Number(grn.po_rate)).toFixed(4),
+      ),
     currency: "INR",
     gst_pct: grn.gst_pct,
     taxable_value: Number((effectiveRate * consideredQty).toFixed(4)),
@@ -872,7 +879,7 @@ export async function listAC01GRNsHandler(
           .select("id, company_code, gst_number").in("id", chunk)),
       fetchInChunks<JsonRecord>(poIds, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("purchase_order")
-          .select("id, payment_term_id, freight_term, company_id, crcp_enabled").in("id", chunk)),
+          .select("id, payment_term_id, freight_term, company_id, crcp_enabled, gst_terms").in("id", chunk)),
       fetchInChunks<JsonRecord>(grnIds, (chunk) =>
         serviceRoleClient.schema("erp_procurement").from("landed_cost")
           // itc_owner_company_id added for the "ITC To" column + Settlement
