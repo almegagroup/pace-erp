@@ -999,7 +999,17 @@ export async function createAndPostGRNFromLineHandler(
       return procurementErrorResponse(req, ctx, "GRN_GST_REQUIRED", 400,
         "GST % from the invoice is required. Enter 0 when the invoice is zero-rated.");
     }
-    const effectiveGrnRate = rateConfirmed ? (poRate ?? 0) : 0;
+    // GST basis (business owner 2026-11-06): when the PO rate is GST-INCLUSIVE it already carries the invoice GST %,
+    // so the rate that values stock / feeds AC01 (taxable value, landed cost, payable = net x (1 + GST)) is the NET of
+    // GST -- GST is creditable (ITC), not a cost, and adding it on top again overstated taxable value, GST and
+    // payable by the GST % (e.g. 25 MT x 6000 incl. 18% showed 1,77,000 instead of 1,50,000). `po_rate` keeps the
+    // PO's own (gross) figure. Without a GST % at post time (invoice-later Bulk receipt) the rate cannot be netted
+    // here and stays as quoted.
+    const poGstTerms = toUpperTrimmedString(poData?.gst_terms);
+    const grossGrnRate = rateConfirmed ? (poRate ?? 0) : 0;
+    const effectiveGrnRate = poGstTerms === "INCLUSIVE" && gstPct !== null && gstPct > 0
+      ? Number((grossGrnRate / (1 + gstPct / 100)).toFixed(6))
+      : grossGrnRate;
     // grn_rate is quoted per the PO/transaction UOM (e.g. per PKT) — stock is
     // valued per base UOM (e.g. per NOS), so divide by the same pack factor
     // used to convert stockQty above, or the value posted to stock is wrong
