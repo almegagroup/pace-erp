@@ -242,6 +242,12 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const fam = (plan.schedule_checks ?? []).find((f) => f.member_ids.some((m) => memberIds.includes(m)));
       if (!fam) return null;
       const q = (n: number) => inUnit(fu, n) ?? 0;
+      // Owner 2026-11-07: pro-rata = the level's own planned use per day; shown for today and on every order's landing date.
+      const levelUse = new Map<string, number>();
+      const famDemand = plan._internal.familyInputFor(memberIds[0]);
+      for (const d of famDemand.own_demand) levelUse.set(`OWN|${d.material_id}|${d.required_by}`, (levelUse.get(`OWN|${d.material_id}|${d.required_by}`) ?? 0) + d.qty_base);
+      for (const d of famDemand.group_demand) levelUse.set(`GROUP|${d.group_id}|${d.required_by}`, (levelUse.get(`GROUP|${d.group_id}|${d.required_by}`) ?? 0) + d.qty_base);
+      const proRata = (lv: { level_kind: string; level_id: string }, date: string | null) => (date ? q(levelUse.get(`${lv.level_kind}|${lv.level_id}|${date}`) ?? 0) : null);
       const levelMap = new Map<string, { level_kind: "OWN" | "GROUP"; level_id: string; level_key: string; members: readonly string[] }>();
       for (const d of [...fam.days_a, ...fam.days_b]) for (const l of d.levels) if (!levelMap.has(l.level_key)) levelMap.set(l.level_key, l);
       const levels = [...levelMap.values()].sort((a, b) => (a.level_kind === b.level_kind ? a.members.length - b.members.length || a.level_key.localeCompare(b.level_key) : a.level_kind === "OWN" ? -1 : 1));
@@ -289,6 +295,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           kind: "Stock today", ref: "Opening stock", supplier: lv.members.map(nameOf).join(" + "), status: "On hand", lot_qty: q(openQty), existing_eta: calendar.asOf, engine_eta: calendar.asOf,
           to_level: q(openAlloc), pct: openQty > 0 ? openAlloc / openQty : null, min_a: openState?.minD ?? null, max_a: openState?.maxD ?? null, min_b: openState?.minD ?? null, max_b: openState?.maxD ?? null,
           excess: openState?.excess ?? null, level_status: statusOf(openState, false), reserve_after: openState?.reserve ?? null,
+          prorata_a: proRata(lv, calendar.asOf), prorata_b: proRata(lv, calendar.asOf),
         });
         for (const a of arrivals.filter((x) => lv.members.includes(x.material_id)).sort((x, y) => cmpDay(x.advised, y.advised))) {
           const ev = eventOf(a.reference, a.material_id);
@@ -303,6 +310,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
             engine_eta: a.advised, to_level: q(toLevel), pct: a.qty_base > 0 ? toLevel / a.qty_base : null,
             min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, excess_split: stB?.excess_split ?? null, level_status: statusOf(stB, false), reserve_after: stB?.reserve ?? null,
             arr_note: arr?.shared_note ?? "", rec: recOf(ev?.csn_id),
+            prorata_a: proRata(lv, a.recorded ?? null), prorata_b: proRata(lv, a.advised ?? null),
           });
         }
         for (const ref of lotRefs) {
@@ -328,6 +336,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
             engine_eta: dayB, to_level: q(toLevel), pct: lot.qty_base > 0 ? toLevel / lot.qty_base : null,
             min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, excess_split: stB?.excess_split ?? null,
             level_status: statusOf(stB, !b), reserve_after: stB?.reserve ?? null, flag,
+            prorata_a: proRata(lv, dayA), prorata_b: proRata(lv, dayB),
             alternatives: buy ? altText(alternativesFor(buy, dayA ?? dayB)) : "",
           });
         }

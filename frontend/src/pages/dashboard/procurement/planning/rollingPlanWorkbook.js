@@ -205,7 +205,12 @@ const L_DGREY = "FFD9D9D9";
 const LEAN_WIDTHS = [36, 22, 16, 18, 22, 20, 34, 22, 44, 44, 38, 46];
 const LEAN_COLS = LEAN_WIDTHS.length;
 function fill(cell, argb) { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb } }; }
-const qty = (n) => (n === null || n === undefined || !Number.isFinite(Number(n)) ? "—" : Math.round(Number(n)).toLocaleString("en-US"));
+// Whole numbers from 100 up; below that up to 3 decimals, so a family kept in MT never shows 0.167 MT/day as "0".
+const qty = (n) => {
+  if (n === null || n === undefined || !Number.isFinite(Number(n))) return "—";
+  const v = Number(n);
+  return Math.abs(v) >= 100 ? Math.round(v).toLocaleString("en-US") : Number(v.toFixed(3)).toLocaleString("en-US", { maximumFractionDigits: 3 });
+};
 const estLines = (text, width) => (text === null || text === undefined ? 1 : String(text).split("\n").reduce((sum, l) => sum + Math.max(1, Math.ceil(l.length / Math.max(1, width * 1.05))), 0));
 const matLines = (list) => {
   const items = (list ?? []).filter((x) => x.qty > 0.5);
@@ -275,17 +280,19 @@ function writeLeanFamily(sheet, b, company) {
   sheet.addRow([]);
 
   const daysUntil = (d, until) => (d === null || d === undefined ? "—" : `${d} d${until ? ` → until ${day(until)}` : ""}`);
+  const proTxt = (v) => (v === null || v === undefined ? "—" : qty(v));
   const dTxt = (v) => (v === null || v === undefined ? "—" : `${v} d`);
   const mxTxt = (v) => (v === null || v === undefined ? "beyond plan" : `${v} d`);
   const refName = (ref) => String(ref).split(" · ").pop().replace(" (ORD)", "").replace(" (TRN)", " (in transit)");
 
   // ── 1. current status
   title("1. CURRENT STATUS — what each level holds today and where its daily use comes from", { size: 12, fillArgb: L_BLUE });
-  rs([["Level (narrow first)"], ["Min / Max / Critical days", 2], ["Stock available to this level", 2], ["Its daily use is taken from (reserve)", 2], ["Cover today", 2], ["Left over for the next level", 3]], { bold: true, fillArgb: L_GREY });
+  rs([["Level (narrow first)"], ["Min / Max / Critical days"], [`Pro-rata today (${u}/day)`], ["Stock available to this level", 2], ["Its daily use is taken from (reserve)", 2], ["Cover today", 2], ["Left over for the next level", 3]], { bold: true, fillArgb: L_GREY });
   (b.level_sections ?? []).forEach((sct) => {
     const today = (b.level_today ?? []).find((x) => x.label === sct.label);
     const maxCover = sct.today_beyond_plan ? `Max cover: beyond the plan${b.plan_end ? ` (past ${day(b.plan_end)})` : ""}` : `Max cover: ${daysUntil(sct.today_max_cover, sct.today_max_until)}`;
-    rs([[`${sct.label}\n(${sct.members.join(" + ")})`], [`Min ${days(sct.target_days) ?? "—"} d · Max ${days(sct.max_days) ?? "—"} d · Critical ${days(sct.critical_days) ?? "—"} d`, 2], [matLines(today?.opening), 2], [matLines(today?.reserve), 2],
+    const todayRow = (sct.rows ?? []).find((r) => r.kind === "Stock today");
+    rs([[`${sct.label}\n(${sct.members.join(" + ")})`], [`Min ${days(sct.target_days) ?? "—"} d · Max ${days(sct.max_days) ?? "—"} d · Critical ${days(sct.critical_days) ?? "—"} d`], [proTxt(todayRow?.prorata_b)], [matLines(today?.opening), 2], [matLines(today?.reserve), 2],
       [`Stock lasts: ${daysUntil(sct.today_cover, sct.today_cover_until)}\n${maxCover}`, 2], [matLines(today?.left), 3]]);
   });
   rs([["EXCESS POOL today\n(no level needs it yet)"], [matLines(b.excess_after), 2], ["", 9]], { bold: true, fillArgb: L_GREEN });
@@ -306,11 +313,11 @@ function writeLeanFamily(sheet, b, company) {
       perLevel.set(key, entry);
     }
   }
-  const minMaxText = (levels, view) => levels.map((l) => `${l.label}: Min ${dTxt(view === "A" ? l.min_a : l.min_b)} · Max ${mxTxt(view === "A" ? l.max_a : l.max_b)}`).join("\n") || "—";
+  const minMaxText = (levels, view) => levels.map((l) => `${l.label}: Pro-rata ${proTxt(view === "A" ? l.prorata_a : l.prorata_b)}/day · Min ${dTxt(view === "A" ? l.min_a : l.min_b)} · Max ${mxTxt(view === "A" ? l.max_a : l.max_b)}`).join("\n") || "—";
 
   // ── 2. orders on the way (CSN / PO)
   title("2. ORDERS ON THE WAY (CSN / PO) — recorded date and engine date, and the Min / Max of each level on each date", { size: 12, fillArgb: L_BLUE });
-  rs([["Order"], ["Qty"], ["Recorded date (CSN Tracker)", 2], ["Engine date"], ["Min / Max if it lands on the RECORDED date", 2], ["Min / Max if it lands on the ENGINE date", 2], ["If it is late or does not come", 3]], { bold: true, fillArgb: L_GREY });
+  rs([["Order"], ["Qty"], ["Recorded date (CSN Tracker)", 2], ["Engine date"], ["Pro-rata · Min / Max if it lands on the RECORDED date", 2], ["Pro-rata · Min / Max if it lands on the ENGINE date", 2], ["If it is late or does not come", 3]], { bold: true, fillArgb: L_GREY });
   const existing = [...perLevel.entries()].filter(([k]) => k.startsWith("E|")).map(([, v]) => v)
     .sort((x, y) => String(x.row.engine_eta ?? x.row.existing_eta ?? "").localeCompare(String(y.row.engine_eta ?? y.row.existing_eta ?? "")));
   if (!existing.length) rs([["No order is on the way for this family.", LEAN_COLS]]);
@@ -325,7 +332,7 @@ function writeLeanFamily(sheet, b, company) {
 
   // ── 3. new orders the engine adds
   title("3. NEW ORDERS THE ENGINE ADDS — dates, Min / Max on each date, and the other route", { size: 12, fillArgb: L_BLUE });
-  rs([["New order"], ["Qty · vendor"], ["Date (recorded-date view)", 2], ["Date (engine-date view)"], ["Min / Max in the RECORDED-date view", 2], ["Min / Max in the ENGINE-date view", 2], ["Alternate route", 3]], { bold: true, fillArgb: L_GREY });
+  rs([["New order"], ["Qty · vendor"], ["Date (recorded-date view)", 2], ["Date (engine-date view)"], ["Pro-rata · Min / Max in the RECORDED-date view", 2], ["Pro-rata · Min / Max in the ENGINE-date view", 2], ["Alternate route", 3]], { bold: true, fillArgb: L_GREY });
   const projections = (b.projection_total ?? []);
   if (!projections.length) rs([["The engine adds no new order for this family.", LEAN_COLS]]);
   for (const p of projections) {
