@@ -31,7 +31,7 @@ test("rolling plan workbook: every tab, both companies, PLAN totals per group", 
   const texts = [];
   rm.eachRow((row) => texts.push(String(row.getCell(1).value ?? "")));
   assert.ok(texts.includes("Almeha Coatings — RDP (family: VAE A, VAE B)") && texts.includes("Jayashree Industries — RDP (family: VAE A, VAE B)"), "one block per company");
-  assert.ok(texts.some((t) => t.startsWith("1. LEVEL BY LEVEL")), "level by level is the first section of the block");
+  assert.ok(texts.some((t) => t.startsWith("1. CURRENT STATUS")), "current status is the first section of the block");
   assert.ok(!texts.some((t) => t.includes("ALL ORDERS AT A GLANCE") || t.includes("POOL DIARY")), "glance and pool diary sections are gone");
 });
 
@@ -136,19 +136,20 @@ test("STORE tabs: items by period with the child groups of one parent on ONE row
   await wb.xlsx.writeBuffer();
 });
 
-test("RM RDP family block: each level (Exclusive and groups) with its own Min / Max / Critical", async () => {
+test("RM RDP family block: each level (Exclusive and groups) with its own Min / Max / Critical in the status table", async () => {
   const base = company("a", "Almeha Coatings");
-  const waterfall = { levels: [
-    { level_kind: "OWN", label: "Exclusive — Gabrosa", members: ["Gabrosa"], target_days: 30, critical_days: 20, max_days: 60, cover_days_now: 60, reserve_now: 6670, next_min_day: "2026-11-27" },
-    { level_kind: "GROUP", label: "MHEC", members: ["Gabrosa", "Combizell"], target_days: 30, critical_days: 15, max_days: 60, cover_days_now: 60, reserve_now: 84390, next_min_day: null }], events: [], matrix: [] };
-  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], waterfall }] }], asOf: "2026-10-28" });
-  const lines = [];
-  wb.getWorksheet("RM RDP").eachRow((row) => lines.push(String(row.getCell(1).value ?? "")));
-  assert.ok(lines.some((l) => l.includes("Exclusive — Gabrosa: Min 30 / Max 60 / Critical 20 d · reserve 6,670 KG · next Min 2026-11-27")), "the Exclusive level line");
-  assert.ok(lines.some((l) => l.includes("MHEC: Min 30 / Max 60 / Critical 15 d") && l.includes("next Min —")), "the group level line");
+  const sections = [
+    { label: "Exclusive — Gabrosa", kind: "OWN", members: ["Gabrosa"], target_days: 30, max_days: 60, critical_days: 20, rows: [] },
+    { label: "MHEC", kind: "GROUP", members: ["Gabrosa", "Combizell"], target_days: 30, max_days: 60, critical_days: 15, rows: [] }];
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], level_sections: sections, level_today: [], excess_after: [{ material: "Gabrosa", qty: 4000 }] }] }], asOf: "2026-10-28" });
+  const cells = [];
+  wb.getWorksheet("RM RDP").eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
+  assert.ok(cells.some((l) => l.includes("Min 30 d · Max 60 d · Critical 20 d")), "the Exclusive level Min / Max / Critical");
+  assert.ok(cells.some((l) => l.includes("Min 30 d · Max 60 d · Critical 15 d")), "the group level Min / Max / Critical");
+  assert.ok(cells.some((l) => l.includes("Gabrosa: 4,000")), "the excess pool today");
+  assert.ok(cells.some((l) => l.startsWith("Refill method used for this family: 1st refill")), "the refill method is stated");
   await wb.xlsx.writeBuffer();
 });
-
 test("STORE tabs from the month-by-month plan: actual stock apart from unreceived pieces, and the excess left", async () => {
   const base = company("a", "Almeha Coatings");
   const store_plan = {
@@ -219,9 +220,11 @@ test("Group tabs: MHEC and RDP families sit on their own tabs; the lean block is
   const sheet = wb.getWorksheet("RM MHEC");
   const cells = [];
   sheet.eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
-  assert.ok(cells.some((t) => t.startsWith("1. LEVEL BY LEVEL")), "level by level first");
+  assert.ok(cells.some((t) => t.startsWith("1. CURRENT STATUS")), "current status first");
+  assert.ok(cells.some((t) => t.startsWith("2. ORDERS ON THE WAY")) && cells.some((t) => t.startsWith("3. NEW ORDERS")) && cells.some((t) => t.startsWith("4. EXCESS POOL OVER TIME")), "orders, new orders and the excess pool sections");
+  assert.ok(cells.some((t) => t.includes("ETD 2026-09-24 (ATD)")), "the recorded ATD");
+  assert.ok(!cells.some((t) => t === "Passes on to next level (KG)" || t.includes("% of lot")), "no per-lot level-takes percentage");
   assert.ok(!cells.some((t) => t.includes("POOL DIARY") || t.includes("ALL ORDERS AT A GLANCE")), "glance and pool diary removed");
   assert.ok(cells.some((t) => t.includes("Stock lasts:") && t.includes("Max cover:")), "today's cover days and the Max cover are shown for the level");
-  assert.ok(cells.some((t) => t === "Passes on to next level (KG)" || t.startsWith("Passes on to next level")), "lot minus level-takes is shown as its own column");
   assert.equal(wb.getWorksheet("RM Group").rowCount, 1, "no other RM group family -> only the empty-text row");
 });
