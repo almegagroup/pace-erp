@@ -519,8 +519,14 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         })
         : null;
       const sections = buildSections(memberIds, fu, legs, events as never, buildWaterfallView({ projection, asOf: calendar.asOf, memberSet, groupSet, groupLabel: (g) => groupLabel.get(g) ?? "—", materialLabel: (m) => nameOf(m), uomOf: (m) => uomOf(m) }) as never);
+      const refillChoice = (projection.refill_choices ?? []).find((c) => c.members.some((m: string) => memberIds.includes(m)));
+      const refillLabel = { FIRST: "1st refill", SECOND: "2nd refill", ARRIVAL: "on arrival" } as const;
+      const refillWhy = !refillChoice ? null
+        : refillChoice.scores.length === 0 ? "no item of this family sits in two levels, so all methods give the same plan"
+        : `chosen by the system: ${refillChoice.scores.map((x) => `${refillLabel[x.method]} → ${x.days_below_min} level-days below Min, buys ${Math.round(x.buy_qty).toLocaleString("en-US")}`).join(" · ")}`;
       blocks.push({
-        kind, together_note: togetherNote, ...(family.is_family ? (sections ?? {}) : {}),
+        kind, together_note: togetherNote,
+        refill_method: refillChoice ? refillLabel[refillChoice.method] : null, refill_method_why: refillWhy, ...(family.is_family ? (sections ?? {}) : {}),
         waterfall: buildWaterfallView({
           projection, asOf: calendar.asOf, memberSet, groupSet,
           groupLabel: (g) => groupLabel.get(g) ?? "—",

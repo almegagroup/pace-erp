@@ -141,13 +141,13 @@ test("RM RDP family block: each level (Exclusive and groups) with its own Min / 
   const sections = [
     { label: "Exclusive — Gabrosa", kind: "OWN", members: ["Gabrosa"], target_days: 30, max_days: 60, critical_days: 20, rows: [] },
     { label: "MHEC", kind: "GROUP", members: ["Gabrosa", "Combizell"], target_days: 30, max_days: 60, critical_days: 15, rows: [] }];
-  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], level_sections: sections, level_today: [], excess_after: [{ material: "Gabrosa", qty: 4000 }] }] }], asOf: "2026-10-28" });
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], refill_method: "2nd refill", refill_method_why: "chosen by the system: test", level_sections: sections, level_today: [], excess_after: [{ material: "Gabrosa", qty: 4000 }] }] }], asOf: "2026-10-28" });
   const cells = [];
   wb.getWorksheet("RM RDP").eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
   assert.ok(cells.some((l) => l.includes("Min 30 d · Max 60 d · Critical 20 d")), "the Exclusive level Min / Max / Critical");
   assert.ok(cells.some((l) => l.includes("Min 30 d · Max 60 d · Critical 15 d")), "the group level Min / Max / Critical");
   assert.ok(cells.some((l) => l.includes("Gabrosa: 4,000")), "the excess pool today");
-  assert.ok(cells.some((l) => l.startsWith("Refill method used for this family: 1st refill")), "the refill method is stated");
+  assert.ok(cells.some((l) => l.startsWith("Refill method used for this family: 2nd refill — chosen by the system")), "the refill method is stated");
   await wb.xlsx.writeBuffer();
 });
 test("STORE tabs from the month-by-month plan: actual stock apart from unreceived pieces, and the excess left", async () => {

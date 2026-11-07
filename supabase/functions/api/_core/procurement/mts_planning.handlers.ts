@@ -30,7 +30,7 @@ import {
 import { familyClosure } from "./mts_item_plan.logic.ts";
 import { loadGroupCoveragePolicyVersions } from "./mts_group_policy.handlers.ts";
 import { bulkOnlyGroupIds, loadBulkMaterialIds } from "./mts_bulk_materials.ts";
-import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, familyMoveCost, optimizeFamilyArrival, optimizeFamilyTogether, planFamily } from "./mts_family_planner.logic.ts";
+import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, type RefillMethod, familyMoveCost, optimizeFamilyArrival, optimizeFamilyTogether, planFamily } from "./mts_family_planner.logic.ts";
 import { assemblePlanningInput, familyArrivalEta, priceUnitCode, familyArrivalRisk, isFamilyAllocatableArrival, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
@@ -555,6 +555,8 @@ export async function computePlanning(p: PlanningParams) {
   }
   const familyArrivalCandidates = assembly.input.confirmed_arrivals.filter((arrival) => !transferFed.has(arrival.material_id));
   const familyInput: FamilyPlannerInput = {
+    // Owner 2026-11-07 (§49): the planner chooses 1st refill / 2nd refill / on-arrival per family.
+    refill_method: "AUTO",
     as_of: assembly.input.as_of,
     horizon_end: assembly.input.horizon_end,
     opening_qty_by_material: assembly.input.opening_qty_by_material,
@@ -590,6 +592,8 @@ export async function computePlanning(p: PlanningParams) {
   };
   const plannerStarted = Date.now();
   const projection = planFamily(familyInput);
+  // What-if / reschedule runs on one family reuse the method chosen here instead of choosing again.
+  const refillPicks: Record<string, RefillMethod> = Object.fromEntries((projection.refill_choices ?? []).map((c) => [c.key, c.method]));
   const plannerMs = Date.now() - plannerStarted;
   const groupAssignments = (() => {
     type AssignmentReason = "SINGLE_SELECTED" | "CHEAPEST_SELECTED" | "NONE_SELECTED";
@@ -636,6 +640,7 @@ export async function computePlanning(p: PlanningParams) {
     const pick = <T>(rec: Readonly<Record<string, T>>) => Object.fromEntries(Object.entries(rec).filter(([id]) => members.has(id)));
     return {
       ...familyInput,
+      refill_picks: refillPicks,
       opening_qty_by_material: pick(familyInput.opening_qty_by_material),
       opening_receipts: (familyInput.opening_receipts ?? []).filter((r) => members.has(r.material_id)),
       own_demand: familyInput.own_demand.filter((d) => members.has(d.material_id)),

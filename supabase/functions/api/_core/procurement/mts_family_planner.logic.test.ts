@@ -1036,3 +1036,30 @@ Deno.test("hold-back: when a broad level tops up from a short pool, the narrow l
   assert(without >= 0 && withHold >= 0, "Group B tops up in this shape");
   assert(withHold > without + 500, `with hold-back the pool keeps ${withHold} KG Gabrosa after B's top-up, without ${without}`);
 });
+
+Deno.test("refill method: FIRST is the default, SECOND holds back at least as much, AUTO picks one of the three and says so, a family with no shared item skips the choice", () => {
+  const AS_OF = "2026-10-28";
+  const add = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+  const days: string[] = []; for (let d = AS_OF; d <= "2027-02-28"; d = add(d, 1)) days.push(d);
+  const G = "GAB", T = "TS";
+  const pol = (id: string) => ({ material_id: id, target_days: 30, critical_days: 15, vendor_moq_qty_base: null, order_multiple_qty_base: null, configured_lead_time_days: null, cycle_days: 30, vendor_options: [] }) as unknown as OptimizerMaterialPlanningPolicy;
+  const own = days.map((d) => ({ material_id: G, required_by: d, qty_base: 100 }));
+  const groups = days.map((d) => ({ group_id: "B", candidates: [G, T], required_by: d, qty_base: 1000 }));
+  const input = { as_of: AS_OF, horizon_end: "2027-02-28", opening_qty_by_material: { [G]: 70000, [T]: 0 }, own_demand: own, group_demand: groups, confirmed_arrivals: [], policies: [G, T].map(pol), plan_buys: false,
+    group_coverage_policies: [{ material_group_id: "B", effective_from: AS_OF, target_days: 50, critical_days: 15, desired_max_days_override: 60 }],
+  } as unknown as FamilyPlannerInput;
+  const poolAfterTopUp = (r: ReturnType<typeof planFamily>) => { const e = r.level_events.find((x) => x.kind === "TOP_UP" && x.level_id === "B"); return e ? (r.level_matrix.find((m) => m.day === e.day)?.pool[G] ?? 0) : -1; };
+  const first = planFamily(input);
+  const firstExplicit = planFamily({ ...input, refill_method: "FIRST" });
+  assert(poolAfterTopUp(first) === poolAfterTopUp(firstExplicit), "no refill_method = FIRST");
+  const second = planFamily({ ...input, refill_method: "SECOND" });
+  assert(poolAfterTopUp(second) === -1 || poolAfterTopUp(second) >= poolAfterTopUp(first) - 1e-6, `SECOND keeps at least as much in the pool, or B waits (${poolAfterTopUp(second)} vs ${poolAfterTopUp(first)})`);
+  const auto = planFamily({ ...input, refill_method: "AUTO" });
+  const choice = auto.refill_choices?.[0];
+  assert(choice && choice.auto && choice.scores.length === 3, "AUTO ran all three methods for a family with a shared item");
+  assert(["FIRST", "SECOND", "ARRIVAL"].includes(choice!.method), "AUTO names its pick");
+  const picked = planFamily({ ...input, refill_method: "AUTO", refill_picks: { [choice!.key]: "ARRIVAL" } });
+  assert(picked.refill_choices?.[0].method === "ARRIVAL" && picked.refill_choices?.[0].auto === false, "a given pick is used, not chosen again");
+  const alone = planFamily({ ...input, group_demand: [], refill_method: "AUTO" });
+  assert(alone.refill_choices?.[0].method === "FIRST" && alone.refill_choices?.[0].scores.length === 0, "no shared item: no method comparison");
+});

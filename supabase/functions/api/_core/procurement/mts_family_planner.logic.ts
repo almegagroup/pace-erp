@@ -81,6 +81,8 @@ type FamilyAllocationSourceKind = "OPENING" | "CONFIRMED_ETA" | "MANUAL_LOT" | "
 /** `arrived_day`: -1 for counted opening stock, else the day index the confirmed ETA / lot lands (FEFO age). */
 type SimReceipt = FamilyOpeningReceipt & { source_kind: FamilyAllocationSourceKind; arrived_day: number };
 
+export type RefillMethod = "FIRST" | "SECOND" | "ARRIVAL";
+export type RefillChoice = { key: string; members: readonly string[]; method: RefillMethod; auto: boolean; scores: ReadonlyArray<{ method: RefillMethod; hard: number; days_below_min: number; buy_qty: number }> };
 export type FamilyPlannerInput = {
   as_of: string;
   horizon_end: string;
@@ -93,6 +95,14 @@ export type FamilyPlannerInput = {
   group_coverage_policies?: readonly GroupCoveragePolicyVersion[];
   /** Narrow levels keep their next refill when a broad level tops up (default on). Only a test switches it off, to prove the rule. */
   hold_back?: boolean;
+  /**
+   * Owner 2026-11-07 (§49): how long a narrower level is protected from a broader level's top-up.
+   * FIRST = its next refill to Max; SECOND = two refills; ARRIVAL = until the next arrival of that material (never less than its Max window).
+   * AUTO = the planner runs every method for each family where hold-back can matter and keeps the best by the owner's rule. Default FIRST.
+   */
+  refill_method?: RefillMethod | "AUTO";
+  /** Methods already chosen per family (key = first member id of the family, sorted) — a what-if run reuses them instead of choosing again. */
+  refill_picks?: Readonly<Record<string, RefillMethod>>;
   confirmed_arrivals: readonly FamilyArrival[];
   /** Dated-inbound risks retained for explanation; they never become simulated stock. */
   arrival_risks?: readonly OptimizerArrivalFlag[];
@@ -184,6 +194,8 @@ export type FamilyBuy = OptimizerAdvisoryBuy & {
 };
 
 export type FamilyResult = Omit<OptimizerProjectionResult, "advisory_buys"> & {
+  /** Which hold-back method each family used and why (only when the planner ran more than one method, `scores` lists them). */
+  refill_choices?: readonly RefillChoice[];
   advisory_buys: readonly FamilyBuy[];
   /** Event log of the waterfall (receipts, top-ups, waiting levels) and the Material × Level matrix on each event day. */
   level_events: readonly FamilyLevelEvent[];
@@ -458,6 +470,39 @@ function plannerTiltBasis(input: FamilyPlannerInput, ids: readonly string[]): Ti
  * company-wide run. Before this, every lot re-simulated all ~108 materials (PROD: 258 s for one
  * Planning request, blocking every other request on the server).
  */
+// ── §49 method choice ───────────────────────────────────────────────────────────────────────────────────────────────
+const REFILL_TOLERANCE_DAYS = 10;
+/** Hold-back only matters when a material sits in two or more levels (its own use plus a group, or two groups): otherwise all three methods are identical. */
+function holdBackCanMatter(part: FamilyPlannerInput, members: ReadonlySet<string>): boolean {
+  const own = new Set(part.own_demand.filter((d) => d.qty_base > EPSILON).map((d) => d.material_id));
+  const groups = new Map<string, Set<string>>();
+  for (const g of part.group_demand) if (g.qty_base > EPSILON) groups.set(g.group_id, new Set([...(groups.get(g.group_id) ?? []), ...g.candidates]));
+  for (const id of members) {
+    const levels = (own.has(id) ? 1 : 0) + [...groups.values()].filter((c) => c.has(id)).length;
+    if (levels >= 2) return true;
+  }
+  return false;
+}
+/**
+ * Owner 2026-11-06/07: hard = Critical breached, a group demand left unmet, or a level more than 10 days below its Min (depth);
+ * then days below Min, then the quantity bought. The days near the end of the PO21 plan (fewer than Min days of planned demand left)
+ * are not judged: the cover shows below Min there by construction.
+ */
+function scoreRefillRun(result: FamilyResult, part: FamilyPlannerInput): { hard: number; days_below_min: number; buy_qty: number } {
+  let lastDemand = "";
+  for (const d of [...part.own_demand, ...part.group_demand]) if (d.qty_base > EPSILON && d.required_by > lastDemand) lastDemand = d.required_by;
+  let hard = result.group_unmet.filter((u) => u.qty_base > EPSILON).length;
+  let below = 0;
+  for (const r of result.level_risk) {
+    if (lastDemand && Date.parse(`${lastDemand}T00:00:00Z`) - Date.parse(`${r.day}T00:00:00Z`) < r.min_days * 86_400_000) continue;
+    below += 1;
+    if (r.critical_days !== null && r.cover_days + 1e-9 < r.critical_days) hard += 1;
+    else if (r.cover_days + 1e-9 < r.min_days - REFILL_TOLERANCE_DAYS) hard += 1;
+  }
+  const buy = result.advisory_buys.reduce((sum, b) => sum + Math.max(0, Number(b.recommended_po_qty_base ?? b.required_qty_base ?? 0)), 0);
+  return { hard, days_below_min: below, buy_qty: buy };
+}
+
 export function planFamily(input: FamilyPlannerInput): FamilyResult {
   if (!ISO_DAY.test(input.as_of) || !ISO_DAY.test(input.horizon_end) || input.horizon_end < input.as_of) throw new Error("FAMILY_PLANNER_INVALID_HORIZON");
   const ids = plannerMaterialIds(input);
@@ -481,10 +526,29 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
     components.set(root, (components.get(root) ?? new Set<string>()).add(id));
   }
   const tiltBasis = plannerTiltBasis(input, ids);
-  if (components.size <= 1) return planFamilyComponent(input, tiltBasis);
+  const runComponent = (part: FamilyPlannerInput, members: ReadonlySet<string>): FamilyResult => {
+    const list = [...members].sort();
+    const key = list[0] ?? "";
+    const forced = input.refill_picks?.[key];
+    const mode = forced ?? input.refill_method ?? "FIRST";
+    if (mode !== "AUTO") return { ...planFamilyComponent({ ...part, refill_method: mode }, tiltBasis), refill_choices: [{ key, members: list, method: mode, auto: false, scores: [] }] };
+    if (!holdBackCanMatter(part, members)) return { ...planFamilyComponent({ ...part, refill_method: "FIRST" }, tiltBasis), refill_choices: [{ key, members: list, method: "FIRST", auto: true, scores: [] }] };
+    const methods: RefillMethod[] = ["FIRST", "SECOND", "ARRIVAL"];
+    const runs = methods.map((method) => ({ method, result: planFamilyComponent({ ...part, refill_method: method }, tiltBasis) }));
+    const scored = runs.map((r) => ({ ...r, ...scoreRefillRun(r.result, part) }));
+    const bestHard = Math.min(...scored.map((x) => x.hard));
+    const meets = scored.filter((x) => x.hard === bestHard);
+    const bestBelow = Math.min(...meets.map((x) => x.days_below_min));
+    const close = meets.filter((x) => x.days_below_min <= bestBelow + REFILL_TOLERANCE_DAYS);
+    const bestBuy = Math.min(...close.map((x) => x.buy_qty));
+    // Equal buy quantity -> the earlier method in the list (FIRST is the default and avoids flip-flopping).
+    const winner = close.find((x) => x.buy_qty <= bestBuy + EPSILON)!;
+    return { ...winner.result, refill_choices: [{ key, members: list, method: winner.method, auto: true, scores: scored.map((x) => ({ method: x.method, hard: x.hard, days_below_min: x.days_below_min, buy_qty: roundQty(x.buy_qty) })) }] };
+  };
+  if (components.size <= 1) return runComponent(input, new Set(ids));
   const parts = [...components.values()].map((members) => {
     const has = (id: string) => members.has(id);
-    return planFamilyComponent({
+    return runComponent({
       ...input,
       opening_qty_by_material: Object.fromEntries(Object.entries(input.opening_qty_by_material).filter(([id]) => has(id))),
       opening_receipts: input.opening_receipts?.filter((r) => has(r.material_id)),
@@ -494,12 +558,13 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
       arrival_risks: input.arrival_risks?.filter((a) => has(a.material_id)),
       policies: input.policies.filter((p) => has(p.material_id)),
       manual_lots: input.manual_lots?.filter((l) => has(l.material_id)),
-    }, tiltBasis);
+    }, members);
   });
   const all = <K extends keyof FamilyResult>(key: K) => parts.flatMap((part) => [...(part[key] as readonly unknown[])]) as unknown as FamilyResult[K];
   const mixByKey = new Map<string, Record<string, number>>();
   for (const part of parts) for (const m of part.group_mix) mixByKey.set(`${m.group_id}|${m.day}`, { ...(mixByKey.get(`${m.group_id}|${m.day}`) ?? {}), ...m.draws });
   return {
+    refill_choices: all("refill_choices"),
     rows: [...all("rows")].sort((a, b) => a.material_id.localeCompare(b.material_id) || a.day.localeCompare(b.day)),
     risks: [...all("risks")].sort((a, b) => a.material_id.localeCompare(b.material_id)),
     group_pool_risks: [...all("group_pool_risks")].sort((a, b) => String(a.group_id ?? "").localeCompare(String(b.group_id ?? ""))),
@@ -813,17 +878,20 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       // Owner 2026-10-29: a broad level never takes the last stock a NARROWER level will ask for at its next refill. For every narrower
       // level (an Exclusive material, or a group listed before this one) its headroom up to its own Max is kept in the pool: for an
       // Exclusive level on its material, for a group on the member that serves the most levels (the shared material is used last).
+      const refillMethod = input.refill_method === "SECOND" || input.refill_method === "ARRIVAL" ? input.refill_method : "FIRST";
+      const nextArrivalGap = (m: number) => { for (let d = i + 1; d < N; d += 1) if (confirmed[m][d] > EPSILON || s.planned[m][d] > EPSILON) return d - i; return 0; };
+      const protectWindow = (base: number, m: number) => (refillMethod === "SECOND" ? base * 2 : refillMethod === "ARRIVAL" ? Math.max(base, nextArrivalGap(m)) : base);
       const holdBackFor = (p: number, m: number) => {
         if (i === 0 || input.hold_back === false) return 0;
         let held = 0;
         const own0 = memberDesiredMax[m][i];
-        if (own0 !== null && own[m].some((qty) => qty > EPSILON)) held += Math.max(0, useAhead(own[m], i, own0) - ownReserve[m]);
+        if (own0 !== null && own[m].some((qty) => qty > EPSILON)) held += Math.max(0, useAhead(own[m], i, protectWindow(own0, m)) - ownReserve[m]);
         for (let q = 0; q < p; q += 1) {
           const cands = candIdx[q];
           if (!cands.includes(m)) continue;
           const designated = [...cands].sort((a, b) => levelsServed[b] - levelsServed[a] || ids[a].localeCompare(ids[b]))[0];
           if (designated !== m) continue;
-          const wantedQ = pools[q].demand[i] + useAhead(pools[q].demand, i, groupCoverageAt(pools[q], i).desired);
+          const wantedQ = pools[q].demand[i] + useAhead(pools[q].demand, i, protectWindow(groupCoverageAt(pools[q], i).desired, m));
           held += Math.max(0, wantedQ - purposeReserve[q].reduce((sum, qty) => sum + Math.max(0, qty), 0));
         }
         return held;

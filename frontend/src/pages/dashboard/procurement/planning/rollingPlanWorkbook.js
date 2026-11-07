@@ -270,7 +270,7 @@ function writeLeanFamily(sheet, b, company) {
   const alarm = Boolean(b.first_shortage_day || (b.gaps ?? []).length);
   const facts = [`Unit ${u || "—"}`, b.first_shortage_day ? `RUNS OUT ${b.first_shortage_day}` : "", (b.gaps ?? []).length ? `ENGINE CANNOT PLAN — ${b.gaps.join("; ")}` : ""].filter(Boolean).join(" · ");
   title(facts, { bold: alarm, color: alarm ? RED : null });
-  title(`Refill method used for this family: ${b.refill_method ?? "1st refill"}${b.refill_method_why ? ` — ${b.refill_method_why}` : " (standard rule; the system's automatic choice per family is not active yet)"}`, { bold: false, italic: true });
+  if (b.refill_method) title(`Refill method used for this family: ${b.refill_method}${b.refill_method_why ? ` — ${b.refill_method_why}` : ""}`, { bold: false, italic: true });
   title("How to read: a family is split into levels (narrow level first). Every level keeps its own reserve and its daily use is taken from that reserve. Stock that no level needs yet stays in the shared EXCESS POOL. Recorded = dates in the PO / CSN (CSN Tracker: ATD / ATA when they exist, else ETD / ETA). Engine = the dates the engine advises.", { bold: false, italic: true });
   sheet.addRow([]);
 
