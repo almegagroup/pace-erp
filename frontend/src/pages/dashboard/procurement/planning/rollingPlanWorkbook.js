@@ -289,6 +289,10 @@ function writeLeanFamily(sheet, b, company) {
       [`Stock lasts: ${daysUntil(sct.today_cover, sct.today_cover_until)}\n${maxCover}`, 2], [matLines(today?.left), 3]]);
   });
   rs([["EXCESS POOL today\n(no level needs it yet)"], [matLines(b.excess_after), 2], ["", 9]], { bold: true, fillArgb: L_GREEN });
+  if ((b.qa_stock ?? []).length) {
+    const qaTotal = b.qa_stock.reduce((sum, x) => sum + x.qty, 0);
+    rs([["IN QA today\n(not counted in the stock above)"], [matLines(b.qa_stock), 2], [b.qa_extra_days !== null && b.qa_extra_days !== undefined ? `If all ${qty(qaTotal)} ${u} passes QA, the family's cover grows by about ${b.qa_extra_days} d (at the family's average daily use).` : "Cover effect not shown: no planned use.", 9]], { bold: false, fillArgb: L_AMBER });
+  }
   sheet.addRow([]);
 
   // Per-order Min / Max of every level, recorded-date view and engine-date view.

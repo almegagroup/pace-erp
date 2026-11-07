@@ -556,6 +556,16 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           const lasts = daily > 0.000001 ? `${Math.floor(opening / daily + 1e-9)} d` : "no use";
           return `${nameOf(m)}: ${dq(m, opening)} ${uomOf(m) ?? ""} (${lasts})`.replace(/\s+\(/, " (");
         }),
+        // Owner 2026-11-07: stock sitting in QA is NOT counted in the stock, but must be visible: how much, and how many extra days it would cover if it passes.
+        qa_stock: memberIds.map((m) => ({ material: nameOf(m), uom: uomOf(m) ?? "", qty: dq(m, Number((rowById.get(m) as { stock?: { quality_inspection?: number } } | undefined)?.stock?.quality_inspection ?? 0)) ?? 0 })).filter((x) => x.qty > 0.5),
+        qa_extra_days: (() => {
+          const qaBase = memberIds.reduce((sum, m) => sum + Number((rowById.get(m) as { stock?: { quality_inspection?: number } } | undefined)?.stock?.quality_inspection ?? 0), 0);
+          const byDay = new Map<string, number>();
+          for (const r of memberRows) byDay.set(r.day, (byDay.get(r.day) ?? 0) + Number(r.demand_qty_base ?? 0));
+          const active = [...byDay.values()].filter((v) => v > 0.000001);
+          const daily = active.length > 0 ? active.reduce((a, v) => a + v, 0) / active.length : 0;
+          return qaBase > 0.5 && daily > 0.000001 ? Math.floor(qaBase / daily + 1e-9) : null;
+        })(),
         first_shortage_day: grid.find((g) => g.closing < -0.000001)?.day ?? null,
         // Why the engine places no lot (owner 2026-10-21): shown on the block title line.
         gaps: memberIds.flatMap((m) => {
