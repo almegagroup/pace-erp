@@ -254,7 +254,10 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         const d = days.find((x) => x.day === date);
         const l = d?.levels.find((x) => x.level_key === key);
         if (!d || !l) return null;
-        return { cover: l.cover_days, min: l.min_days, max: l.max_days, minD: whole(l.cover_days), maxD: whole(l.max_cover_days !== null && l.max_days !== null ? Math.min(l.max_cover_days, l.max_days) : l.max_cover_days), reserve: q(l.reserve_qty), excess: q(d.pool_qty), excess_split: d.pool_by.filter((p) => p.qty > 0.5).sort((x, y) => y.qty - x.qty).map((p) => `${nameOf(p.material_id)}: ${dq(p.material_id, p.qty)} ${uomOf(p.material_id) ?? ""}`.trim()).join("\n") };
+        // Owner 2026-11-07: the excess shown for a level is the spare stock of THIS level's own members only (not the whole family pool).
+        const lvMembers = new Set<string>(levelMap.get(key)?.members ?? []);
+        const ownPool = d.pool_by.filter((p) => lvMembers.has(p.material_id) && p.qty > 0.5).sort((x, y) => y.qty - x.qty);
+        return { cover: l.cover_days, min: l.min_days, max: l.max_days, minD: whole(l.cover_days), maxD: whole(l.max_cover_days !== null && l.max_days !== null ? Math.min(l.max_cover_days, l.max_days) : l.max_cover_days), beyond: l.max_cover_days === null, reserve: q(l.reserve_qty), excess: q(ownPool.reduce((sum, p) => sum + p.qty, 0)), excess_split: ownPool.map((p) => `${nameOf(p.material_id)}: ${dq(p.material_id, p.qty)} ${uomOf(p.material_id) ?? ""}`.trim()).join("\n") };
       };
       const statusOf = (st: ReturnType<typeof stateAt>, without: boolean) => {
         if (!st || st.cover === null || st.min === null) return "";
@@ -320,7 +323,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
             : a ? `Order by ${buy?.recommended_po_by ?? "—"}, only while the existing orders stay on their Existing ETA. If you move them to the Engine ETA: NOT needed`
               : "Needed only if you move the existing orders to their Engine ETA";
           rows.push({
-            kind: "Projection", ref: "NEW (engine)", material: nameOf(lot.material_id), supplier: buy?.vendor_label ?? "—", status: "Projection", lot_qty: q(lot.qty_base), existing_eta: dayA, action,
+            kind: "Projection", ref: "NEW (engine)", po_by: buy?.recommended_po_by ?? null, material: nameOf(lot.material_id), supplier: buy?.vendor_label ?? "—", status: "Projection", lot_qty: q(lot.qty_base), existing_eta: dayA, action,
             etd: lg.import_etd ?? "", port: lg.port_eta ?? "", plant: dayB ?? "", why: buy ? (buy.need_kind === "GROUP" ? `Triggered by group free stock${buy.trigger_group_id ? ` — ${groupLabel.get(buy.trigger_group_id) ?? ""}` : ""}` : "Triggered by its own use") : "", absent: "",
             engine_eta: dayB, to_level: q(toLevel), pct: lot.qty_base > 0 ? toLevel / lot.qty_base : null,
             min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, excess_split: stB?.excess_split ?? null,
@@ -331,6 +334,9 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         sections.push({
           label: labelOf(lv), kind: lv.level_kind, members: lv.members.map(nameOf), target_days: wf?.target_days ?? openState?.min ?? null, max_days: wf?.max_days ?? openState?.max ?? null, critical_days: wf?.critical_days ?? null,
           reserve_now: wf ? wf.reserve_now : openState?.reserve ?? null, cover_now: wf?.cover_days_now ?? openState?.minD ?? null, uom: fu ? undefined : undefined, rows,
+          // Owner 2026-11-07: today's cover in days AND the date it reaches (as-of + days), for the stock alone and for the stock plus everything free to this level.
+          as_of: calendar.asOf, today_cover: openState?.minD ?? null, today_cover_until: openState?.minD != null ? addDaysIso2(calendar.asOf, openState.minD) : null,
+          today_max_cover: openState?.maxD ?? null, today_max_until: openState?.maxD != null ? addDaysIso2(calendar.asOf, openState.maxD) : null, today_beyond_plan: openState?.beyond ?? false,
         });
       }
       // How each lot is split over the levels (engine dates when the lot exists there, else recorded dates).

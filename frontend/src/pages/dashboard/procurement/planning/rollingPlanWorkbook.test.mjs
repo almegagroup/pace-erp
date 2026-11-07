@@ -31,7 +31,8 @@ test("rolling plan workbook: every tab, both companies, PLAN totals per group", 
   const texts = [];
   rm.eachRow((row) => texts.push(String(row.getCell(1).value ?? "")));
   assert.ok(texts.includes("Almeha Coatings — RDP (family: VAE A, VAE B)") && texts.includes("Jayashree Industries — RDP (family: VAE A, VAE B)"), "one block per company");
-  assert.ok(texts.includes("1. ALL ORDERS AT A GLANCE — what to do"), "orders at a glance under the block");
+  assert.ok(texts.some((t) => t.startsWith("1. LEVEL BY LEVEL")), "level by level is the first section of the block");
+  assert.ok(!texts.some((t) => t.includes("ALL ORDERS AT A GLANCE") || t.includes("POOL DIARY")), "glance and pool diary sections are gone");
 });
 
 test("PLAN matrix: company × month columns, empty SKUs dropped", () => {
@@ -205,7 +206,7 @@ test("RM Stand-alone: the engine's ETD / port / plant dates and the reason are s
   assert.equal(arrival[at("Why this date — Min / Max by group")], "Now 2026-11-06 is too late.");
 });
 
-test("Group tabs: MHEC and RDP families sit on their own tabs; the lean block shows CSN Tracker ATD / ATA, the pool diary and folds the long text", () => {
+test("Group tabs: MHEC and RDP families sit on their own tabs; the lean block is level by level, with today's cover days and the Max cover date", () => {
   const base = company("a", "Almeha Coatings");
   const rec = { etd: "2026-09-24", etd_actual: true, port: "2026-11-06", port_actual: true, plant: "2026-11-12", type: "IMPORT" };
   const lot = { kind: "Existing order", ref: "PO ASC/PO123/2026-27/1 · CSN 3000000229 (TRN)", material: "TS U2121", supplier: "SHANDONG", status: "IN_TRANSIT", lot_qty: 25000, existing_eta: "2026-11-12", engine_eta: "2026-11-12", action: "", etd: "", port: "", plant: "2026-11-12", why: "Long reason. More words.", absent: "If PO X · CSN 3000000239 (ORD) (2026-12-24) does not come: this order must land at plant by 2026-11-30 (24 d before its recorded date)", to_level: 25000, pct: 1, min_a: 51, max_a: 60, min_b: 51, max_b: 60, excess: 100, excess_split: "TS U2121: 100 KG", level_status: "Above Min", rec };
@@ -218,11 +219,9 @@ test("Group tabs: MHEC and RDP families sit on their own tabs; the lean block sh
   const sheet = wb.getWorksheet("RM MHEC");
   const cells = [];
   sheet.eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
-  assert.ok(cells.some((t) => t.includes("2. POOL DIARY")), "pool diary");
-  assert.ok(cells.some((t) => t.includes("(ATD)") && t.includes("(ATA)")), "CSN Tracker ATD / ATA shown when they exist");
-  assert.ok(cells.some((t) => t === "If CSN 3000000239 does not come → land by 2026-11-30"), "short form of the 'if another order does not come' text");
-  let hidden = 0;
-  sheet.eachRow((row) => { if (row.hidden) hidden += 1; });
-  assert.ok(hidden >= 2, "the full wording is folded away, not dropped");
+  assert.ok(cells.some((t) => t.startsWith("1. LEVEL BY LEVEL")), "level by level first");
+  assert.ok(!cells.some((t) => t.includes("POOL DIARY") || t.includes("ALL ORDERS AT A GLANCE")), "glance and pool diary removed");
+  assert.ok(cells.some((t) => t.includes("Stock lasts:") && t.includes("Max cover:")), "today's cover days and the Max cover are shown for the level");
+  assert.ok(cells.some((t) => t === "Passes on to next level (KG)" || t.startsWith("Passes on to next level")), "lot minus level-takes is shown as its own column");
   assert.equal(wb.getWorksheet("RM Group").rowCount, 1, "no other RM group family -> only the empty-text row");
 });
