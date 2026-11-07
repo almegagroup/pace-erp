@@ -796,3 +796,29 @@ Owner's wording requirement for every such piece (Excel, Item Plan, Action tab):
 
 Open (not decided): whether to stop counting such a piece after N days overdue (replacement order / below-Critical warning), or only make the warning louder.
 Where the text lives today: `familyArrivalRisk` message (`mts_planning.logic.ts`), `overdue_days` branches in `mts_best_date_text.logic.ts` (lines ~38, ~99), the "OVERDUE / NOT SHIPPED" instruction.
+
+## 49. Per-family choice of hold-back method: 1st refill / 2nd refill / on-arrival (owner 2026-11-07, DECIDED TO BUILD, not built yet)
+
+Owner decision: the system decides, per family and at planning time, which hold-back method is best, instead of one global rule. Parked on 2026-11-06 for the other questions; confirmed
+on 2026-11-07 that it WILL be built.
+
+**Candidate methods (all three stay):**
+1. **1st refill (today's rule):** a broad level never takes the stock a narrower level will need for its next refill up to its Max.
+2. **2nd refill:** the same, kept for two refills of the narrower level.
+3. **On arrival:** the narrower level is protected until the next arrival (confirmed lot or engine lot) of that material, never less than its Max window.
+
+**Owner's criteria (2026-11-06), in this order:**
+- Hard: Critical must never be breached; Exclusive must not be short; no level may go more than **10 days below its Min** (Min is the safety stock, Critical the floor).
+- Among methods that meet the hard rule (or, if none does, the least-violating): fewest days below Min first; methods within a **10-day tolerance** of the best count as equal, then the one that **buys the least**; still equal -> 1st refill (default, avoids flip-flopping).
+- Scoring horizon = the full planning horizon as it is today (6 months). No user override per family. How the choice is shown in the Excel: to be decided later.
+- Time: only families where hold-back can matter (a material sits in two or more levels) are run more than once; the rest are provably identical in all three methods, so accuracy stays 100%.
+
+**Measured on PROD data of 3 Nov 2026 (offline snapshot, CMP003 / CMP005 / CMP011, 110 families):**
+- Hold-back can matter in 8 families; the three methods differ in 6.
+- With the end-of-plan window excluded (days with less than Min days of planned demand left are not judged: near and after the PO21 plan's last demand day the cover shows < Critical by construction, which first inflated the numbers), level-days below Min: 1,343 (1st refill everywhere) -> 1,287 with the rule; Critical level-days 758 either way.
+- Picks under the rule: MHEC (CMP003) 2nd refill (34,000 -> 24,000 KG to buy, +2 days below Min); MAHACOL 712 (CMP005) 2nd refill (124,250 -> 99,500); ELOTEX MP 2050 (CMP003) on-arrival (84 -> 26 days below Min); BETONE/SAPCOMER D, MAHACOL 712 (CMP003), MHEC (CMP005): 1st refill.
+- 26 of 110 families break the hard rule with every method (e.g. WHITE CEMENT JK, Calx, EXCELCON): not a refill problem; cause not yet investigated (Selection ticks, vendor, lead time, PO21 plan are the suspects).
+- Planner time: the whole-company planner runs take 1.6 s (CMP003), 0.3 s (CMP005), 0.1 s (CMP011); the hold-back families are 0.6 s / 0.1 s / 0; so the extra is about +1.2 s / +0.2 s / 0 per run.
+
+**Open before building:** where the chosen method is stored/shown (Excel line per family, later); the exact end-of-plan rule used when scoring (the engine's own risk counter has the same by-construction effect near the plan end and has not been checked);
+whether the engine's cover rule `coverDays` should return "beyond plan" instead of 0 when a level's reserve is empty and no demand remains.
