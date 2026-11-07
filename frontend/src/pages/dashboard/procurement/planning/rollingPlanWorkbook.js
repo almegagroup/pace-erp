@@ -280,6 +280,7 @@ function writeLeanFamily(sheet, b, company) {
   sheet.addRow([]);
 
   const daysUntil = (d, until) => (d === null || d === undefined ? "—" : `${d} d${until ? ` → until ${day(until)}` : ""}`);
+  const beforeTxt = (v) => (v === null || v === undefined ? "" : `${v} d → `);
   const proTxt = (v) => (v === null || v === undefined ? "—" : qty(v));
   const dTxt = (v) => (v === null || v === undefined ? "—" : `${v} d`);
   const mxTxt = (v) => (v === null || v === undefined ? "beyond plan" : `${v} d`);
@@ -313,10 +314,11 @@ function writeLeanFamily(sheet, b, company) {
       perLevel.set(key, entry);
     }
   }
-  const minMaxText = (levels, view) => levels.map((l) => `${l.label}: Pro-rata ${proTxt(view === "A" ? l.prorata_a : l.prorata_b)}/day · Min ${dTxt(view === "A" ? l.min_a : l.min_b)} · Max ${mxTxt(view === "A" ? l.max_a : l.max_b)}`).join("\n") || "—";
+  const minMaxText = (levels, view) => levels.map((l) => `${l.label}: Pro-rata ${proTxt(view === "A" ? l.prorata_a : l.prorata_b)}/day · Min ${beforeTxt(view === "A" ? l.min_a_before : l.min_b_before)}${dTxt(view === "A" ? l.min_a : l.min_b)} · Max ${mxTxt(view === "A" ? l.max_a : l.max_b)}`).join("\n") || "—";
 
   // ── 2. orders on the way (CSN / PO)
   title("2. ORDERS ON THE WAY (CSN / PO) — recorded date and engine date, and the Min / Max of each level on each date", { size: 12, fillArgb: L_BLUE });
+  title("Min / Max = the level's cover at the END of the landing day, shown as the evening before → that evening. It counts EVERYTHING that has landed in that view by then (every other CSN / PO and every engine lot dated up to that day) and what the level claimed from the pool, not this order alone. Min = days its reserve lasts; Max = the same if it also took every spare kg, capped at its Max days.", { bold: false, italic: true });
   rs([["Order"], ["Qty"], ["Recorded date (CSN Tracker)", 2], ["Engine date"], ["Pro-rata · Min / Max if it lands on the RECORDED date", 2], ["Pro-rata · Min / Max if it lands on the ENGINE date", 2], ["If it is late or does not come", 3]], { bold: true, fillArgb: L_GREY });
   const existing = [...perLevel.entries()].filter(([k]) => k.startsWith("E|")).map(([, v]) => v)
     .sort((x, y) => String(x.row.engine_eta ?? x.row.existing_eta ?? "").localeCompare(String(y.row.engine_eta ?? y.row.existing_eta ?? "")));

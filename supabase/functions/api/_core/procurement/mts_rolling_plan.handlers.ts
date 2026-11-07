@@ -265,6 +265,17 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         const ownPool = d.pool_by.filter((p) => lvMembers.has(p.material_id) && p.qty > 0.5).sort((x, y) => y.qty - x.qty);
         return { cover: l.cover_days, min: l.min_days, max: l.max_days, minD: whole(l.cover_days), maxD: whole(l.max_cover_days !== null && l.max_days !== null ? Math.min(l.max_cover_days, l.max_days) : l.max_cover_days), beyond: l.max_cover_days === null, reserve: q(l.reserve_qty), excess: q(ownPool.reduce((sum, p) => sum + p.qty, 0)), excess_split: ownPool.map((p) => `${nameOf(p.material_id)}: ${dq(p.material_id, p.qty)} ${uomOf(p.material_id) ?? ""}`.trim()).join("\n") };
       };
+      // Owner 2026-11-07: the cover on the evening BEFORE the landing day, so the sheet can show 'before → after' for one order.
+      const dayBefore = (days: typeof fam.days_a, key: string, date: string | null) => {
+        if (!date) return null;
+        // level_days holds only the days something happens: take the latest day strictly before this one.
+        const prior = days.filter((x) => x.day < date && x.levels.some((l) => l.level_key === key)).map((x) => x.day).sort().pop();
+        const cover = prior ? stateAt(days, key, prior)?.minD ?? null : null;
+        if (!prior || cover === null) return null;
+        // No event between: the cover only shrinks one day per day, so the evening before this day = cover at the prior event day minus the quiet days in between.
+        const gap = Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${prior}T00:00:00Z`)) / 86_400_000) - 1;
+        return Math.max(0, cover - Math.max(0, gap));
+      };
       const statusOf = (st: ReturnType<typeof stateAt>, without: boolean) => {
         if (!st || st.cover === null || st.min === null) return "";
         const suffix = without ? ", even without this order" : "";
@@ -311,6 +322,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
             min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, excess_split: stB?.excess_split ?? null, level_status: statusOf(stB, false), reserve_after: stB?.reserve ?? null,
             arr_note: arr?.shared_note ?? "", rec: recOf(ev?.csn_id),
             prorata_a: proRata(lv, a.recorded ?? null), prorata_b: proRata(lv, a.advised ?? null),
+            min_a_before: dayBefore(fam.days_a, lv.level_key, a.recorded ?? null), min_b_before: dayBefore(fam.days_b, lv.level_key, a.advised ?? null),
           });
         }
         for (const ref of lotRefs) {
@@ -337,6 +349,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
             min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, excess_split: stB?.excess_split ?? null,
             level_status: statusOf(stB, !b), reserve_after: stB?.reserve ?? null, flag,
             prorata_a: proRata(lv, dayA), prorata_b: proRata(lv, dayB),
+            min_a_before: dayBefore(fam.days_a, lv.level_key, dayA), min_b_before: dayBefore(fam.days_b, lv.level_key, dayB),
             alternatives: buy ? altText(alternativesFor(buy, dayA ?? dayB)) : "",
           });
         }
