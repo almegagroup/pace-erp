@@ -207,35 +207,17 @@ const LEAN_COLS = LEAN_WIDTHS.length;
 function fill(cell, argb) { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb } }; }
 const qty = (n) => (n === null || n === undefined || !Number.isFinite(Number(n)) ? "—" : Math.round(Number(n)).toLocaleString("en-US"));
 const estLines = (text, width) => (text === null || text === undefined ? 1 : String(text).split("\n").reduce((sum, l) => sum + Math.max(1, Math.ceil(l.length / Math.max(1, width * 1.05))), 0));
-const minMax = (mn, mx) => (mn === null || mn === undefined ? "—" : `${mn} d${mx ? ` / ${mx} d` : ""}`);
 const matLines = (list) => {
   const items = (list ?? []).filter((x) => x.qty > 0.5);
   return items.length ? `${items.map((x) => `${x.material}: ${qty(x.qty)}`).join("\n")}\nTotal: ${qty(items.reduce((sum, x) => sum + x.qty, 0))}` : "—";
 };
-const poolLine = (p) => (p ? `Pool: ${p.by.map((x) => `${x.material} ${qty(x.qty)}`).join(", ") || "—"} = ${qty(p.total)}` : "—");
 const splitLines = (text) => String(text ?? "").split("\n").filter(Boolean).map((l) => l.replace(/(-?\d+(\.\d+)?)( [A-Za-z]+)?$/, (_m, n, _f, unit) => `${qty(Number(n))}${unit ?? ""}`)).join("\n");
 /** "If CSN 3000000239 does not come → land by 2026-11-30" instead of the full paragraph (the full wording stays in the folded rows). */
-const shortAbsent = (text) => {
-  if (!text) return "—";
-  return String(text).split("\n").map((l) => {
-    const m = /CSN (\d+)[^:]*does not come: this order must land at plant by (\d{4}-\d\d-\d\d)/.exec(l);
-    return m ? `If CSN ${m[1]} does not come → land by ${m[2]}` : l.slice(0, 90);
-  }).join("\n");
-};
-const shortWhy = (text) => {
-  if (!text) return "—";
-  const t = String(text).trim();
-  const i = t.indexOf(". ");
-  const first = i < 0 ? t : t.slice(0, i + 1);
-  return first.length <= 170 ? first : `${first.slice(0, 167)}…`;
-};
-const legsText = (etd, port, plant) => `ETD ${day(etd) || "—"}\nPort ${day(port) || "—"}\nPlant ${day(plant) || "—"}`;
 /** The CSN Tracker's own legs: ATD (BL date) when shipped else ETD; ATA at port when arrived else ETA; ETA to plant. */
 const recordedText = (rec, fallbackPlant) => (rec
   ? `ETD ${day(rec.etd) || "—"}${rec.etd_actual ? " (ATD)" : ""}\nPort ${day(rec.port) || "—"}${rec.port_actual ? " (ATA)" : ""}\nPlant ${day(rec.plant) || day(fallbackPlant) || "—"}`
   : (fallbackPlant ? `Plant ${day(fallbackPlant)}` : "—"));
 /** The plan's as-of day (for "order-by already passed"): the first row of the family's day table. */
-const asOfOf = (b) => (b.rows?.[0]?.day ?? "0000-00-00");
 
 function writeLeanFamily(sheet, b, company) {
   const row = (vals, { bold = false, fillArgb = null, color = null, spans = {} } = {}) => {
@@ -286,90 +268,46 @@ function writeLeanFamily(sheet, b, company) {
   title('How to read: stock is shared level by level, narrow level first; what nobody needs yet is EXCESS in the shared pool. A landed lot sits in the pool until a level falls to its own Min. "Recorded" = the dates in the PO / CSN (CSN Tracker: ATD / ATA when they exist, else ETD / ETA). "Engine date" = the date the engine advises. In the recorded-date view every order lands on its recorded date; in the engine-date view on the engine date. Grey = exists only in the recorded-date view.', { bold: false, italic: true });
   sheet.addRow([]);
 
-  // ── 1. all orders at a glance
-  title("1. ALL ORDERS AT A GLANCE — what to do", { size: 12, fillArgb: L_BLUE });
-  row(["Order", "Material", `Qty (${u})`, "Status", "Recorded (CSN Tracker)", "Engine date", "What to do (engine)", "ETD / Port / Plant (engine)", "Why this date", "If another order does not come", "Triggered by / Min dip", "Other route (ETD · Port · Plant · MOQ)"], { bold: true, fillArgb: L_GREY });
-  const seen = new Map();
-  for (const sct of b.level_sections ?? []) for (const r of sct.rows) if (r.kind === "Existing order" && !seen.has(r.ref)) seen.set(r.ref, r);
-  const fullWording = [];
-  const existing = [...seen.values()].sort((x, y) => String(x.existing_eta ?? "").localeCompare(String(y.existing_eta ?? "")));
-  const refName = (ref) => String(ref).split(" · ").pop().replace(" (ORD)", "").replace(" (TRN)", " (in transit)");
-  for (const r of existing) {
-    const en = r.engine_eta ?? "";
-    const act = r.action || `In transit — cannot be moved; lands ${day(r.existing_eta)}. Nothing to do.`;
-    const out = row([refName(r.ref), r.material ?? "", num(r.lot_qty), STATUS_LABEL[r.status] ?? r.status ?? "", recordedText(r.rec, r.existing_eta), day(en),
-      act, (r.etd || r.plant) ? legsText(r.etd, r.port, r.plant) : "—", shortWhy(r.why), shortAbsent(r.absent), "—", "—"]);
-    out.getCell(3).numFmt = NUM;
-    if (en && r.existing_eta && en < r.existing_eta) out.getCell(7).font = { bold: true, color: { argb: RED } };
-    fullWording.push([refName(r.ref), r.why || "—", r.absent || "—"]);
-  }
-  for (const p of b.projection_total ?? []) {
-    const pred = (b.prediction ?? []).find((x) => x.po_by === p.po_by && x.material === p.material);
-    const en = p.engine_eta;
-    const passed = p.po_by && p.po_by < asOfOf(b) ? ", already passed" : "";
-    const act = en ? `NEW ORDER — place it. Order by ${day(p.po_by) || "—"}.`
-      : `NEW ORDER only while the existing orders stay on their recorded dates (order by ${day(p.po_by) || "—"}${passed}). If they follow the engine dates: NOT needed.`;
-    let trig = "";
-    if (pred) {
-      trig = pred.trigger_kind === "GROUP" ? `Group free stock — ${pred.trigger_group ?? ""}` : "Its own use";
-      const dp = pred.min_dip;
-      if (dp) trig += `\n${dp.level_label} fell to ${Math.round(dp.lowest_cover_days)} d (Min ${Math.round(dp.min_days)} d); asked pool ${qty(dp.ask_wanted_qty)}, got ${qty(dp.ask_got_qty)}.`;
-    }
-    const alts = (pred?.alternatives ?? []).map((a) => `${a.route === "DOMESTIC" ? "LOCAL" : "IMPORT"} · ${a.material} · ${String(a.vendor).split(" — ").pop()}\nETD ${a.etd ?? "—"} · Port ${a.port ?? "—"} · Plant ${a.plant ?? "—"} · MOQ ${a.moq ? qty(a.moq) : "—"}`).join("\n") || "—";
-    const out = row(["NEW (engine)", `${p.material}\n${String(p.supplier).split(" — ").pop()}`, num(p.qty), "Projection", p.recorded_eta ? `Plant ${day(p.recorded_eta)}` : "—", en ? day(en) : "Not needed", act, legsText(p.etd, p.port, en || p.recorded_eta), "—", "—", trig || "—", alts], { fillArgb: en ? null : L_DGREY });
-    out.getCell(3).numFmt = NUM;
-  }
-  sheet.addRow([]);
-  if (fullWording.length) {
-    title("Full engine wording of every order above   ▶ click [+] at the left edge to open", { bold: false, italic: true });
-    const from = sheet.rowCount + 1;
-    row(["Order", "Why this date (full)", "", "", "", "", "If another order does not come (full)", "", "", "", "", ""], { bold: true, fillArgb: L_GREY, spans: { 2: 6, 7: 12 } });
-    for (const [nm, why, absent] of fullWording) row([nm, why, "", "", "", "", absent, "", "", "", "", ""], { spans: { 2: 6, 7: 12 } });
-    fold(from, sheet.rowCount);
-    sheet.addRow([]);
-  }
-
-  // ── 2. pool diary
-  if ((b.pool_diary ?? []).length) {
-    title("2. POOL DIARY — the dates that matter, both views side by side", { size: 12, fillArgb: L_BLUE });
-    row(["Date", "Recorded-date view: what lands → pool after", "", "", "Engine-date view: what lands → pool after", "", "", "What happened", "", "", "", ""], { bold: true, fillArgb: L_GREY, spans: { 2: 4, 5: 7, 8: 12 } });
-    for (const d of b.pool_diary) {
-      const hasDip = d.notes.some((n) => n.includes("falls to"));
-      row([d.day, [...d.lands_a, poolLine(d.pool_a)].join("\n"), "", "", [...d.lands_b, poolLine(d.pool_b)].join("\n"), "", "", d.notes.join("\n"), "", "", "", ""], { spans: { 2: 4, 5: 7, 8: 12 }, fillArgb: hasDip ? L_AMBER : null });
-    }
-    sheet.addRow([]);
-  }
-
-  // ── 3. level by level
-  title("3. LEVEL BY LEVEL — what each level holds today and what each order gives it", { size: 12, fillArgb: L_BLUE });
+  // ── 1. level by level (owner 2026-11-07: "all orders at a glance" and "pool diary" removed — this is the report)
+  title("1. LEVEL BY LEVEL — what each level holds today, how long it lasts, and what each order gives it", { size: 12, fillArgb: L_BLUE });
+  title(`How to read: Min / Max are days of cover. "Stock lasts" = how many days today's stock of the level covers, and the date that reaches. "Max cover" = the same when the level also takes every spare kg free to it, capped at its Max days. For each order: lot − "level takes" = what passes on to the next level (after the last level it becomes spare stock = EXCESS). "Spare stock of this level's items" counts only this level's own items, and includes older spare stock, not just this lot.`, { bold: false, italic: true });
   const levelCount = (b.level_sections ?? []).length;
+  const daysUntil = (d, until) => (d === null || d === undefined ? "—" : `${d} d${until ? ` → until ${day(until)}` : ""}`);
   (b.level_sections ?? []).forEach((sct, idx) => {
     const today = (b.level_today ?? []).find((x) => x.label === sct.label);
     title(`Level ${idx + 1} — ${sct.label}   (${sct.members.join(" + ")})   —   Min ${days(sct.target_days) ?? "—"} d · Max ${days(sct.max_days) ?? "—"} d`, { size: 12, fillArgb: L_BLUE });
-    const stock = sct.rows.find((r) => r.kind === "Stock today");
-    row(["TODAY", "Available to this level", "", "This level keeps as reserve", "", "Left over → next level", "", "Reserve covers / Max days", "", "", "", ""], { bold: true, fillArgb: L_GREY, spans: { 2: 3, 4: 5, 6: 7, 8: 9 } });
-    row(["", matLines(today?.opening), "", matLines(today?.reserve), "", matLines(today?.left), "", `${stock?.min_a ?? "—"} d  /  ${stock?.max_a ? `${stock.max_a} d` : "Full (beyond the plan)"}`, "", "", "", ""], { spans: { 2: 3, 4: 5, 6: 7, 8: 9 } });
+    row(["TODAY", "Available to this level", "", "This level keeps as reserve", "", "Left over → next level", "", "Stock lasts / Max cover", "", "", "", ""], { bold: true, fillArgb: L_GREY, spans: { 2: 3, 4: 5, 6: 7, 8: 12 } });
+    const stockLasts = `Stock lasts: ${daysUntil(sct.today_cover, sct.today_cover_until)}   (Min ${days(sct.target_days) ?? "—"} d)`;
+    const maxCover = sct.today_beyond_plan
+      ? `Max cover: beyond the plan${b.plan_end ? ` (past ${day(b.plan_end)})` : ""}   (Max ${days(sct.max_days) ?? "—"} d)`
+      : `Max cover: ${daysUntil(sct.today_max_cover, sct.today_max_until)}   (Max ${days(sct.max_days) ?? "—"} d)`;
+    row(["", matLines(today?.opening), "", matLines(today?.reserve), "", matLines(today?.left), "", `${stockLasts}\n${maxCover}`, "", "", "", ""], { spans: { 2: 3, 4: 5, 6: 7, 8: 12 } });
     if (idx === levelCount - 1 && (b.excess_after ?? []).length) {
       row(["After the last level → the EXCESS in the pool", "", "", matLines(b.excess_after), "", "", "", "", "", "", "", ""], { bold: true, fillArgb: L_GREEN, spans: { 4: 5 } });
     }
-    row(["Order", `Qty (${u})`, "Recorded date", "Engine date", `Level takes (${u} · % of lot)`, "Min / Max days: recorded → engine", "Excess in pool at end of the day the lot lands", "Break-up of that excess", "", "", "", ""], { bold: true, fillArgb: L_GREY, spans: { 8: 9 } });
+    row(["Order", `Lot qty (${u})`, "Recorded date", "Engine date", `Level takes (${u} · % of lot)`, `Passes on to next level (${u})`, "Min days after: recorded → engine", "Max days after: recorded → engine", `Spare stock of this level's items after the lot lands (${u})`, "Break-up of that spare stock", "", ""], { bold: true, fillArgb: L_GREY, spans: { 10: 12 } });
+    const maxText = (mx) => (mx === null || mx === undefined ? "beyond plan" : `${mx} d`);
+    const refName = (ref) => String(ref).split(" · ").pop().replace(" (ORD)", "").replace(" (TRN)", " (in transit)");
     for (const r of sct.rows) {
       if (r.kind === "Stock today") continue;
       const proj = r.kind === "Projection";
       const en = r.engine_eta ?? "";
-      const nm = proj ? `NEW (engine) — ${r.material}` : `${r.material} — ${refName(r.ref)}`;
+      const nm = proj ? `NEW (engine) — ${r.material}${r.po_by ? `\nOrder by ${day(r.po_by)}` : ""}` : `${r.material} — ${refName(r.ref)}`;
+      const passes = Math.max(0, (r.lot_qty ?? 0) - (r.to_level ?? 0));
+      const minTxt = `${r.min_a === null || r.min_a === undefined ? "—" : `${r.min_a} d`}  →  ${r.min_b === null || r.min_b === undefined ? "—" : `${r.min_b} d`}`;
+      const maxTxt = `${maxText(r.max_a)}  →  ${maxText(r.max_b)}`;
       const out = row([nm, num(r.lot_qty), proj ? "—" : day(r.existing_eta) || "—", en ? day(en) : "Not needed", `${qty(r.to_level)} · ${r.pct === null || r.pct === undefined ? "—" : Math.round(r.pct * 100)}%`,
-        `${minMax(r.min_a, r.max_a)}  →  ${minMax(r.min_b, r.max_b)}`, num(r.excess), splitLines(r.excess_split), "", "", "", ""], { spans: { 8: 9 }, fillArgb: proj && !en ? L_DGREY : null });
-      out.getCell(2).numFmt = NUM; out.getCell(7).numFmt = NUM;
+        qty(passes), minTxt, maxTxt, num(r.excess), splitLines(r.excess_split), "", ""], { spans: { 10: 12 }, fillArgb: proj && !en ? L_DGREY : null });
+      out.getCell(2).numFmt = NUM; out.getCell(9).numFmt = NUM;
       const st = String(r.level_status ?? "");
-      if (st && !st.startsWith("Above Min")) fill(out.getCell(6), L_AMBER);
+      if (st && !st.startsWith("Above Min")) fill(out.getCell(7), L_AMBER);
     }
     sheet.addRow([]);
   });
 
   // ── 4. day by day (folded)
   if ((b.rows ?? []).length) {
-    title("4. FAMILY DAY BY DAY — whole family on every date something lands   ▶ click [+] at the left edge to open (all data is here, folded to keep the page short)", { size: 12, fillArgb: L_BLUE });
+    title("2. FAMILY DAY BY DAY — whole family on every date something lands   ▶ click [+] at the left edge to open (all data is here, folded to keep the page short)", { size: 12, fillArgb: L_BLUE });
     const from = sheet.rowCount + 1;
     row(["Date", "Opening", "ETA to Plant", "Quantity to Dispatch", "Pro-rata", "Closing", "Excess (not needed yet)", "Max Days", "Min Stk", "Min Days", "PO / CSN · Qty · Supplier · Status · Recorded (CSN Tracker)", ""], { bold: true, fillArgb: L_GREY });
     for (const r of b.rows) {
