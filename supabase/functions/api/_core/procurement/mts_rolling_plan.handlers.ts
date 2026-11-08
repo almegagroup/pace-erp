@@ -637,7 +637,9 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       current_stk_days: r.metrics.current_stk_days, next_month_cov: r.metrics.next_month_cov,
       current_req: dq(r.material_id, r.metrics.sheet_current_req), current_prorata: dq(r.material_id, r.metrics.current_prorata_daily),
       req_nm: dq(r.material_id, r.metrics.nm_req), prorata_nm: dq(r.material_id, r.metrics.nm_prorata_daily),
-      current_stock: dq(r.material_id, r.metrics.current_stock), intransit_cm: dq(r.material_id, r.metrics.intransit_cm), intransit_nm: dq(r.material_id, r.metrics.intransit_nm),
+      current_stock: dq(r.material_id, r.metrics.current_stock), intransit_cm: dq(r.material_id, r.metrics.intransit_cm_dispatched), intransit_nm: dq(r.material_id, r.metrics.intransit_nm_dispatched), open_po_cm: dq(r.material_id, r.metrics.open_po_cm), open_po_nm: dq(r.material_id, r.metrics.open_po_nm),
+      // Owner 2026-11-08: why the cover is blank — stock outlasts the PO21 plan, or the item is used only through a group.
+      current_stk_days_note: r.metrics.current_stk_days === null ? (Number(r.metrics.cm_prorata ?? 0) + Number(r.metrics.nm_req ?? 0) > 0 && Number(r.metrics.current_stock ?? 0) > 0 ? "Beyond plan" : Number(r.group_share_qty ?? 0) > 0 ? "Via group" : null) : null,
       below_target: covered ? false : r.metrics.below_target_with_in, below_critical: covered ? false : r.metrics.below_critical_with_in,
       first_shortage_day: covered ? null : risks.get(r.material_id)?.first_shortage_day ?? null,
       first_below_critical_day: covered ? null : risks.get(r.material_id)?.first_below_critical_day ?? null,

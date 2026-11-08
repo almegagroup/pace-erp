@@ -169,13 +169,21 @@ function baseQtyColumn(key, label, group, options = {}) {
   const format = options.days ? fmtDays : fmtQty;
   return {
     key, label, group, width: options.width ?? "110px", align: "right",
-    render: (row) => format(read(row)),
-    copyValue: (row) => read(row) ?? "",
-    filterValue: (row) => format(read(row)),
-    exportValue: (row) => (read(row) === null || read(row) === undefined ? "" : options.days ? Math.floor(Number(read(row)) + 1e-9) : Number(read(row))),
+    // Owner 2026-11-08: a blank cover looked like missing data; say why it is blank (options.emptyText gives the reason, if any).
+    render: (row) => (read(row) === null || read(row) === undefined ? (options.emptyText?.(row) ?? format(read(row))) : format(read(row))),
+    copyValue: (row) => read(row) ?? options.emptyText?.(row) ?? "",
+    filterValue: (row) => (read(row) === null || read(row) === undefined ? (options.emptyText?.(row) ?? format(read(row))) : format(read(row))),
+    exportValue: (row) => (read(row) === null || read(row) === undefined ? (options.emptyText?.(row) ?? "") : options.days ? Math.floor(Number(read(row)) + 1e-9) : Number(read(row))),
     numFmt: options.days ? "0" : "#,##0.###",
   };
 }
+/** Why a cover-days cell is blank: stock outlasts the PO21 plan, or the item is used only through a group (its cover is the group's). */
+const coverEmptyText = (row) => {
+  const ownDemand = Number(row.cm_prorata ?? 0) + Number(row.nm_req ?? 0) > 0;
+  if (ownDemand && Number(row.current_stock ?? 0) > 0) return "Beyond plan";
+  if (!ownDemand && Number(row.group_share_qty ?? 0) > 0) return "Via group";
+  return null;
+};
 function textColumn(key, label, group, options = {}) {
   const read = options.read ?? ((row) => row[key]);
   return {
@@ -395,19 +403,21 @@ function buildReportColumns(expanded, toggleExpanded, showPackQty, togglePackQty
     textColumn("required_locations", "Counted SLocs", "stock", { width: "110px", read: (r) => (r.required_locations ?? []).join(", ") }),
     textColumn("other_locations", "Transfer SLocs", "stock", { width: "110px", read: (r) => (r.other_locations ?? []).join(", ") }),
 
-    qtyColumn("intransit_cm", "INTRANSIT CM", "inbound"),
+    qtyColumn("intransit_cm_dispatched", "INTRANSIT CM (dispatched / at gate)", "inbound", { width: "150px" }),
+    qtyColumn("open_po_cm", "OPEN PO CM (not dispatched)", "inbound", { width: "150px" }),
     qtyColumn("intransit_dispatched", "Dispatched / At Gate", "inbound", { width: "130px" }),
     qtyColumn("intransit_open_po", "Open PO (not dispatched)", "inbound", { width: "140px" }),
-    qtyColumn("intransit_nm", "INTRANSIT NM", "inbound"),
+    qtyColumn("intransit_nm_dispatched", "INTRANSIT NM (dispatched / at gate)", "inbound", { width: "150px" }),
+    qtyColumn("open_po_nm", "OPEN PO NM (not dispatched)", "inbound", { width: "150px" }),
     qtyColumn("intransit_overdue", "In-transit ETA Passed", "inbound", { width: "120px" }),
     qtyColumn("intransit_unknown", "In-transit ETA Unknown", "inbound", { width: "130px" }),
     qtyColumn("intransit_later", "In-transit Later", "inbound"),
     textColumn("inbound_risk", "Inbound Risk", "inbound", { width: "110px", render: (r) => badge(r.inbound_risk) }),
 
-    qtyColumn("current_stk_days", "CURRENT STK DAYS", "coverage", { days: true }),
-    qtyColumn("current_cov", "Current Cov", "coverage", { days: true }),
-    qtyColumn("next_month_cov", "Next Month Cov", "coverage", { days: true }),
-    qtyColumn("cov_till_nm", "Cov till NM", "coverage", { days: true }),
+    qtyColumn("current_stk_days", "CURRENT STK DAYS", "coverage", { days: true, emptyText: coverEmptyText }),
+    qtyColumn("current_cov", "Current Cov", "coverage", { days: true, emptyText: coverEmptyText }),
+    qtyColumn("next_month_cov", "Next Month Cov", "coverage", { days: true, emptyText: coverEmptyText }),
+    qtyColumn("cov_till_nm", "Cov till NM", "coverage", { days: true, emptyText: coverEmptyText }),
     qtyColumn("current_balance_shortage", "Current Balance (+ = short)", "coverage", { width: "140px" }),
     qtyColumn("nm_opening", "NM Opening (proj.)", "coverage"),
     qtyColumn("nm_closing", "NM Closing (proj.)", "coverage"),

@@ -1544,7 +1544,11 @@ export function partitionPoLineInbound(line: PoLineInboundInput, asOf: string, w
     .sort((a, b) => String(a.eta ?? "9999").localeCompare(String(b.eta ?? "9999")) || a.csn_number.localeCompare(b.csn_number));
   for (const csn of dispatched) {
     const openPo = Math.max(0, Number(csn.dispatch_qty) - Number(csn.received_qty ?? 0));
-    const qty = take(openPo * line.base_per_po_unit);
+    // Owner 2026-11-08: goods physically dispatched count in full, even when the dispatch is more than the PO line still has open
+    // (an over-dispatch within tolerance): the PO line caps the open-PO remainder, never what is already on the road.
+    const asked = openPo * line.base_per_po_unit;
+    take(asked);
+    const qty = asked;
     if (qty > EPSILON) {
       events.push({
         material_id: line.material_id, qty, date: csn.eta, kind: "IN_TRANSIT",
@@ -1599,6 +1603,9 @@ export type InboundBuckets = {
   /** Physically dispatched / at gate (CSN, gate entry, STO in transit) vs open PO (lot / remainder). */
   dispatched: number;
   open_po: number;
+  /** Owner 2026-11-08: the dispatched / at-gate part of `cm` and `nm` alone (in transit), apart from the open-PO part. */
+  cm_dispatched: number;
+  nm_dispatched: number;
   /**
    * Dated events inside the horizon (as-of .. NM end). Owner D5: overdue and no-ETA
    * events are assumed to arrive on the as-of date (never dropped) and stay flagged
@@ -1608,7 +1615,7 @@ export type InboundBuckets = {
 };
 
 export function bucketInbound(events: InboundEvent[], calendar: PlanningCalendar): InboundBuckets {
-  const buckets: InboundBuckets = { overdue: 0, cm: 0, nm: 0, later: 0, unknown: 0, total: 0, actual_gr_today: 0, dispatched: 0, open_po: 0, byDay: new Map() };
+  const buckets: InboundBuckets = { overdue: 0, cm: 0, nm: 0, later: 0, unknown: 0, total: 0, actual_gr_today: 0, dispatched: 0, open_po: 0, cm_dispatched: 0, nm_dispatched: 0, byDay: new Map() };
   const assumeToday = (qty: number) => buckets.byDay.set(calendar.asOf, (buckets.byDay.get(calendar.asOf) ?? 0) + qty);
   for (const event of events) {
     // A posted GR is no longer in transit.  It is live stock for Requirement
@@ -1623,8 +1630,9 @@ export function bucketInbound(events: InboundEvent[], calendar: PlanningCalendar
     else buckets.dispatched += event.qty;
     if (!event.date) { buckets.unknown += event.qty; assumeToday(event.qty); continue; }
     if (event.date < calendar.asOf) { buckets.overdue += event.qty; assumeToday(event.qty); continue; }
-    if (event.date <= calendar.cmEnd) buckets.cm += event.qty;
-    else if (event.date <= calendar.nmEnd) buckets.nm += event.qty;
+    const isDispatched = !(event.kind === "SCHEDULED_LOT" || event.kind === "PO_REMAINDER" || event.kind === "SUB_CSN_PLANNED");
+    if (event.date <= calendar.cmEnd) { buckets.cm += event.qty; if (isDispatched) buckets.cm_dispatched += event.qty; }
+    else if (event.date <= calendar.nmEnd) { buckets.nm += event.qty; if (isDispatched) buckets.nm_dispatched += event.qty; }
     else { buckets.later += event.qty; continue; }
     buckets.byDay.set(event.date, (buckets.byDay.get(event.date) ?? 0) + event.qty);
   }
@@ -1925,6 +1933,11 @@ export type MaterialMetrics = {
   current_balance_shortage: number;
   /** Dispatched / at gate vs open PO (lot / remainder) inbound. */
   intransit_dispatched: number;
+  /** Owner 2026-11-08: in transit = dispatched / at gate only. `intransit_cm` / `intransit_nm` still hold every inbound piece (the cover maths uses them). */
+  intransit_cm_dispatched: number;
+  intransit_nm_dispatched: number;
+  open_po_cm: number;
+  open_po_nm: number;
   intransit_open_po: number;
   /** AJ: reorder level (Safety + Lead-time stock) ≥ current stock. */
   reorder_flag: boolean | null;
@@ -2103,6 +2116,10 @@ export function computeMaterialMetrics(input: MetricsInput): MaterialMetrics {
     total_prorata_daily: r(totalProrataDaily),
     current_balance_shortage: r(sheetCurrentReq - liveStock),
     intransit_dispatched: r(inbound.dispatched),
+    intransit_cm_dispatched: r(inbound.cm_dispatched),
+    intransit_nm_dispatched: r(inbound.nm_dispatched),
+    open_po_cm: r(inbound.cm - inbound.cm_dispatched),
+    open_po_nm: r(inbound.nm - inbound.nm_dispatched),
     intransit_open_po: r(inbound.open_po),
     reorder_flag: reorderFlag,
     priority_score: priorityScore,
@@ -2435,6 +2452,7 @@ export function buildRequirementRows(input: RequirementInput): RequirementOutput
         later: roundQty(bucketTotals.later), unknown: roundQty(bucketTotals.unknown), total: roundQty(bucketTotals.total),
         actual_gr_today: roundQty(bucketTotals.actual_gr_today),
         dispatched: roundQty(bucketTotals.dispatched), open_po: roundQty(bucketTotals.open_po),
+        cm_dispatched: roundQty(bucketTotals.cm_dispatched), nm_dispatched: roundQty(bucketTotals.nm_dispatched),
       },
       inbound_events: events.map((event) => ({ ...event, qty: roundQty(event.qty) })),
       pools: (poolsByMaterial.get(materialId) ?? []).sort((a, b) => a.pool_key.localeCompare(b.pool_key)),

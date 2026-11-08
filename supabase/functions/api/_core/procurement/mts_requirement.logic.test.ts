@@ -1069,3 +1069,24 @@ Deno.test("a pure group member is not critical when other members carry the grou
   if (groupCoveredBy({ material_id: "MC60", fixed_demand_qty: 0, pools: [{ group_id: "G" }, { group_id: "SHORT" }] }, groups) !== null) throw new Error("a short group is the member's problem");
   if (groupCoveredBy({ material_id: "MC60", fixed_demand_qty: 0, pools: [] }, groups) !== null) throw new Error("no group, no cover");
 });
+
+Deno.test("PO22 in transit: dispatched qty counts in full even above the PO line's open qty; in-transit and open-PO columns are split", () => {
+  const warnings: Warning[] = [];
+  const events = partitionPoLineInbound({
+    material_id: "RM-A", po_line_id: "line", po_number: "P1", line_number: 1, open_qty: 5000, base_per_po_unit: 1,
+    expected_delivery_date: "2026-11-30", at_gate: [], lots: [],
+    csns: [{ id: "c1", csn_number: "3000000305", status: "TRN", dispatch_qty: 7000, received_qty: 0, eta: "2026-11-10", is_mother_with_children: false }],
+  } as never, "2026-11-01", warnings);
+  const transit = events.filter((e) => e.kind === "IN_TRANSIT").reduce((sum, e) => sum + e.qty, 0);
+  assertEqual(transit, 7000, "the 7,000 dispatched are in transit, not capped at the PO's 5,000");
+  assertEqual(events.filter((e) => e.kind === "PO_REMAINDER").reduce((sum, e) => sum + e.qty, 0), 0, "no open-PO remainder is left");
+  // A 5,000 line with 2,000 dispatched: 2,000 in transit, 3,000 open PO — and the CM buckets split the two.
+  const mixed = partitionPoLineInbound({
+    material_id: "RM-A", po_line_id: "line", po_number: "P2", line_number: 1, open_qty: 5000, base_per_po_unit: 1,
+    expected_delivery_date: "2026-11-25", at_gate: [], lots: [],
+    csns: [{ id: "c2", csn_number: "3000000306", status: "TRN", dispatch_qty: 2000, received_qty: 0, eta: "2026-11-20", is_mother_with_children: false }],
+  } as never, "2026-11-01", warnings);
+  const calendar = buildCalendar("2026-11-01", "2026-11-16")!;
+  const b = bucketInbound(mixed, calendar);
+  assertEqual([b.cm, b.cm_dispatched], [5000, 2000], "CM holds both, the dispatched part is 2,000");
+});
