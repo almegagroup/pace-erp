@@ -113,3 +113,15 @@ Deno.test("summary keeps the same SKU in two companies apart", () => {
   assertEqual(summary[0].blocked_kg, 100, "c1 blocked");
   assertEqual(summary[1].blocked_kg, 40, "c2 blocked");
 });
+
+Deno.test("summary row carries the date of the latest posted status change that built the balance", () => {
+  const rows = [
+    ssc({ id: "a", from_stock_type: "UNRESTRICTED", to_stock_type: "BLOCKED", quantity: 100, created_at: "2026-10-10T08:00:00Z" }),
+    ssc({ id: "b", from_stock_type: "UNRESTRICTED", to_stock_type: "BLOCKED", quantity: 50, created_at: "2026-11-02T08:00:00Z" }),
+    // a reversed posting is ignored, so its (later) date must not become the "last event"
+    ssc({ id: "c", from_stock_type: "UNRESTRICTED", to_stock_type: "BLOCKED", quantity: 10, status: "REVERSED", created_at: "2026-11-09T08:00:00Z" }),
+  ];
+  const [row] = computeHeldSummary(rows);
+  assertEqual(row.blocked_kg, 150, "balance");
+  assertEqual(row.last_event_at, "2026-11-02T08:00:00Z", "latest counted event");
+});

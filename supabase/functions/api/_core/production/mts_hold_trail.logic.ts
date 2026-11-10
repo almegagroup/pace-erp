@@ -151,13 +151,17 @@ export function filterEventsByStatus(events: TrailEvent[], statuses: string[]): 
 
 // Net kg currently in QI / Blocked per company + SKU, from posted status changes only. A reversed posting and the row that
 // reverses it are BOTH left out, so a reversal never counts twice. SKU level (per company) -- releases carry no batch.
-export function computeHeldSummary(sscRows: SscRow[]): Array<{ company_id: string; material_id: string; qi_kg: number; blocked_kg: number }> {
-  const bySku = new Map<string, { company_id: string; material_id: string; qi_kg: number; blocked_kg: number }>();
+export type HeldSummaryRow = { company_id: string; material_id: string; qi_kg: number; blocked_kg: number; last_event_at: string | null };
+
+export function computeHeldSummary(sscRows: SscRow[]): HeldSummaryRow[] {
+  const bySku = new Map<string, HeldSummaryRow>();
   for (const row of sscRows) {
     if (row.status !== "POSTED" || row.reversal_of_posting_id) continue;
     if (!touchesHeldStock(row)) continue;
     const key = `${row.company_id}|${row.material_id}`;
-    const entry = bySku.get(key) ?? { company_id: row.company_id, material_id: row.material_id, qi_kg: 0, blocked_kg: 0 };
+    const entry = bySku.get(key) ?? { company_id: row.company_id, material_id: row.material_id, qi_kg: 0, blocked_kg: 0, last_event_at: null };
+    // The date of the newest posted change that built this balance -- shown so a SKU held since long ago is explained.
+    if (!entry.last_event_at || Date.parse(row.created_at) > Date.parse(entry.last_event_at)) entry.last_event_at = row.created_at;
     const qty = num(row.quantity);
     if (row.to_stock_type === "QUALITY_INSPECTION") entry.qi_kg += qty;
     if (row.from_stock_type === "QUALITY_INSPECTION") entry.qi_kg -= qty;
@@ -170,5 +174,6 @@ export function computeHeldSummary(sscRows: SscRow[]): Array<{ company_id: strin
     material_id: entry.material_id,
     qi_kg: Number(entry.qi_kg.toFixed(6)),
     blocked_kg: Number(entry.blocked_kg.toFixed(6)),
+    last_event_at: entry.last_event_at,
   }));
 }

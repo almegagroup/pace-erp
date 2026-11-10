@@ -238,6 +238,7 @@ export async function getMtsHoldTrailHandler(req: Request, ctx: ProdHandlerConte
       sku: skuLabel(row.material_id),
       qi_kg: row.qi_kg,
       blocked_kg: row.blocked_kg,
+      last_event_at: row.last_event_at,
     })).filter((row) => Math.abs(row.qi_kg) > 1e-9 || Math.abs(row.blocked_kg) > 1e-9);
 
     return okResponse({ items, summary, total: items.length }, ctx.request_id, req);

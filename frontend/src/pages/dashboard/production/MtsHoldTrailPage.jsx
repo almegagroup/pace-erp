@@ -38,6 +38,11 @@ const formatQty = (value) => (value == null ? "—" : Number(value).toLocaleStri
 function istDate(offsetDays = 0) {
   return new Date(Date.now() + offsetDays * 86_400_000).toLocaleDateString("en-CA", { timeZone: "Asia/Kolkata" });
 }
+function formatDay(iso) {
+  if (!iso) return "—";
+  const date = new Date(iso);
+  return Number.isNaN(date.getTime()) ? "—" : date.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "numeric" });
+}
 function formatWhen(iso) {
   if (!iso) return "—";
   const date = new Date(iso);
@@ -187,7 +192,7 @@ export default function MtsHoldTrailPage() {
           ["Event Date", `${criteria.date_from || "…"} to ${criteria.date_to || "…"}`],
           ["SKU", criteria.material_ids ? `${criteria.material_ids.split(",").length} selected` : "All"],
           ["Status", criteria.statuses ? criteria.statuses.split(",").map(stockLabel).join(", ") : "Quality Inspection + Blocked"],
-          ...summaryRows.map((row) => [`Held now — ${row.sku}`, `QI ${formatQty(row.qi_kg)} KG, Blocked ${formatQty(row.blocked_kg)} KG`]),
+          ...summaryRows.map((row) => [`Held now (all dates) — ${row.sku}`, `QI ${formatQty(row.qi_kg)} KG, Blocked ${formatQty(row.blocked_kg)} KG, last event ${formatDay(row.last_event_at)}`]),
           ...(allColumnSearch.trim() ? [["Search", allColumnSearch.trim()]] : []),
           ...(gridRows.length !== displayedRows.length ? [["Column Filters", "Applied (only the filtered rows are exported)"]] : []),
           ["Rows", gridRows.length],
@@ -299,36 +304,40 @@ export default function MtsHoldTrailPage() {
         </div>
       ) : (
         <div className="grid gap-4">
-          {summaryRows.length > 0 ? (
-            <ErpSectionCard eyebrow="Held now" title="Currently held, per SKU (KG)">
-              <div className="overflow-x-auto">
-                <table className="w-full min-w-[520px] border-collapse text-sm">
-                  <thead>
-                    <tr className="text-xs uppercase tracking-wide text-slate-500">
-                      <th className="border-b px-3 py-2 text-left">Company</th>
-                      <th className="border-b px-3 py-2 text-left">SKU</th>
-                      <th className="border-b px-3 py-2 text-right">In Quality Inspection</th>
-                      <th className="border-b px-3 py-2 text-right">Blocked</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {summaryRows.map((row) => (
-                      <tr key={`${row.company_code}|${row.sku}`} className="border-b border-slate-100">
-                        <td className="px-3 py-2">{row.company_code}</td>
-                        <td className="px-3 py-2">{row.sku}</td>
-                        <td className="px-3 py-2 text-right font-mono">{formatQty(row.qi_kg)}</td>
-                        <td className="px-3 py-2 text-right font-mono">{formatQty(row.blocked_kg)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <p className="mt-2 text-xs text-slate-500">
-                SKU level only: a release in IN13 carries no batch, so a batch-wise balance cannot be shown. Posted status changes only.
-              </p>
-            </ErpSectionCard>
-          ) : null}
           <ErpSectionCard eyebrow="Page 2" title="Hold & Block Trail">
+            {summaryRows.length > 0 ? (
+              <div className="mb-4 rounded border border-slate-200 bg-slate-50 p-3">
+                <p className="text-xs font-semibold uppercase tracking-[0.1em] text-slate-600">Held right now, per SKU (KG) — all dates</p>
+                <div className="mt-2 overflow-x-auto">
+                  <table className="w-full min-w-[620px] border-collapse text-sm">
+                    <thead>
+                      <tr className="text-xs uppercase tracking-wide text-slate-500">
+                        <th className="border-b px-3 py-1.5 text-left">Company</th>
+                        <th className="border-b px-3 py-1.5 text-left">SKU</th>
+                        <th className="border-b px-3 py-1.5 text-right">In Quality Inspection</th>
+                        <th className="border-b px-3 py-1.5 text-right">Blocked</th>
+                        <th className="border-b px-3 py-1.5 text-right">Last event</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {summaryRows.map((row) => (
+                        <tr key={`${row.company_code}|${row.sku}`} className="border-b border-slate-100">
+                          <td className="px-3 py-1.5">{row.company_code}</td>
+                          <td className="px-3 py-1.5">{row.sku}</td>
+                          <td className="px-3 py-1.5 text-right font-mono">{formatQty(row.qi_kg)}</td>
+                          <td className="px-3 py-1.5 text-right font-mono">{formatQty(row.blocked_kg)}</td>
+                          <td className="px-3 py-1.5 text-right font-mono">{formatDay(row.last_event_at)}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <p className="mt-2 text-xs text-slate-600">
+                  This balance covers <b>all dates</b>: the Event Date filter does not apply to it, so it can list a SKU whose hold is older than the
+                  grid below (see Last event). The grid shows only events inside the chosen dates. SKU level only: a release in IN13 carries no batch.
+                </p>
+              </div>
+            ) : null}
             <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
               <label className="min-w-[260px] flex-1 text-xs font-semibold uppercase tracking-[0.1em] text-slate-600">
                 Search all columns
