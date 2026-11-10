@@ -88,6 +88,7 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
 
   // ── Procurement: GRN ─────────────────────────────────────────────────────
   "GET:/api/procurement/grns":                              { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "VIEW"  },
+  "GET:/api/procurement/grn-report":                        { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "VIEW"  },
   "POST:/api/procurement/grns":                             { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "WRITE" },
   "GET:/api/procurement/grns/ge-lines":                     { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "VIEW"  },
   "POST:/api/procurement/grns/from-line":                   { skipAcl: false, resourceCode: "PROC_GRN_LIST", action: "WRITE" },

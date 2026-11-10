@@ -18,6 +18,7 @@ import { errorResponse, okResponse } from "../response.ts";
 import { cascadeRecalculate } from "./opening_stock.handlers.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.ts";
+import { filterGrnReportRows, type GrnReportRow } from "./grn_report.logic.ts";
 
 type JsonRecord = Record<string, unknown>;
 type ProcurementHandlerContext = {
@@ -1459,8 +1460,11 @@ export async function listGRNsHandler(
 
     let query = serviceRoleClient
       .schema("erp_procurement").from("goods_receipt")
-      .select("id, grn_number, grn_date, status, company_id, vendor_id, gate_entry_id, gate_entry_line_id, source_gate_entry_line_id, material_id, received_qty, uom_code, po_id, invoice_number, invoice_date, transporter_id, lr_number, lr_date")
+      .select("id, grn_number, grn_date, status, company_id, vendor_id, gate_entry_id, gate_entry_line_id, source_gate_entry_line_id, material_id, received_qty, uom_code, po_id, invoice_number, invoice_date, transporter_id, lr_number, lr_date", { count: "exact" })
       .order("grn_date", { ascending: false })
+      // Tie-break: callers page through this list (limit/offset); without a unique second key, rows that share a
+      // grn_date can repeat or vanish between pages.
+      .order("id", { ascending: true })
       .range(offset, offset + limit - 1);
 
     if (companyId) query = query.eq("company_id", companyId);
@@ -1469,13 +1473,14 @@ export async function listGRNsHandler(
     if (dateFrom) query = query.gte("grn_date", dateFrom);
     if (dateTo) query = query.lte("grn_date", dateTo);
 
-    const { data, error } = await query;
+    const { data, error, count } = await query;
     if (error) {
       return procurementErrorResponse(req, ctx, "GRN_LIST_FAILED", 500, "Unable to list GRNs.");
     }
 
     const rows = (data ?? []) as JsonRecord[];
-    if (rows.length === 0) return okResponse({ items: [] }, ctx.request_id, req);
+    const totalCount = typeof count === "number" ? count : rows.length;
+    if (rows.length === 0) return okResponse({ items: [], total: totalCount }, ctx.request_id, req);
 
     // Bulk resolve FKs
     const vendorIds = [...new Set(rows.map((r) => String(r.vendor_id ?? "")).filter(Boolean))];
@@ -1483,24 +1488,22 @@ export async function listGRNsHandler(
     const geIds = [...new Set(rows.map((r) => String(r.gate_entry_id ?? "")).filter(Boolean))];
     const transporterIds = [...new Set(rows.map((r) => String(r.transporter_id ?? "")).filter(Boolean))];
 
-    const [vendorResp, matResp, geResp, transporterResp] = await Promise.all([
-      vendorIds.length > 0
-        ? serviceRoleClient.schema("erp_master").from("vendor_master")
-            .select("id, vendor_code, vendor_name").in("id", vendorIds)
-        : { data: [], error: null },
-      materialIds.length > 0
-        ? serviceRoleClient.schema("erp_master").from("material_master")
-            .select("id, pace_code, material_name").in("id", materialIds)
-        : { data: [], error: null },
-      geIds.length > 0
-        ? serviceRoleClient.schema("erp_procurement").from("gate_entry")
-            .select("id, ge_number").in("id", geIds)
-        : { data: [], error: null },
-      transporterIds.length > 0
-        ? serviceRoleClient.schema("erp_master").from("transporter_master")
-            .select("id, transporter_code, transporter_name").in("id", transporterIds)
-        : { data: [], error: null },
-    ]);
+    // Every id-list read is chunked (§8E) and a failed read is an error, not a silently blank name.
+    let vendorRows: JsonRecord[]; let matRows: JsonRecord[]; let geRows: JsonRecord[]; let transporterRows: JsonRecord[];
+    try {
+      [vendorRows, matRows, geRows, transporterRows] = await Promise.all([
+        fetchInChunks<JsonRecord>(vendorIds, (idChunk) => serviceRoleClient.schema("erp_master").from("vendor_master")
+          .select("id, vendor_code, vendor_name").in("id", idChunk)),
+        fetchInChunks<JsonRecord>(materialIds, (idChunk) => serviceRoleClient.schema("erp_master").from("material_master")
+          .select("id, pace_code, material_name").in("id", idChunk)),
+        fetchInChunks<JsonRecord>(geIds, (idChunk) => serviceRoleClient.schema("erp_procurement").from("gate_entry")
+          .select("id, ge_number").in("id", idChunk)),
+        fetchInChunks<JsonRecord>(transporterIds, (idChunk) => serviceRoleClient.schema("erp_master").from("transporter_master")
+          .select("id, transporter_code, transporter_name").in("id", idChunk)),
+      ]);
+    } catch {
+      return procurementErrorResponse(req, ctx, "GRN_LIST_FAILED", 500, "Unable to list GRNs.");
+    }
 
     // For old-style GRNs, fetch total_qty from lines. A GRN created by the
     // Bulk Invoice Split intentionally has no gate_entry_line_id (the legacy
@@ -1512,19 +1515,24 @@ export async function listGRNsHandler(
       .map((r) => String(r.id));
     let lineQtyMap = new Map<string, number>();
     if (oldStyleIds.length > 0) {
-      const { data: lineQtyRows } = await serviceRoleClient
-        .schema("erp_procurement").from("goods_receipt_line")
-        .select("grn_id, received_qty").in("grn_id", oldStyleIds);
-      for (const lr of (lineQtyRows ?? []) as JsonRecord[]) {
+      let lineQtyRows: JsonRecord[];
+      try {
+        lineQtyRows = await fetchInChunks<JsonRecord>(oldStyleIds, (idChunk) => serviceRoleClient
+          .schema("erp_procurement").from("goods_receipt_line")
+          .select("grn_id, received_qty").in("grn_id", idChunk));
+      } catch {
+        return procurementErrorResponse(req, ctx, "GRN_LIST_FAILED", 500, "Unable to list GRNs.");
+      }
+      for (const lr of lineQtyRows) {
         const prev = lineQtyMap.get(String(lr.grn_id)) ?? 0;
         lineQtyMap.set(String(lr.grn_id), prev + (parseNullableNumber(lr.received_qty) ?? 0));
       }
     }
 
-    const vendorMap = new Map((vendorResp.data ?? []).map((v: JsonRecord) => [v.id, v]));
-    const matMap = new Map((matResp.data ?? []).map((m: JsonRecord) => [m.id, m]));
-    const geMap = new Map((geResp.data ?? []).map((g: JsonRecord) => [g.id, g]));
-    const transporterMap = new Map((transporterResp.data ?? []).map((t: JsonRecord) => [t.id, t]));
+    const vendorMap = new Map(vendorRows.map((v) => [v.id, v]));
+    const matMap = new Map(matRows.map((m) => [m.id, m]));
+    const geMap = new Map(geRows.map((g) => [g.id, g]));
+    const transporterMap = new Map(transporterRows.map((t) => [t.id, t]));
 
     const enriched = rows.map((r) => {
       const vendor = vendorMap.get(String(r.vendor_id));
@@ -1540,6 +1548,8 @@ export async function listGRNsHandler(
         grn_number: r.grn_number,
         grn_date: r.grn_date,
         status: r.status,
+        // vendor_id was never sent, so RTV Create's vendor-name search (vendorMap.get(row.vendor_id)) could not match.
+        vendor_id: r.vendor_id ?? null,
         vendor_code: vendor?.vendor_code ?? null,
         vendor_name: vendor?.vendor_name ?? null,
         material_code: mat?.pace_code ?? null,
@@ -1556,11 +1566,135 @@ export async function listGRNsHandler(
       };
     });
 
-    return okResponse({ items: enriched }, ctx.request_id, req);
+    return okResponse({ items: enriched, total: totalCount }, ctx.request_id, req);
   } catch (error) {
     const message = error instanceof Error ? error.message : "GRN_LIST_FAILED";
     const status = message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500;
     return procurementErrorResponse(req, ctx, message, status, message);
+  }
+}
+
+// ── GET /api/procurement/grn-report ──────────────────────────────────────────
+// GRN register report (two-page screen): every GRN in the date range in ONE response -- no limit/offset, so the
+// grid and its Excel export hold all of them. Same ACL as the list (PROC_GRN_LIST:VIEW), same company scope.
+// Filters: company_id, date_from/date_to, statuses, material_ids, material_types (comma lists). Every read fails
+// loudly: a failed read is an error, never a silently thinner register.
+export async function getGrnReportHandler(
+  req: Request,
+  ctx: ProcurementHandlerContext,
+): Promise<Response> {
+  try {
+    assertProcurementReadRole(ctx);
+    const url = new URL(req.url);
+    const companyId = await getCompanyScope(ctx, url.searchParams.get("company_id") ?? undefined);
+    const dateFrom = toTrimmedString(url.searchParams.get("date_from"));
+    const dateTo = toTrimmedString(url.searchParams.get("date_to"));
+    const parseList = (raw: string | null): string[] =>
+      [...new Set(String(raw ?? "").split(",").map((value) => value.trim()).filter(Boolean))];
+    const statuses = parseList(url.searchParams.get("statuses")).map((value) => value.toUpperCase()).filter((value) => GRN_STATUSES.has(value));
+    const materialIds = parseList(url.searchParams.get("material_ids"));
+    const materialTypes = parseList(url.searchParams.get("material_types")).map((value) => value.toUpperCase());
+
+    // 1. GRN headers, read in pages of 1000 (PostgREST returns at most 1000 rows per request).
+    const grnRows: JsonRecord[] = [];
+    for (let from = 0; ; from += 1000) {
+      let query = serviceRoleClient
+        .schema("erp_procurement").from("goods_receipt")
+        .select("id, grn_number, grn_date, status, company_id, vendor_id, gate_entry_id, gate_entry_line_id, source_gate_entry_line_id, material_id, received_qty, uom_code, invoice_number, invoice_date, transporter_id, lr_number, lr_date")
+        .order("grn_date", { ascending: false })
+        .order("id", { ascending: true });
+      if (companyId) query = query.eq("company_id", companyId);
+      if (statuses.length > 0) query = query.in("status", statuses);
+      if (dateFrom) query = query.gte("grn_date", dateFrom);
+      if (dateTo) query = query.lte("grn_date", dateTo);
+      const { data, error } = await query.range(from, from + 999);
+      if (error) return procurementErrorResponse(req, ctx, "GRN_REPORT_FAILED", 500, "Unable to load the GRN report.");
+      grnRows.push(...((data ?? []) as JsonRecord[]));
+      if ((data ?? []).length < 1000) break;
+    }
+    if (grnRows.length === 0) return okResponse({ items: [], total: 0 }, ctx.request_id, req);
+
+    // 2. Materials first: the Item Type filter needs each row's material type.
+    const ids = (key: string) => [...new Set(grnRows.map((row) => String(row[key] ?? "")).filter(Boolean))];
+    let matRows: JsonRecord[];
+    try {
+      matRows = await fetchInChunks<JsonRecord>(ids("material_id"), (idChunk) => serviceRoleClient.schema("erp_master").from("material_master")
+        .select("id, pace_code, material_name, material_type").in("id", idChunk));
+    } catch {
+      return procurementErrorResponse(req, ctx, "GRN_REPORT_FAILED", 500, "Unable to load the GRN report.");
+    }
+    const matMap = new Map(matRows.map((material) => [String(material.id), material]));
+    const candidates = grnRows.map((row): GrnReportRow & JsonRecord => ({
+      ...row,
+      id: String(row.id),
+      status: String(row.status ?? ""),
+      material_id: toTrimmedString(row.material_id) || null,
+      material_type: toTrimmedString(matMap.get(String(row.material_id))?.material_type) || null,
+    }));
+    const kept = filterGrnReportRows(candidates, { statuses, materialIds, materialTypes });
+    if (kept.length === 0) return okResponse({ items: [], total: 0 }, ctx.request_id, req);
+
+    // 3. Vendors / gate entries / transporters / old-style received qty for the rows that survived.
+    const keptIds = (key: string) => [...new Set(kept.map((row) => String(row[key] ?? "")).filter(Boolean))];
+    const oldStyleIds = kept.filter((row) => !row.gate_entry_line_id && !row.source_gate_entry_line_id).map((row) => String(row.id));
+    let vendorRows: JsonRecord[]; let geRows: JsonRecord[]; let transporterRows: JsonRecord[]; let lineQtyRows: JsonRecord[];
+    try {
+      [vendorRows, geRows, transporterRows, lineQtyRows] = await Promise.all([
+        fetchInChunks<JsonRecord>(keptIds("vendor_id"), (idChunk) => serviceRoleClient.schema("erp_master").from("vendor_master")
+          .select("id, vendor_code, vendor_name").in("id", idChunk)),
+        fetchInChunks<JsonRecord>(keptIds("gate_entry_id"), (idChunk) => serviceRoleClient.schema("erp_procurement").from("gate_entry")
+          .select("id, ge_number").in("id", idChunk)),
+        fetchInChunks<JsonRecord>(keptIds("transporter_id"), (idChunk) => serviceRoleClient.schema("erp_master").from("transporter_master")
+          .select("id, transporter_code, transporter_name").in("id", idChunk)),
+        fetchInChunks<JsonRecord>(oldStyleIds, (idChunk) => serviceRoleClient.schema("erp_procurement").from("goods_receipt_line")
+          .select("grn_id, received_qty").in("grn_id", idChunk)),
+      ]);
+    } catch {
+      return procurementErrorResponse(req, ctx, "GRN_REPORT_FAILED", 500, "Unable to load the GRN report.");
+    }
+    const vendorMap = new Map(vendorRows.map((vendor) => [String(vendor.id), vendor]));
+    const geMap = new Map(geRows.map((entry) => [String(entry.id), entry]));
+    const transporterMap = new Map(transporterRows.map((transporter) => [String(transporter.id), transporter]));
+    // An old-style GRN keeps its quantity on goods_receipt_line; a new-style / invoice-split GRN has its own header qty.
+    const lineQtyMap = new Map<string, number>();
+    for (const lineRow of lineQtyRows) {
+      const key = String(lineRow.grn_id);
+      lineQtyMap.set(key, (lineQtyMap.get(key) ?? 0) + (parseNullableNumber(lineRow.received_qty) ?? 0));
+    }
+
+    const items = kept.map((row) => {
+      const vendor = vendorMap.get(String(row.vendor_id));
+      const material = matMap.get(String(row.material_id));
+      const transporter = transporterMap.get(String(row.transporter_id));
+      const isNewStyle = Boolean(row.gate_entry_line_id || row.source_gate_entry_line_id);
+      const totalQty = isNewStyle ? (parseNullableNumber(row.received_qty) ?? 0) : (lineQtyMap.get(String(row.id)) ?? 0);
+      return {
+        id: row.id,
+        grn_number: row.grn_number,
+        grn_date: row.grn_date,
+        status: row.status,
+        vendor_id: row.vendor_id ?? null,
+        vendor_code: vendor?.vendor_code ?? null,
+        vendor_name: vendor?.vendor_name ?? null,
+        material_code: material?.pace_code ?? null,
+        material_name: material?.material_name ?? null,
+        material_type: row.material_type,
+        ge_number: geMap.get(String(row.gate_entry_id))?.ge_number ?? null,
+        received_qty: Number(totalQty.toFixed(6)),
+        uom_code: row.uom_code ?? null,
+        invoice_number: row.invoice_number ?? null,
+        invoice_date: row.invoice_date ?? null,
+        transporter_code: transporter?.transporter_code ?? null,
+        transporter_name: transporter?.transporter_name ?? null,
+        lr_number: row.lr_number ?? null,
+        lr_date: row.lr_date ?? null,
+      };
+    });
+
+    return okResponse({ items, total: items.length }, ctx.request_id, req);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "GRN_REPORT_FAILED";
+    return procurementErrorResponse(req, ctx, message, message === "COMPANY_SCOPE_VIOLATION" ? 403 : 500, message);
   }
 }
 

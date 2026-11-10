@@ -63,6 +63,7 @@ import {
   getGRNHandler,
   getMaterialVendorDocNamesHandler,
   listGRNsHandler,
+  getGrnReportHandler,
   listGrnInvoiceMappingCandidatesHandler,
   mapGrnInvoiceHandler,
   postGRNHandler,
@@ -786,6 +787,8 @@ export async function dispatchProcurementRoutes(
       return await createAndPostGRNFromLineHandler(req, ctx);
     case "GET:/api/procurement/grns":
       return await listGRNsHandler(req, ctx);
+    case "GET:/api/procurement/grn-report":
+      return await getGrnReportHandler(req, ctx);
     case "GET:/api/procurement/grns/ge-lines":
       return await getGELinesForGRNHandler(req, ctx);
     case "GET:/api/procurement/grns/material-vendor-doc-names":
