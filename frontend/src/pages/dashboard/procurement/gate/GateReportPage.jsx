@@ -382,7 +382,6 @@ export default function GateReportPage() {
               rangeSelect
               columnFilter
               virtualize
-              stickyFirstColumn
               maxHeight="calc(100vh - 380px)"
               onFilteredRowsChange={setGridRows}
               columns={gridColumns}
