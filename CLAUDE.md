@@ -13,6 +13,12 @@ Claude সবসময় **`agent/claude`**-এ কাজ করবে (session
 `HEAD`/`origin/dev`/`origin/main` তিনটে SHA এক কিনা যাচাই। Force-push, reset,
 নতুন feature branch — নিষিদ্ধ। পূর্ণ নিয়ম ও কমান্ড: `docs/BRANCH-WORKFLOW.md`।
 
+## Working preferences
+
+- Report and page screens must be self-explanatory and simple: keep on-screen text minimal (short labels, at most one short hint line), no long explanatory paragraphs or footnotes. If a number could look inconsistent, show it with a clear label or column instead of writing a paragraph. (business owner, 2026-11-10)
+
+---
+
 ## 1. Claude কীভাবে এই project access করে
 
 ### Local Repo Access
