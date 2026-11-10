@@ -749,6 +749,8 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   // separate page (pattern #6 guard: same action on the same conceptual resource is fine).
   "GET:/api/production/order-information-system/batch-counts": { skipAcl: false, resourceCode: "PROD_ORDER_INFO_SYSTEM", action: "VIEW" },
   "GET:/api/production/order-information-system/stroke-options": { skipAcl: false, resourceCode: "PROD_ORDER_INFO_SYSTEM", action: "VIEW" },
+  // IN15 MTS FG Hold & Block Trail -- its own resource (report page, CAP_EVERYONE_REPORTS, VIEW only).
+  "GET:/api/production/mts-hold-trail": { skipAcl: false, resourceCode: "PROD_MTS_HOLD_TRAIL", action: "VIEW" },
   // MTS Production Register sub-report (§143), same PR24 screen/resource as Batch Counts above.
   "GET:/api/production/order-information-system/mts-register": { skipAcl: false, resourceCode: "PROD_ORDER_INFO_SYSTEM", action: "VIEW" },
   // Date-independent badge count for that same PR24 MTS register action.

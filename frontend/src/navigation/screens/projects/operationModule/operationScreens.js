@@ -1084,6 +1084,14 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  PROD_MTS_HOLD_TRAIL: {
+    screen_code: "PROD_MTS_HOLD_TRAIL",
+    route: "/dashboard/production/mts-hold-trail",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   PROD_ORDER_INFO_SYSTEM: {
     screen_code: "PROD_ORDER_INFO_SYSTEM",
     route: "/dashboard/production/order-information-system",

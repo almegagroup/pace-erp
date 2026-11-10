@@ -135,6 +135,7 @@ export const getBatchCountsReport = (p) => fetchProd("GET", "/api/production/ord
 // PR24's own Stroke filter list (id + stroke_number), gated on PR24's own resource -- not Stroke Master's.
 export const listOisStrokeOptions = (p) => fetchProd("GET", "/api/production/order-information-system/stroke-options", undefined, p);
 export const getMtsProductionRegister = (p) => fetchProd("GET", "/api/production/order-information-system/mts-register", undefined, p);
+export const getMtsHoldTrail = (p) => fetchProd("GET", "/api/production/mts-hold-trail", undefined, p);
 export const getMtsProductionRegisterPendingCount = (p) => fetchProd("GET", "/api/production/order-information-system/mts-register/pending-count", undefined, p);
 
 // ── PR14 Batch Variance Report (§123) ──────────────────────────────────────────
