@@ -575,6 +575,29 @@ export function listGRNs(params) {
   return fetchProcurement("GET", "/api/procurement/grns", undefined, params);
 }
 
+// Every GRN matching `params`, not just the newest page. /grns returns at most `limit` rows (RTV Create / IV Create used to
+// ask for 200 and so never saw anything older); this pages through it. The server orders by (grn_date desc, id) so pages
+// neither repeat nor skip a row. MAX_PAGES is only a runaway guard.
+export async function listAllGRNs(params = {}) {
+  const PAGE = 200;
+  const MAX_PAGES = 50;
+  const all = [];
+  for (let page = 0; page < MAX_PAGES; page += 1) {
+    const result = await listGRNs({ ...params, limit: PAGE, offset: page * PAGE });
+    const items = Array.isArray(result?.items) ? result.items : [];
+    all.push(...items);
+    if (items.length < PAGE) break;
+  }
+  return all;
+}
+
+// GRN register report (two-page screen): every GRN in the range in one response, with { items, total }.
+export function getGrnReport(params) {
+  const p = { ...params };
+  Object.keys(p).forEach((key) => (p[key] === undefined || p[key] === "") && delete p[key]);
+  return fetchProcurement("GET", "/api/procurement/grn-report", undefined, p);
+}
+
 export function getGRN(id) {
   return fetchProcurement("GET", `/api/procurement/grns/${encodeURIComponent(id)}`);
 }

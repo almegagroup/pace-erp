@@ -13,7 +13,7 @@ import {
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { addIVLine, createIVDraft, getGRN, listGRNs } from "../procurementApi.js";
+import { addIVLine, createIVDraft, getGRN, listAllGRNs } from "../procurementApi.js";
 
 function createLineEntry(grnId, grnLine) {
   return {
@@ -59,22 +59,27 @@ export default function IVCreatePage() {
     queryKey: ["procurement", "iv-create-grns", { company_id: form.company_id || undefined, vendor_id: form.vendor_id || undefined }],
     enabled: Boolean(form.vendor_id),
     queryFn: async () => {
-      const list = await listGRNs({
+      // Every POSTED GRN of the vendor, paged (this used to be the newest 200 only, so a vendor with more GRNs had its
+      // older lines missing from this screen). The details are then fetched 10 at a time, not all at once.
+      const items = await listAllGRNs({
         company_id: form.company_id || undefined,
         vendor_id: form.vendor_id,
         status: "POSTED",
-        limit: 200,
       });
-      const items = Array.isArray(list?.items) ? list.items : [];
-      const details = await Promise.all(
-        items.map(async (row) => {
-          try {
-            return await getGRN(row.id);
-          } catch {
-            return null;
-          }
-        })
-      );
+      const details = [];
+      for (let start = 0; start < items.length; start += 10) {
+        // INDEPENDENT detail reads, batched 10 at a time on purpose to cap how many requests are in flight.
+        const batch = await Promise.all(
+          items.slice(start, start + 10).map(async (row) => {
+            try {
+              return await getGRN(row.id);
+            } catch {
+              return null;
+            }
+          })
+        );
+        details.push(...batch);
+      }
       return details.filter(Boolean);
     },
     // Changing vendor/company re-keys this query — keep the previous GRN

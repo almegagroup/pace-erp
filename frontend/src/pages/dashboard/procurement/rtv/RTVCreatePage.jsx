@@ -9,7 +9,7 @@ import ErpEntryFormTemplate from "../../../../components/templates/ErpEntryFormT
 import { useMenu } from "../../../../context/useMenu.js";
 import { openScreen, popScreen } from "../../../../navigation/screenStackEngine.js";
 import { OPERATION_SCREENS } from "../../../../navigation/screens/projects/operationModule/operationScreens.js";
-import { addRTVLine, createRTV, getGRN, listGRNs } from "../procurementApi.js";
+import { addRTVLine, createRTV, getGRN, listAllGRNs } from "../procurementApi.js";
 import LocationSelect from "../../../../components/inputs/LocationSelect.jsx";
 import {
   MASTER_PICKER_FETCH_LIMIT,
@@ -51,11 +51,12 @@ export default function RTVCreatePage() {
   const materialQuery = useMaterialOptionsQuery({ limit: MASTER_PICKER_FETCH_LIMIT, offset: 0 });
   const grnQuery = useQuery({
     queryKey: ["procurement", "rtv-create-grns", effectiveCompanyId || null],
+    // Every POSTED GRN of the company, paged -- this used to ask for the newest 200 only, so an older GRN could not be
+    // found even by searching (CMP003 has 700+).
     queryFn: () =>
-      listGRNs({
+      listAllGRNs({
         company_id: effectiveCompanyId || undefined,
         status: "POSTED",
-        limit: 200,
       }),
     enabled: Boolean(effectiveCompanyId),
   });
@@ -68,7 +69,7 @@ export default function RTVCreatePage() {
     placeholderData: keepPreviousData,
   });
   const grnRows = useMemo(
-    () => (Array.isArray(grnQuery.data?.items) ? grnQuery.data.items : []),
+    () => (Array.isArray(grnQuery.data) ? grnQuery.data : []),
     [grnQuery.data],
   );
   const vendors = vendorQuery.vendors;
