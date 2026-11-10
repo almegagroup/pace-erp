@@ -5392,8 +5392,12 @@ async function runMtsProcessOrderVerify(
   }
 
   const requestedHolds = Array.isArray(body.holds) ? body.holds as JsonRecord[] : [];
-  // IN15: QA must say why a quantity is held (also guards the manager-approval replay of a saved urgent request).
-  const holdReasonProblem = findHoldReasonProblem(requestedHolds);
+  // IN15: QA must say why a quantity is held. A manager-approval replay is not a fresh QA submit: it posts the snapshot
+  // QA already saved, which may predate the reason rule (a pending urgent request saved without reasons) -- blocking it
+  // here would strand that request (QA cannot resubmit while it is pending), so only too-long text is still rejected.
+  const holdReasonProblem = options.managerDecision
+    ? (requestedHolds.some((hold) => String(hold?.reason ?? "").trim().length > 500) ? "PROD_MTS_HOLD_REASON_TOO_LONG" as const : null)
+    : findHoldReasonProblem(requestedHolds);
   if (holdReasonProblem) {
     return poErr(req, ctx, holdReasonProblem, 422, holdReasonProblem === "PROD_MTS_HOLD_REASON_TOO_LONG" ? "A hold reason can be at most 500 characters." : "Every MTS QA hold needs a reason.");
   }
