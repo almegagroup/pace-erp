@@ -180,7 +180,8 @@ export default function GateReportPage() {
     date_from: dateFrom,
     date_to: dateTo,
     material_types: materialTypes.join(","),
-    material_ids: materialValues.join(","),
+    // MultiValueFilterField holds [{ value, label }] entries: send the ids (joining the objects gave "[object Object]").
+    material_ids: materialValues.map((entry) => entry.value).join(","),
     pending_grn: pendingGrn ? "1" : "",
     pending_gex: pendingGex ? "1" : "",
   }), [effectiveCompanyId, dateFrom, dateTo, materialTypes, materialValues, pendingGrn, pendingGex]);

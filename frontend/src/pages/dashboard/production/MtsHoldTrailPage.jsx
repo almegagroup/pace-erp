@@ -142,7 +142,8 @@ export default function MtsHoldTrailPage() {
     company_id: effectiveCompanyId,
     date_from: dateFrom,
     date_to: dateTo,
-    material_ids: materialValues.join(","),
+    // MultiValueFilterField holds [{ value, label }] entries: send the ids (joining the objects gave "[object Object]").
+    material_ids: materialValues.map((entry) => entry.value).join(","),
     statuses: statuses.join(","),
   }), [effectiveCompanyId, dateFrom, dateTo, materialValues, statuses]);
 
