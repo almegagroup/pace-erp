@@ -15,8 +15,8 @@ in the report. The report has an Excel export, is company-scoped, and every user
 | TX code | **IN15** (docs list IN01–IN14; IN15 is free — re-verify against dev DB before registering) |
 | Menu group | Quality (`GRP_ACL_QA`), next to IN13 |
 | Screen code / ACL resource | `PROD_MTS_HOLD_TRAIL` (new resource — never reuse another resource, bug pattern #6) |
-| Route | `/dashboard/procurement/mts-hold-trail` |
-| API | `GET /api/procurement/mts-hold-trail` |
+| Route | `/dashboard/production/mts-hold-trail` |
+| API | `GET /api/production/mts-hold-trail` (production domain, same family as PR24's `mts-register`) |
 | Column-layout report code | `MTS_HOLD_TRAIL` |
 | Access | VIEW only, `CAP_EVERYONE_REPORTS`, company-scoped (same "Everyone" pattern as PR21 / PR24 / PO18). ACL-MASTER (P0076) checked explicitly (pattern #5). |
 
@@ -70,13 +70,13 @@ reversal rows are both left out so a reversed posting never counts twice. SKU le
 
 ## Backend report handler
 New `mts_hold_trail.handlers.ts` (production domain, pattern of `mts_production_register.handlers.ts`):
-company scope via `assertCompanyScope` (read and write paths — pattern #2), every id-list read via `fetchInChunks` (§8E),
+company scope via `resolveAllowedCompanyIds` + `scopeCompanyIds` (a denied company returns nothing, never "all" — pattern #2); pure row/summary logic in `mts_hold_trail.logic.ts` with unit tests, every id-list read via `fetchInChunks` (§8E),
 no `.catch(() => [])` swallowing — a failed read returns an error, never an empty/"released" looking row (the Sand lesson),
 bulk-resolve all names (§8A: no raw UUIDs), response `{ items, summary, total }`.
-Route in `production.routes.ts` + `route-acl-registry.ts` (`GET:/api/procurement/mts-hold-trail` → `PROD_MTS_HOLD_TRAIL`:`VIEW`; pattern #8).
+Route in `_routes/production.routes.ts` + `route-acl-registry.ts` (`GET:/api/production/mts-hold-trail` → `PROD_MTS_HOLD_TRAIL`:`VIEW`; pattern #8).
 
 ## Frontend
-`MtsHoldTrailPage.jsx` under `pages/dashboard/procurement/reports/`, API fn in `procurementApi.js`, `operationScreens.js` entry,
+`MtsHoldTrailPage.jsx` under `pages/dashboard/production/`, API fn `getMtsHoldTrail` in `prodApi.js`, `operationScreens.js` entry,
 `AppRouter.jsx` route. `useQuery` only (§8A). Material picker company-scoped (same as IN03).
 
 ## Menu / ACL (dev, via MCP; prod re-run later by the owner)
