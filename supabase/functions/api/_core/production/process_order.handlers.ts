@@ -24,6 +24,7 @@ import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.
 import { hasBlanketApprovalOverride } from "../../_shared/approval_override.ts";
 import { okResponse, errorResponse } from "../response.ts";
 import type { ProdHandlerContext } from "./production.shared.ts";
+import { findHoldReasonProblem, mergeHoldReasons, normalizeHoldReason } from "./mts_hold_reason.ts";
 import {
   assertProdReadRole,
   parseBody,
@@ -5156,6 +5157,10 @@ async function requestMtsUrgentManagerApproval(
   if (!Array.isArray(body.holds)) {
     return poErr(req, ctx, "PROD_MTS_VERIFY_HOLDS_INVALID", 400, "MTS QA holds must be a list.");
   }
+  const urgentHoldReasonProblem = findHoldReasonProblem(body.holds as JsonRecord[]);
+  if (urgentHoldReasonProblem) {
+    return poErr(req, ctx, urgentHoldReasonProblem, 422, urgentHoldReasonProblem === "PROD_MTS_HOLD_REASON_TOO_LONG" ? "A hold reason can be at most 500 characters." : "Every MTS QA hold needs a reason.");
+  }
 
   // Save exactly the declaration QA saw.  At the manager decision the normal
   // MTS verifier revalidates stocks, batch declarations and holds against live
@@ -5387,6 +5392,11 @@ async function runMtsProcessOrderVerify(
   }
 
   const requestedHolds = Array.isArray(body.holds) ? body.holds as JsonRecord[] : [];
+  // IN15: QA must say why a quantity is held (also guards the manager-approval replay of a saved urgent request).
+  const holdReasonProblem = findHoldReasonProblem(requestedHolds);
+  if (holdReasonProblem) {
+    return poErr(req, ctx, holdReasonProblem, 422, holdReasonProblem === "PROD_MTS_HOLD_REASON_TOO_LONG" ? "A hold reason can be at most 500 characters." : "Every MTS QA hold needs a reason.");
+  }
   const remainingPacksByBatch = new Map<string, number>();
   const holdAllocations: JsonRecord[] = [];
   for (const yieldRow of yields) {
@@ -5400,6 +5410,7 @@ async function runMtsProcessOrderVerify(
     const toBatch = toTrimmedString(requestedHold.batch_number_to);
     const targetStockType = toUpperTrimmedString(requestedHold.target_stock_type);
     const requestedPacks = mtsQty(requestedHold.qty_packs);
+    const holdReason = normalizeHoldReason(requestedHold.reason);
     if (!orderId || !fromBatch || !toBatch || requestedPacks <= EPSILON) {
       return poErr(req, ctx, "PROD_MTS_HOLD_INPUT_INVALID", 422, "Every MTS QA hold needs a Packing PO, batch range, stock status, and positive bag quantity.");
     }
@@ -5421,6 +5432,7 @@ async function runMtsProcessOrderVerify(
       remainingPacksByBatch.set(String(yieldRow.id), mtsQty(availablePacks - allocatedPacks));
       leftToAllocate = mtsQty(leftToAllocate - allocatedPacks);
       holdAllocations.push({
+        reason: holdReason,
         packing_order_id: orderId,
         yield_id: String(yieldRow.id),
         batch_number_from: fromBatch,
@@ -5585,6 +5597,7 @@ async function runMtsProcessOrderVerify(
     const key = `${allocation.sku_material_id}|${storageLocationId}|${allocation.target_stock_type}|${batchNumber}`;
     const group = statusPostingGroups.get(key) ?? { material_id: allocation.sku_material_id, storage_location_id: storageLocationId, target_stock_type: allocation.target_stock_type, batch_number: batchNumber, quantity: 0, uom_code: "KG", packing_order_id: order?.id ?? null };
     group.quantity = mtsQty(Number(group.quantity) + Number(allocation.qty_kg));
+    group.reasons = [...((group.reasons as Array<string | null> | undefined) ?? []), (allocation.reason as string | null) ?? null];
     statusPostingGroups.set(key, group);
   }
   const statusPostings: JsonRecord[] = [];
@@ -5596,7 +5609,7 @@ async function runMtsProcessOrderVerify(
     const batchNumber = String(group.batch_number);
     movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode, companyId: po.company_id, storageLocationId: group.storage_location_id, materialId: group.material_id, quantity: group.quantity, baseUomCode: group.uom_code, unitValue: skuUnitValue, stockTypeCode: "UNRESTRICTED", direction: "OUT", postedBy: ctx.auth_user_id, batchNumber, matDoc, referenceDocumentId: id }, outRef));
     movements.push(toMovement({ documentNumber: docNumber, documentDate: today, postingDate: today, movementTypeCode, companyId: po.company_id, storageLocationId: group.storage_location_id, materialId: group.material_id, quantity: group.quantity, baseUomCode: group.uom_code, unitValue: skuUnitValue, stockTypeCode: group.target_stock_type, direction: "IN", postedBy: ctx.auth_user_id, batchNumber, matDoc, referenceDocumentId: id }, inRef));
-    statusPostings.push({ ...group, movement_type_code: movementTypeCode, out_ref: outRef, in_ref: inRef });
+    statusPostings.push({ ...group, reason: mergeHoldReasons((group.reasons as Array<string | null>) ?? []), movement_type_code: movementTypeCode, out_ref: outRef, in_ref: inRef });
     statusIndex += 1;
   }
 
