@@ -341,7 +341,7 @@ export default function GRNListPage() {
                 </div>
               </fieldset>
             </div>
-            <p className="mt-3 text-xs text-slate-500">No Item Type or Status ticked = all. Every GRN in the date range is loaded, not just the newest page.</p>
+            <p className="mt-3 text-xs text-slate-500">Nothing ticked = all.</p>
           </ErpSectionCard>
         </div>
       ) : (
@@ -381,7 +381,7 @@ export default function GRNListPage() {
                       : "No GRNs matched the current filters."
               }
             />
-            <p className="mt-2 text-xs text-slate-500">Press Enter on a row to open the GRN.</p>
+            <p className="mt-2 text-xs text-slate-500">Enter opens the GRN.</p>
           </ErpSectionCard>
         </div>
       )}

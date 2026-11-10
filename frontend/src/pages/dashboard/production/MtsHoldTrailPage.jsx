@@ -297,9 +297,7 @@ export default function MtsHoldTrailPage() {
                 </div>
               </fieldset>
             </div>
-            <p className="mt-3 text-xs text-slate-500">
-              Only MTS finished goods put into Quality Inspection or Blocked appear here. Quantity that went straight to Unrestricted at Verify is not part of this report.
-            </p>
+            <p className="mt-3 text-xs text-slate-500">Only MTS finished goods held in Quality Inspection or Blocked.</p>
           </ErpSectionCard>
         </div>
       ) : (
@@ -332,10 +330,7 @@ export default function MtsHoldTrailPage() {
                     </tbody>
                   </table>
                 </div>
-                <p className="mt-2 text-xs text-slate-600">
-                  This balance covers <b>all dates</b>: the Event Date filter does not apply to it, so it can list a SKU whose hold is older than the
-                  grid below (see Last event). The grid shows only events inside the chosen dates. SKU level only: a release in IN13 carries no batch.
-                </p>
+                <p className="mt-2 text-xs text-slate-600">All dates — the Event Date filter does not apply here.</p>
               </div>
             ) : null}
             <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
