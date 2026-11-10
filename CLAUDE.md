@@ -77,7 +77,7 @@ generate_menu_snapshot()  →  user_menu_snapshots
 Frontend Sidebar
 ```
 
-### Recurring 15 Bug Patterns — must check before writing code
+### Recurring 16 Bug Patterns — must check before writing code
 
 These 13 patterns are now a mandatory pre-code checklist for ERP business-page,
 ACL, workflow, and company-scope work. If an older note anywhere in this repo
@@ -313,6 +313,19 @@ older note.
       final `okResponse({...})` includes a `pagination` key — if yes, the
       caller needs `res.data`; if no, the caller needs `res` directly. Never
       assume from a sibling call site's shape.
+
+16. **`MultiValueFilterField` state is `[{ value, label }]`, not strings (compiles, renders, returns 0 rows)**
+    - `<MultiValueFilterField value={X} onChange={setX} />` keeps an array of **entry objects**. `X.join(",")` sends
+      `"[object Object]"` as the filter, so any chosen Material / SKU / SLoc matches nothing and the report comes back empty;
+      with nothing chosen the filter is skipped, so the page "works" until someone actually picks a value.
+    - **Found live 2026-11-10:** the new Gate Entry Report and IN15 (MTS FG Hold & Block Trail) both did
+      `materialValues.join(",")`; prod October "Fine Sand" (129 real lines) showed nothing. IN03's `joinValues()`
+      (`entries.map((e) => e.value).join(",")`) was the correct template and was not followed. Lint, build and every other guard were green.
+    - **✅ Built — `scripts/multivalue-filter-guard.mjs`** (CI step "MultiValueFilterField value-shape guard"): for each `.jsx`
+      that renders `<MultiValueFilterField>`, takes the variable bound to `value={X}` and fails on a direct `X.join(` /
+      `X.includes(` / `X.indexOf(`. Verified to fail on the two buggy commits and pass on the fix. Baseline empty (zero tolerance).
+    - Not caught: a filter field of any other kind, or a value mapped correctly but sent under the wrong param name.
+      Still click-test every filter with a real value before shipping a report page.
 
 ### Bug-Pattern Guard Playbook — the reusable process (added 2026-08-06)
 

@@ -92,6 +92,14 @@ jobs:
       - name: JSX undefined-component guard
         run: node scripts/jsx-no-undef-guard.mjs
 
+      # Fails if a page joins / searches the state it passes to
+      # <MultiValueFilterField value={...}> directly: that state is an array of
+      # { value, label } objects, so `.join(",")` sends "[object Object]" and any
+      # chosen filter value matches nothing (found live 2026-11-10: Gate Entry
+      # Report and IN15 returned 0 rows for a chosen material).
+      - name: MultiValueFilterField value-shape guard
+        run: node scripts/multivalue-filter-guard.mjs
+
       # Fails if a routed page (real menu_visible=true screen) has no entry in
       # PAGE-DEPENDENCY-MANIFEST.json at all -- this is the static, DB-free
       # half of the SU24-style dependency check (scripts/dependency-
