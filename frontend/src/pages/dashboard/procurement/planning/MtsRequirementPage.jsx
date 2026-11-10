@@ -338,8 +338,9 @@ function riskMatch(row, filter) {
   }
 }
 
-// PO22: every column can be hidden / re-ordered in the picker, except the per-row "Sources" expand button.
-const isFixedRequirementColumn = (column) => column.key === "sources";
+// PO22: every column -- including the per-row "Sources" expand button -- can be hidden / re-ordered in the picker; nothing is fixed.
+// (A user who hides "Sources" gets it back from Columns; layouts saved before 2026-11-10 do not list it, so it starts hidden there.)
+const NO_FIXED_COLUMNS = () => false;
 // These were always-visible (not in the picker) until 2026-11-06; layouts saved before that list none of them and must keep showing them.
 const LEGACY_FIXED_REQUIREMENT_KEYS = ["material_name", "material_code", "material_type", "base_uom_code", "priority_score", "reorder_flag", "identifier", "group_cover_note", "user_pack_qty"];
 
@@ -601,7 +602,7 @@ function ReportTab({ companyId, companyText, planMonth, asOf, demandAt }) {
   const allColumns = useMemo(() => buildReportColumns(expanded, toggleExpanded, showPackQty, togglePackQty, du), [expanded, toggleExpanded, showPackQty, togglePackQty, du]);
   const [columnsOpen, setColumnsOpen] = useState(false);
   const layoutMessage = useCallback((message, tone) => pushToast({ message, tone }), []);
-  const layout = useColumnLayouts("PO22_REQUIREMENT", allColumns, layoutMessage, { alwaysVisible: isFixedRequirementColumn, legacyVisibleKeys: LEGACY_FIXED_REQUIREMENT_KEYS });
+  const layout = useColumnLayouts("PO22_REQUIREMENT", allColumns, layoutMessage, { alwaysVisible: NO_FIXED_COLUMNS, legacyVisibleKeys: LEGACY_FIXED_REQUIREMENT_KEYS });
   // Same list feeds the grid and the Excel: the user's chosen layout, then the quick column-group switches.
   const columns = useMemo(() => layout.columns.filter((c) => c.group === "identity" || !hiddenGroups.has(c.group)), [layout.columns, hiddenGroups]);
   const rows = useMemo(() => (report?.rows ?? [])
@@ -737,6 +738,7 @@ function ReportTab({ companyId, companyText, planMonth, asOf, demandAt }) {
       ) : (
         <ErpDenseGrid
           {...GRID_PROPS}
+          stickyFirstColumn={false}
           columns={columns}
           rows={rows}
           rowKey={(row) => row.material_id}
