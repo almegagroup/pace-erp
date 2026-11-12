@@ -8,7 +8,7 @@
  * Authority: Frontend
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Outlet, useLocation, useNavigate } from "react-router-dom";
 import { useMenu } from "../context/useMenu.js";
 import {
@@ -335,10 +335,37 @@ export default function MenuShell() {
   const stackDepth = getStackDepth();
 
   const navigationTree = useMemo(() => buildMenuTree(menu), [menu]);
-  const sidebarRoots = useMemo(
-    () => getSidebarRoots(navigationTree),
-    [navigationTree]
-  );
+  // Sidebar projects: groups carrying a project_code are clustered under their project row
+  // (stable: a project sits where its first group was; project-less groups are untouched).
+  const sidebarRoots = useMemo(() => {
+    const roots = getSidebarRoots(navigationTree);
+    if (!roots.some((node) => node.item?.project_code)) {
+      return roots;
+    }
+    const byProject = new Map();
+    for (const node of roots) {
+      const code = node.item?.project_code;
+      if (code) {
+        if (!byProject.has(code)) byProject.set(code, []);
+        byProject.get(code).push(node);
+      }
+    }
+    const placed = new Set();
+    const ordered = [];
+    for (const node of roots) {
+      const code = node.item?.project_code;
+      if (!code) {
+        ordered.push(node);
+      } else if (!placed.has(code)) {
+        placed.add(code);
+        ordered.push(...byProject.get(code));
+      }
+    }
+    return ordered;
+  }, [navigationTree]);
+  // Project row open/closed. A project the user never touched is open only if it holds the
+  // current page; the collapsed icon rail ignores projects and lists every module.
+  const [projectToggles, setProjectToggles] = useState({});
   const navigationMenu = useMemo(
     () => flattenRouteableMenu(navigationTree),
     [navigationTree]
@@ -351,6 +378,14 @@ export default function MenuShell() {
     () => resolveTopLevelIndex(sidebarRoots, location.pathname),
     [location.pathname, sidebarRoots]
   );
+
+  const isProjectOpen = (code) => {
+    if (collapsed) return true;
+    if (code in projectToggles) return projectToggles[code];
+    return sidebarRoots[activeMenuIndex]?.item?.project_code === code;
+  };
+  const isRootHidden = (node) =>
+    !!node?.item?.project_code && !isProjectOpen(node.item.project_code);
 
   const resolvedMenuFocusIndex =
     menuFocusIndex >= 0 && menuFocusIndex < sidebarRoots.length
@@ -1336,7 +1371,11 @@ export default function MenuShell() {
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      const nextIndex = findNextEnabledIndex(sidebarRoots, index, 1);
+      const nextIndex = findNextEnabledIndex(
+        sidebarRoots.map((n) => (isRootHidden(n) ? { item: { is_visible: false } } : n)),
+        index,
+        1
+      );
       if (nextIndex === -1) {
         return;
       }
@@ -1346,7 +1385,11 @@ export default function MenuShell() {
 
     if (event.key === "ArrowUp") {
       event.preventDefault();
-      const nextIndex = findNextEnabledIndex(sidebarRoots, index, -1);
+      const nextIndex = findNextEnabledIndex(
+        sidebarRoots.map((n) => (isRootHidden(n) ? { item: { is_visible: false } } : n)),
+        index,
+        -1
+      );
       if (nextIndex === -1) {
         return;
       }
@@ -1706,9 +1749,37 @@ export default function MenuShell() {
                   const hasChildren = node.children?.length > 0;
                   const isActive = index === activeMenuIndex;
                   const isDisabled = !isNodeEnabled(node);
+                  const projectCode = node.item.project_code;
+                  const startsProject =
+                    !!projectCode &&
+                    !collapsed &&
+                    sidebarRoots[index - 1]?.item?.project_code !== projectCode;
+                  const projectOpen = projectCode ? isProjectOpen(projectCode) : true;
 
                   return (
-                    <li key={node.item.menu_code}>
+                    <Fragment key={node.item.menu_code}>
+                    {startsProject ? (
+                      <li>
+                        <button
+                          type="button"
+                          aria-expanded={projectOpen}
+                          onClick={() =>
+                            setProjectToggles((current) => ({
+                              ...current,
+                              [projectCode]: !projectOpen,
+                            }))
+                          }
+                          className="mt-1 flex w-full items-center justify-between border border-slate-300 bg-slate-200 px-2 py-2 text-left text-sm font-semibold text-slate-800 hover:bg-slate-300"
+                        >
+                          <span className="truncate">{node.item.project_name || projectCode}</span>
+                          <span aria-hidden="true" className="text-[11px] text-slate-600">
+                            {projectOpen ? "−" : "+"}
+                          </span>
+                        </button>
+                      </li>
+                    ) : null}
+                    {projectOpen ? (
+                    <li>
                       <button
                         ref={(element) => {
                           menuButtonRefs.current[index] = element;
@@ -1767,6 +1838,8 @@ export default function MenuShell() {
                         ) : null}
                       </button>
                     </li>
+                    ) : null}
+                    </Fragment>
                   );
                 })}
               </ul>

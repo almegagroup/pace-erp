@@ -22,6 +22,64 @@ import {
   rebuildGlobalAclMenuSnapshot,
 } from "../../_shared/acl_runtime.ts";
 
+
+/* =========================================================
+ * Sidebar projects: each menu GROUP can sit under a project
+ * (erp_menu.menu_master.project_id). The snapshot does not carry it, so it is
+ * attached to GROUP rows on the way out. Cached briefly -- it changes only
+ * when a group is re-tagged. Any failure just leaves groups project-less,
+ * which the sidebar shows exactly as before.
+ * ========================================================= */
+const GROUP_PROJECT_TTL_MS = 60_000;
+let groupProjectCache:
+  | { at: number; map: Map<string, { project_code: string; project_name: string }> }
+  | null = null;
+
+async function loadGroupProjectMap(
+  db: ReturnType<typeof getServiceRoleClientWithContext>,
+): Promise<Map<string, { project_code: string; project_name: string }>> {
+  if (groupProjectCache && Date.now() - groupProjectCache.at < GROUP_PROJECT_TTL_MS) {
+    return groupProjectCache.map;
+  }
+  const map = new Map<string, { project_code: string; project_name: string }>();
+  try {
+    const [groups, projects] = await Promise.all([
+      db.schema("erp_menu").from("menu_master")
+        .select("menu_code, project_id")
+        .eq("menu_type", "GROUP")
+        .not("project_id", "is", null),
+      db.schema("erp_master").from("projects")
+        .select("id, project_code, project_name"),
+    ]);
+    if (groups.error || projects.error) throw groups.error ?? projects.error;
+    const byId = new Map<string, { project_code: string; project_name: string }>();
+    for (const p of (projects.data ?? []) as Array<Record<string, string>>) {
+      byId.set(p.id, { project_code: p.project_code, project_name: p.project_name });
+    }
+    for (const g of (groups.data ?? []) as Array<Record<string, string>>) {
+      const proj = byId.get(g.project_id);
+      if (proj) map.set(g.menu_code, proj);
+    }
+    groupProjectCache = { at: Date.now(), map };
+  } catch (e) {
+    console.warn("MENU_GROUP_PROJECT_LOOKUP_FAILED", { error: String(e) });
+  }
+  return map;
+}
+
+async function attachGroupProjects(
+  db: ReturnType<typeof getServiceRoleClientWithContext>,
+  rows: unknown[],
+): Promise<unknown[]> {
+  const map = await loadGroupProjectMap(db);
+  if (map.size === 0) return rows;
+  return rows.map((row) => {
+    const r = row as { menu_code?: string; menu_type?: string };
+    const proj = r.menu_type === "GROUP" && r.menu_code ? map.get(r.menu_code) : undefined;
+    return proj ? { ...(row as object), ...proj } : row;
+  });
+}
+
 /* =========================================================
  * PERF: session menu snapshot cache TTL
  *
@@ -364,7 +422,7 @@ if (!row) {
   return okResponse(
     {
       universe,
-      menu: data,
+      menu: await attachGroupProjects(db, data),
     },
     request_id,
     req
