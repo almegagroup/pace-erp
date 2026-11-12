@@ -1773,7 +1773,12 @@ export function coverageDays(
     balance += inboundByDay?.get(day) ?? 0;
     const demand = demandByDay.get(day) ?? 0;
     if (demand <= EPSILON) {
-      if (planEnded && lastDemandDay !== null && day > lastDemandDay && balance > EPSILON) return { days: null, stockout_date: null, extrapolated: false };
+      if (planEnded && lastDemandDay !== null && day > lastDemandDay) {
+        // Owner 2026-11-12: a group member's demand series is what the group allocated to ITS stock, so it stops when that stock is used up,
+        // not when the plan ends (CMP005 AWP 40 KG bag showed "beyond plan" with ~25 days of stock). Used up (within a rounding residue) = a stock-out.
+        if (balance <= Math.max(EPSILON, Math.abs(opening) * 1e-6)) return { days: round2(covered), stockout_date: day, extrapolated: false };
+        return { days: null, stockout_date: null, extrapolated: false };
+      }
       covered += 1;
       continue;
     }

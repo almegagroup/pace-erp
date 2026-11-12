@@ -1090,3 +1090,17 @@ Deno.test("PO22 in transit: dispatched qty counts in full even above the PO line
   const b = bucketInbound(mixed, calendar);
   assertEqual([b.cm, b.cm_dispatched], [5000, 2000], "CM holds both, the dispatched part is 2,000");
 });
+
+Deno.test("Coverage: a group member whose allocated demand ends because its own stock is used up shows that cover, not 'beyond plan'", () => {
+  // PM bag in a group (owner 2026-11-12, CMP005 AWP 40 KG bag): the group's demand is allocated to the member with the most stock, day by day,
+  // until that stock is gone. The member's own demand series therefore stops early; the plan did not end, its stock did.
+  const calendar = buildCalendar("2026-11-01", "2026-11-12")!;
+  const demand = new Map<string, number>();
+  const days = calendar.horizon.filter((d) => d >= "2026-11-12");
+  for (let i = 0; i < 25; i += 1) demand.set(days[i], 2500); // 62,500 allocated over 25 days, then nothing
+  const used = coverageDays(62500.000411, calendar, demand, null, 0);
+  assertEqual([used.days, used.stockout_date !== null], [25, true], "stock used up by the allocated demand: 25 days, a stock-out date, not null");
+  // Control: stock well above the allocated demand with the plan ended = really beyond the plan.
+  const beyond = coverageDays(90000, calendar, demand, null, 0);
+  assertEqual(beyond.days, null, "stock left over after the plan ended is still 'beyond plan'");
+});
