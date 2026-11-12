@@ -643,7 +643,10 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       req_nm: dq(r.material_id, r.metrics.nm_req), prorata_nm: dq(r.material_id, r.metrics.nm_prorata_daily),
       current_stock: dq(r.material_id, r.metrics.current_stock), intransit_cm: dq(r.material_id, r.metrics.intransit_cm_dispatched), intransit_nm: dq(r.material_id, r.metrics.intransit_nm_dispatched), open_po_cm: dq(r.material_id, r.metrics.open_po_cm), open_po_nm: dq(r.material_id, r.metrics.open_po_nm),
       // Owner 2026-11-08: why the cover is blank — stock outlasts the PO21 plan, or the item is used only through a group.
-      current_stk_days_note: r.metrics.current_stk_days === null ? (Number(r.metrics.cm_prorata ?? 0) + Number(r.metrics.nm_req ?? 0) > 0 && Number(r.metrics.current_stock ?? 0) > 0 ? "Beyond plan" : Number(r.group_share_qty ?? 0) > 0 ? "Via group" : null) : null,
+      current_stk_days_note: r.metrics.current_stk_days === null ? (Number(r.metrics.cm_prorata ?? 0) + Number(r.metrics.nm_req ?? 0) > 0 && Number(r.metrics.current_stock ?? 0) > 0 ? "Beyond plan" : Number(r.group_share_qty ?? 0) > 0 ? `Via ${[...new Set(r.pools.filter((p) => p.group_id).map((p) => groupLabel.get(p.group_id!) ?? "group"))][0] ?? "group"}` : null) : null,
+      // Owner 2026-11-12: an item used through a group shows the group and the group's own demand, so its 0 own demand is not read as "no need".
+      group_via: [...new Set(r.pools.filter((p) => p.group_id).map((p) => groupFullLabel.get(p.group_id!) ?? "—"))].join("; ") || null,
+      group_demand: r.pools.some((p) => p.group_id) ? dq(r.material_id, r.pools.filter((p) => p.group_id).reduce((sum, p) => sum + p.pool_total, 0)) : null,
       below_target: covered ? false : r.metrics.below_target_with_in, below_critical: covered ? false : r.metrics.below_critical_with_in,
       first_shortage_day: covered ? null : risks.get(r.material_id)?.first_shortage_day ?? null,
       first_below_critical_day: covered ? null : risks.get(r.material_id)?.first_below_critical_day ?? null,

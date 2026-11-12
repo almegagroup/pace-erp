@@ -177,11 +177,15 @@ function baseQtyColumn(key, label, group, options = {}) {
     numFmt: options.days ? "0" : "#,##0.###",
   };
 }
+/** Groups an item is used through (from its demand pools) and the groups' own demand. */
+const groupPools = (row) => (row.pools ?? []).filter((p) => p.group_label);
+const groupVia = (row) => [...new Set(groupPools(row).map((p) => p.group_label))].join("; ");
+const groupDemand = (row) => (groupPools(row).length ? groupPools(row).reduce((sum, p) => sum + Number(p.pool_total ?? 0), 0) : null);
 /** Why a cover-days cell is blank: stock outlasts the PO21 plan, or the item is used only through a group (its cover is the group's). */
 const coverEmptyText = (row) => {
   const ownDemand = Number(row.cm_prorata ?? 0) + Number(row.nm_req ?? 0) > 0;
   if (ownDemand && Number(row.current_stock ?? 0) > 0) return "Beyond plan";
-  if (!ownDemand && Number(row.group_share_qty ?? 0) > 0) return "Via group";
+  if (!ownDemand && Number(row.group_share_qty ?? 0) > 0) return `Via ${groupVia(row).split(" — ").pop().split("; ")[0] || "group"}`;
   return null;
 };
 function textColumn(key, label, group, options = {}) {
@@ -399,6 +403,8 @@ function buildReportColumns(expanded, toggleExpanded, showPackQty, togglePackQty
     qtyColumn("stock_protection_used", "Protected stock used by groups", "stock", { width: "160px" }),
     qtyColumn("fixed_demand_qty", "Own fixed demand (CM+NM)", "stock", { width: "150px" }),
     qtyColumn("group_share_qty", "Used by groups (CM+NM)", "stock", { width: "140px" }),
+    textColumn("group_via", "Group (via)", "stock", { width: "170px", read: groupVia }),
+    qtyColumn("group_demand", "Group demand (CM+NM)", "stock", { width: "150px", read: groupDemand }),
     qtyColumn("stock_qa", "QA Stock", "stock", { width: "90px" }),
     qtyColumn("stock_blocked", "Blocked", "stock", { width: "90px" }),
     textColumn("required_locations", "Counted SLocs", "stock", { width: "110px", read: (r) => (r.required_locations ?? []).join(", ") }),

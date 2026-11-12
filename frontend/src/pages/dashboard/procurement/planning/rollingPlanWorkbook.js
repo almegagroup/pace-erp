@@ -562,12 +562,12 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
       { label: "CURRENT STK DAYS", value: (r) => num(r.current_stk_days) ?? r.current_stk_days_note ?? null, num: true }, { label: "Next Month cov", value: (r) => num(r.next_month_cov), num: true },
       { label: "Current Req", value: (r) => num(r.current_req), num: true }, { label: "Current Prorata", value: (r) => num(r.current_prorata), num: true },
       { label: "Req NM", value: (r) => num(r.req_nm), num: true }, { label: "Prorata NM", value: (r) => num(r.prorata_nm), num: true },
-      { label: "CURRENT_STOCK", value: (r) => num(r.current_stock), num: true }, { label: "INTRANSIT CM (dispatched)", value: (r) => num(r.intransit_cm), num: true },
+      { label: "CURRENT_STOCK", value: (r) => num(r.current_stock), num: true }, { label: "Group (via)", key: "group_via" }, { label: "Group demand (CM+NM)", value: (r) => num(r.group_demand), num: true }, { label: "INTRANSIT CM (dispatched)", value: (r) => num(r.intransit_cm), num: true },
       { label: "OPEN PO CM", value: (r) => num(r.open_po_cm), num: true }, { label: "INTRANSIT NM (dispatched)", value: (r) => num(r.intransit_nm), num: true }, { label: "OPEN PO NM", value: (r) => num(r.open_po_nm), num: true },
       { label: "Runs out on", value: (r) => day(r.first_shortage_day) }, { label: "Below Critical from", value: (r) => day(r.first_below_critical_day) },
       { label: "Remark", key: "note" },
     ], c.requirement, { color: (r) => (r.group_covered ? AMBER : r.first_shortage_day ? RED : r.below_critical ? AMBER : null) });
-    widths(sheet, [40, 6, 7, 10, 10, 12, 12, 12, 12, 12, 12, 13, 12, 12, 12, 12, 12, 14, 50]);
+    widths(sheet, [40, 6, 7, 10, 10, 12, 12, 12, 12, 12, 12, 13, 22, 14, 12, 12, 12, 12, 12, 14, 50]);
     sheet.views = [{ state: "frozen", xSplit: 1, ySplit: 1 }];
   }
 
