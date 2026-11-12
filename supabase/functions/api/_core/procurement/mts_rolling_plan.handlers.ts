@@ -413,10 +413,11 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const poolOf = (days: typeof fam.days_a, dt: string) => { const d = days.find((x) => x.day === dt); return d ? { total: q(d.pool_qty), by: d.pool_by.filter((p) => p.qty > 0.5).map((p) => ({ material: nameOf(p.material_id), qty: q(p.qty) })) } : null; };
       const landsOf = (view: "A" | "B", dt: string) => [
         ...fam.arrivals.filter((a) => a.qty_base > 0 && (view === "A" ? a.recorded : a.advised) === dt).map((a) => `+ ${nameOf(a.material_id)} ${fmt(q(a.qty_base))} (${poNumberOfReference(a.reference) ?? a.reference})`),
-        ...(view === "A" ? fam.lots_a : fam.lots_b).filter((l) => l.day === dt).map((l) => `+ NEW ${nameOf(l.material_id)} ${fmt(q(l.qty_base))} (engine lot)`),
+        ...(view === "A" ? fam.lots_a : fam.lots_b).filter((l) => l.day === dt).map((l) => `+ NEW ${nameOf(l.material_id)} ${fmt(q(l.qty_base))} (suggested, not counted)`),
       ];
       const poolDiary = [...new Set([...fam.days_a.map((d) => d.day), ...fam.days_b.map((d) => d.day)])].sort().map((dt) => ({
-        day: dt, lands_a: landsOf("A", dt), pool_a: poolOf(fam.days_a, dt), lands_b: landsOf("B", dt), pool_b: poolOf(fam.days_b, dt),
+        // Owner 2026-11-12: the excess pool counts today's stock and the existing orders only; a suggested lot is listed in 'lands' but never counted.
+        day: dt, lands_a: landsOf("A", dt), pool_a: poolOf(fam.days_a_pure, dt), lands_b: landsOf("B", dt), pool_b: poolOf(fam.days_b_pure, dt),
         notes: [
           ...(wfv.events ?? []).filter((e) => e.day === dt && e.kind === "TOP_UP" && e.qty > 0.5).map((e) => `${e.level} refilled ${fmt(q(e.qty))} (${(e.by_material ?? []).filter((x) => x.qty > 0.5).map((x) => `${x.material} ${fmt(q(x.qty))}`).join(", ")}) [recorded-date view]`),
           ...(dipByDay.get(dt) ?? []),
