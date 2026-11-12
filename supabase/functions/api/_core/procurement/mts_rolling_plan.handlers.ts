@@ -312,8 +312,10 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           const ev = eventOf(a.reference, a.material_id);
           const arr = arrivalByRefMat.get(`${a.reference}|${a.material_id}`);
           const cells = ev?.reschedule_key ? bestCells(ev.reschedule_key, a.recorded ?? null, fu as never, uomOf(a.material_id) ?? "KG") : { etd: "", port: "", plant: "", why: "", absent: "", action: "" };
-          const stA = stateAt(fam.days_a, lv.level_key, a.recorded);
-          const stB = stateAt(fam.days_b, lv.level_key, a.advised);
+          // Owner 2026-11-12: an existing order's Min / Max count only today's stock and the existing orders (no suggested lot); a suggested lot that lands before it is mentioned, not counted.
+          const stA = stateAt(fam.days_a_pure, lv.level_key, a.recorded);
+          const stB = stateAt(fam.days_b_pure, lv.level_key, a.advised);
+          const lotsBefore = (lots: typeof fam.lots_a, date: string | null) => (date ? lots.filter((l) => l.day >= calendar.asOf && l.day <= date && lv.members.includes(l.material_id)).map((l) => ({ day: l.day, material: nameOf(l.material_id), qty: q(l.qty_base) })) : []);
           const toLevel = allocOf(fam.alloc_b, a.source_key, lv.level_kind, lv.level_id);
           rows.push({
             kind: "Existing order", ref: `${a.reference}${ev?.csn_id ? "" : ""}`, material: nameOf(a.material_id), supplier: supplierOf(a.reference, ev?.csn_id) ?? "—", status: ev ? (arrivalStatus(ev.kind as never, ev.date_source as never) as string) : "",
@@ -322,7 +324,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
             min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, excess_split: stB?.excess_split ?? null, level_status: statusOf(stB, false), reserve_after: stB?.reserve ?? null,
             arr_note: arr?.shared_note ?? "", rec: recOf(ev?.csn_id),
             prorata_a: proRata(lv, a.recorded ?? null), prorata_b: proRata(lv, a.advised ?? null),
-            min_a_before: dayBefore(fam.days_a, lv.level_key, a.recorded ?? null), min_b_before: dayBefore(fam.days_b, lv.level_key, a.advised ?? null),
+            min_a_before: dayBefore(fam.days_a_pure, lv.level_key, a.recorded ?? null), min_b_before: dayBefore(fam.days_b_pure, lv.level_key, a.advised ?? null),
+            new_lots_a: lotsBefore(fam.lots_a, a.recorded ?? null), new_lots_b: lotsBefore(fam.lots_b, a.advised ?? null),
           });
         }
         for (const ref of lotRefs) {
@@ -410,10 +413,11 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const poolOf = (days: typeof fam.days_a, dt: string) => { const d = days.find((x) => x.day === dt); return d ? { total: q(d.pool_qty), by: d.pool_by.filter((p) => p.qty > 0.5).map((p) => ({ material: nameOf(p.material_id), qty: q(p.qty) })) } : null; };
       const landsOf = (view: "A" | "B", dt: string) => [
         ...fam.arrivals.filter((a) => a.qty_base > 0 && (view === "A" ? a.recorded : a.advised) === dt).map((a) => `+ ${nameOf(a.material_id)} ${fmt(q(a.qty_base))} (${poNumberOfReference(a.reference) ?? a.reference})`),
-        ...(view === "A" ? fam.lots_a : fam.lots_b).filter((l) => l.day === dt).map((l) => `+ NEW ${nameOf(l.material_id)} ${fmt(q(l.qty_base))} (engine lot)`),
+        ...(view === "A" ? fam.lots_a : fam.lots_b).filter((l) => l.day === dt).map((l) => `+ NEW ${nameOf(l.material_id)} ${fmt(q(l.qty_base))} (suggested, not counted)`),
       ];
       const poolDiary = [...new Set([...fam.days_a.map((d) => d.day), ...fam.days_b.map((d) => d.day)])].sort().map((dt) => ({
-        day: dt, lands_a: landsOf("A", dt), pool_a: poolOf(fam.days_a, dt), lands_b: landsOf("B", dt), pool_b: poolOf(fam.days_b, dt),
+        // Owner 2026-11-12: the excess pool counts today's stock and the existing orders only; a suggested lot is listed in 'lands' but never counted.
+        day: dt, lands_a: landsOf("A", dt), pool_a: poolOf(fam.days_a_pure, dt), lands_b: landsOf("B", dt), pool_b: poolOf(fam.days_b_pure, dt),
         notes: [
           ...(wfv.events ?? []).filter((e) => e.day === dt && e.kind === "TOP_UP" && e.qty > 0.5).map((e) => `${e.level} refilled ${fmt(q(e.qty))} (${(e.by_material ?? []).filter((x) => x.qty > 0.5).map((x) => `${x.material} ${fmt(q(x.qty))}`).join(", ")}) [recorded-date view]`),
           ...(dipByDay.get(dt) ?? []),

@@ -218,9 +218,13 @@ const matLines = (list) => {
 };
 /** "If CSN 3000000239 does not come → land by 2026-11-30" instead of the full paragraph (the full wording stays in the folded rows). */
 /** The CSN Tracker's own legs: ATD (BL date) when shipped else ETD; ATA at port when arrived else ETA; ETA to plant. */
-const recordedText = (rec, fallbackPlant) => (rec
-  ? `ETD ${day(rec.etd) || "—"}${rec.etd_actual ? " (ATD)" : ""}\nPort ${day(rec.port) || "—"}${rec.port_actual ? " (ATA)" : ""}\nPlant ${day(rec.plant) || day(fallbackPlant) || "—"}`
-  : (fallbackPlant ? `Plant ${day(fallbackPlant)}` : "—"));
+const recordedText = (rec, fallbackPlant, today = null) => {
+  const due = (d) => Boolean(today && d && String(d).slice(0, 10) > today);
+  const tag = (actual, d, name) => (actual ? ` (${name}${due(d) ? ", due" : ""})` : "");
+  return rec
+    ? `ETD ${day(rec.etd) || "—"}${tag(rec.etd_actual, rec.etd, "ATD")}\nPort ${day(rec.port) || "—"}${tag(rec.port_actual, rec.port, "ATA")}\nPlant ${day(rec.plant) || day(fallbackPlant) || "—"}`
+    : (fallbackPlant ? `Plant ${day(fallbackPlant)}` : "—");
+};
 /** The plan's as-of day (for "order-by already passed"): the first row of the family's day table. */
 
 function writeLeanFamily(sheet, b, company) {
@@ -257,6 +261,7 @@ function writeLeanFamily(sheet, b, company) {
   };
   const fold = (fromRow, toRow) => { for (let n = fromRow; n <= toRow; n += 1) { const r = sheet.getRow(n); r.outlineLevel = 1; r.hidden = true; } };
   const u = b.uom ?? "";
+  const todayIso = String(company?.calendar?.as_of ?? "").slice(0, 10) || null;
 
   // ── header (owner 2026-11-07: minimal — current status, orders with recorded vs engine date, new orders, where the use comes from, excess pool)
   const rs = (list, opts = {}) => {
@@ -310,30 +315,60 @@ function writeLeanFamily(sheet, b, company) {
       if (r.kind === "Stock today") continue;
       const key = r.kind === "Projection" ? `P|${r.material}|${r.existing_eta ?? ""}|${r.engine_eta ?? ""}` : `E|${r.ref}|${r.material}`;
       const entry = perLevel.get(key) ?? { row: r, levels: [] };
-      entry.levels.push({ label: sct.label, ...r });
+      entry.levels.push({ label: sct.label, target_days: sct.target_days, ...r });
       perLevel.set(key, entry);
     }
   }
-  const minMaxText = (levels, view) => levels.map((l) => `${l.label}: Pro-rata ${proTxt(view === "A" ? l.prorata_a : l.prorata_b)}/day · Min ${beforeTxt(view === "A" ? l.min_a_before : l.min_b_before)}${dTxt(view === "A" ? l.min_a : l.min_b)} · Max ${mxTxt(view === "A" ? l.max_a : l.max_b)}`).join("\n") || "—";
+  // A NEW (suggested) lot is never counted in an existing order's Min / Max; when one lands before this order, say so in one line.
+  const newLotLine = (levels, view) => {
+    const seen = new Map();
+    for (const l of levels) for (const x of (view === "A" ? l.new_lots_a : l.new_lots_b) ?? []) seen.set(`${x.day}|${x.material}`, x);
+    const lots = [...seen.values()].sort((a, b) => String(a.day).localeCompare(String(b.day)));
+    return lots.length ? `NEW lot not counted: ${lots.map((x) => `${day(x.day)} · ${qty(x.qty)}`).join("; ")} → see section 3` : "";
+  };
+  // One plain sentence per existing order: why the engine date is what it is.
+  const whyText = (r, levels) => {
+    const rec = r.existing_eta ? day(r.existing_eta) : null;
+    const eng = r.engine_eta ? day(r.engine_eta) : null;
+    const low = (view) => levels.filter((l) => (view === "A" ? l.min_a : l.min_b) !== null && (view === "A" ? l.min_a : l.min_b) !== undefined)
+      .sort((x, y) => (view === "A" ? x.min_a - y.min_a : x.min_b - y.min_b))[0] ?? null;
+    if (!eng) return "Not needed: no level goes below its Min without it.";
+    if (!rec) return `Must land by ${eng}.`;
+    if (eng === rec) { const l = low("A"); return `On time: lands ${rec}${l ? `, ${l.label} keeps Min ${l.min_a} d` : ""}.`; }
+    if (eng < rec) {
+      const l = low("A");
+      return l && l.target_days != null && l.min_a < l.target_days
+        ? `If it lands ${rec}: ${l.label} Min ${l.min_a} d, below ${l.target_days} d. It must land by ${eng}.`
+        : `It must land by ${eng}.`;
+    }
+    const l = low("B");
+    return `Can wait until ${eng}${l ? `: ${l.label} is then at Min ${l.min_b} d` : ""}.`;
+  };
+  const minMaxText = (levels, view) => [levels.map((l) => `${l.label}: Pro-rata ${proTxt(view === "A" ? l.prorata_a : l.prorata_b)}/day · Min ${beforeTxt(view === "A" ? l.min_a_before : l.min_b_before)}${dTxt(view === "A" ? l.min_a : l.min_b)} · Max ${mxTxt(view === "A" ? l.max_a : l.max_b)}`).join("\n"), newLotLine(levels, view)].filter(Boolean).join("\n") || "—";
 
   // ── 2. orders on the way (CSN / PO)
   title("2. ORDERS ON THE WAY (CSN / PO) — recorded date and engine date, and the Min / Max of each level on each date", { size: 12, fillArgb: L_BLUE });
   title("Min / Max = the level's cover at the END of the landing day, shown as the evening before → that evening. It counts EVERYTHING that has landed in that view by then (every other CSN / PO and every engine lot dated up to that day) and what the level claimed from the pool, not this order alone. Min = days its reserve lasts; Max = the same if it also took every spare kg, capped at its Max days.", { bold: false, italic: true });
-  rs([["Order"], ["Qty"], ["Recorded date (CSN Tracker)", 2], ["Engine date"], ["Pro-rata · Min / Max if it lands on the RECORDED date", 2], ["Pro-rata · Min / Max if it lands on the ENGINE date", 2], ["If it is late or does not come", 3]], { bold: true, fillArgb: L_GREY });
+  rs([["Order"], ["Qty"], ["Recorded date (CSN Tracker)", 2], ["Engine date"], ["Pro-rata · Min / Max if it lands on the RECORDED date", 2], ["Pro-rata · Min / Max if it lands on the ENGINE date", 2], ["Why this date / if it is late", 3]], { bold: true, fillArgb: L_GREY });
   const existing = [...perLevel.entries()].filter(([k]) => k.startsWith("E|")).map(([, v]) => v)
     .sort((x, y) => String(x.row.engine_eta ?? x.row.existing_eta ?? "").localeCompare(String(y.row.engine_eta ?? y.row.existing_eta ?? "")));
   if (!existing.length) rs([["No order is on the way for this family.", LEAN_COLS]]);
   for (const { row: r, levels } of existing) {
     const en = r.engine_eta ?? "";
     const engineText = !en ? "Not needed" : r.etd ? `ETD ${day(r.etd)}\nPort ${day(r.port) || "—"}\nPlant ${day(en)}` : day(en);
-    const out = rs([[`${r.material}\n${refName(r.ref)}\n${r.supplier ?? ""} · ${r.status ?? ""}`], [qty(r.lot_qty)], [recordedText(r.rec, r.existing_eta), 2], [engineText],
-      [minMaxText(levels, "A"), 2], [minMaxText(levels, "B"), 2], [[r.action, r.absent, r.arr_note].filter(Boolean).join("\n") || "—", 3]]);
+    const out = rs([[`${r.material}\n${refName(r.ref)}\n${r.supplier ?? ""} · ${r.status ?? ""}`], [qty(r.lot_qty)], [recordedText(r.rec, r.existing_eta, todayIso), 2], [engineText],
+      [minMaxText(levels, "A"), 2], [minMaxText(levels, "B"), 2], [[whyText(r, levels), r.action, r.absent, r.arr_note].filter(Boolean).join("\n"), 3]]);
     if (en && r.existing_eta && en !== r.existing_eta) fill(out.getCell(5), L_AMBER);
+    // Below its Min on that date = amber, so the breach is seen without reading the numbers.
+    const belowMin = (view) => levels.some((l) => { const m = view === "A" ? l.min_a : l.min_b; return m !== null && m !== undefined && l.target_days != null && m < l.target_days; });
+    if (belowMin("A")) fill(out.getCell(6), L_AMBER);
+    if (belowMin("B")) fill(out.getCell(8), L_AMBER);
   }
   sheet.addRow([]);
 
   // ── 3. new orders the engine adds
   title("3. NEW ORDERS THE ENGINE ADDS — dates, Min / Max on each date, and the other route", { size: 12, fillArgb: L_BLUE });
+  title("Suggestions only — you decide. Not counted in the Min / Max of section 2.", { bold: false, italic: true });
   rs([["New order"], ["Qty · vendor"], ["Date (recorded-date view)", 2], ["Date (engine-date view)"], ["Pro-rata · Min / Max in the RECORDED-date view", 2], ["Pro-rata · Min / Max in the ENGINE-date view", 2], ["Alternate route", 3]], { bold: true, fillArgb: L_GREY });
   const projections = (b.projection_total ?? []);
   if (!projections.length) rs([["The engine adds no new order for this family.", LEAN_COLS]]);
@@ -348,7 +383,7 @@ function writeLeanFamily(sheet, b, company) {
 
   // ── 4. excess pool over time
   title("4. EXCESS POOL OVER TIME — what lands, and how much stock no level needs yet after that day", { size: 12, fillArgb: L_BLUE });
-  title("Excess = stock in the shared pool that no level needs yet. It is not a surplus order: a level takes from it only when the level falls to its own Min.", { bold: false, italic: true });
+  title("Excess = stock no level needs yet. Counts today's stock and existing orders only; a suggested lot is listed, not counted.", { bold: false, italic: true });
   rs([["Date"], ["What lands", 4], ["Excess pool — RECORDED dates", 3], ["Excess pool — ENGINE dates", 4]], { bold: true, fillArgb: L_GREY });
   const poolText = (p) => (p ? matLines(p.by) : "—");
   for (const d of b.pool_diary ?? []) {
@@ -400,7 +435,7 @@ function writeBlocks(sheet, companies, kind, { filter = () => true, sections = f
     // Owner 2026-10-28: the family is reported as a whole (every group and the exclusive use of its members together); each level
     // is listed beneath, narrow first, with its own Min / Max / Critical days, reserve and next Min date.
     if (b.is_family && (b.waterfall?.levels ?? []).length) {
-      const note = sheet.addRow(["Opening / Pro-rata / Closing / Excess / Max Days / Min Days below are the WHOLE family: all groups and the exclusive use of its members together. A receipt is not all used at once: Excess = what is in the pool after that day, held for no level yet (normal, not a problem). ≈ N d (plan to date) = the stock outlasts the PO21 plan (the plan has no demand after its last day, so no later use is invented); N is the days at the plan's average daily use. ETD / ETA to Port / ETA to Plant (engine) = the latest dates at which a not-yet-shipped order still keeps every level above its Critical days (a level may sit below its Min, never below Critical); a lot that no level depends on inside the plan gets no date, only the reason. \"If another order does not come\" = the DEADLINE for this order if that other order never arrives (this order judged alone, other orders on their recorded dates); the engine date beside it is stricter because it also guards against several orders being late together. \"Recorded date\" = the plant date stored in the CSN / PO; if it has already passed with no shipment recorded the order is overdue, not postponed: ask the vendor where the goods are and update the CSN Tracker. Levels, narrow first:"]);
+      const note = sheet.addRow(["Opening / Pro-rata / Closing / Excess / Max Days / Min Days = the whole family. Excess = in the pool, no level needs it yet. ≈ N d = the stock outlasts the PO21 plan. ETD / ETA (engine) = the latest dates a not-yet-shipped order still keeps every level at or above its Min. \"If another order does not come\" = this order's own deadline if that other order never arrives. Recorded = the date in the CSN / PO; if it has passed with no shipment, ask the vendor and update the CSN Tracker. Levels, narrow first:"]);
       note.getCell(1).font = { italic: true };
       for (const l of b.waterfall.levels) {
         const line = sheet.addRow([`  ${l.label}: Min ${days(l.target_days) ?? "—"} / Max ${days(l.max_days) ?? "—"} / Critical ${days(l.critical_days) ?? "—"} d · reserve ${num(l.reserve_now) ?? 0} ${b.uom ?? ""} (covers ${days(l.cover_days_now) ?? "—"} d) · next Min ${l.next_min_day ?? "not in horizon"}`]);

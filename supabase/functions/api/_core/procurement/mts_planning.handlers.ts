@@ -783,6 +783,8 @@ export async function computePlanning(p: PlanningParams) {
     arrivals: Array<{ source_key: string; material_id: string; reference: string; qty_base: number; recorded: string | null; advised: string | null; movable: boolean }>;
     /** Scenario A = every not-yet-shipped order on its recorded date. Scenario B = on the engine's advised date. Each plans its own new lots. */
     lots_a: CheckLot[]; lots_b: CheckLot[]; days_a: CheckDays; days_b: CheckDays; alloc_a: CheckAlloc[]; alloc_b: CheckAlloc[];
+    /** Owner 2026-11-12: the same two views with NO suggested lot — only today's stock and the existing orders. This is what a report may call "if the order lands then". */
+    days_a_pure: CheckDays; days_b_pure: CheckDays;
   };
   // Owner 2026-11-03: schedule check for the Group tab. Per family the not-yet-shipped orders are placed (A) on their recorded dates and (B) on the engine's
   // advised dates, the family planned again each time (so each scenario has its own new lots), with every level's cover / Min / Max / pool by day and
@@ -834,6 +836,9 @@ export async function computePlanning(p: PlanningParams) {
       const movedArrivals = input.confirmed_arrivals.map((a) => (moves.has(a.source_key) ? { ...a, eta_to_plant: moves.get(a.source_key)! } : a));
       const resB = planFamily({ ...input, plan_buys: true, trace: false, level_days: true, confirmed_arrivals: movedArrivals });
       const resA = planFamily({ ...input, plan_buys: true, trace: false, level_days: true });
+      // Suggested lots are advice, not a decision (owner 2026-11-12): the Min / Max shown beside an existing order must not count them.
+      const resBPure = planFamily({ ...input, plan_buys: false, trace: false, level_days: true, confirmed_arrivals: movedArrivals });
+      const resAPure = planFamily({ ...input, plan_buys: false, trace: false, level_days: true });
       const lotsA = lotsOf(resA);
       const lotsB = lotsOf(resB);
       const keep = new Set<string>([input.as_of, ...input.confirmed_arrivals.map((a) => String(a.eta_to_plant)), ...movedArrivals.map((a) => String(a.eta_to_plant)), ...lotsA.map((l) => l.day), ...lotsB.map((l) => l.day)]);
@@ -845,6 +850,7 @@ export async function computePlanning(p: PlanningParams) {
         })),
         lots_a: lotsA, lots_b: lotsB,
         days_a: resA.level_days.filter((d) => keep.has(d.day)), days_b: resB.level_days.filter((d) => keep.has(d.day)),
+        days_a_pure: resAPure.level_days.filter((d) => keep.has(d.day)), days_b_pure: resBPure.level_days.filter((d) => keep.has(d.day)),
         alloc_a: allocOf(resA), alloc_b: allocOf(resB),
       });
     }

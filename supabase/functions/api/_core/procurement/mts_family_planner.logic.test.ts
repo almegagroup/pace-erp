@@ -1063,3 +1063,23 @@ Deno.test("refill method: FIRST is the default, SECOND holds back at least as mu
   const alone = planFamily({ ...input, group_demand: [], refill_method: "AUTO" });
   assert(alone.refill_choices?.[0].method === "FIRST" && alone.refill_choices?.[0].scores.length === 0, "no shared item: no method comparison");
 });
+
+Deno.test("report contract: a run without plan_buys carries no suggested lot, so a level's cover at an existing order's date never includes one", () => {
+  const AS_OF = "2026-10-28";
+  const add = (d: string, n: number) => new Date(Date.parse(`${d}T00:00:00Z`) + n * 864e5).toISOString().slice(0, 10);
+  const days: string[] = []; for (let d = AS_OF; d <= "2027-03-31"; d = add(d, 1)) days.push(d);
+  const G = "GAB", T = "TS";
+  const pol = (id: string) => ({ material_id: id, target_days: 30, critical_days: 15, vendor_moq_qty_base: 10000, order_multiple_qty_base: null, configured_lead_time_days: 17, cycle_days: 30, vendor_options: [] }) as unknown as OptimizerMaterialPlanningPolicy;
+  const groups = days.map((d) => ({ group_id: "B", candidates: [G, T], required_by: d, qty_base: 1000 }));
+  // The only order lands very late: with suggestions the engine adds a lot earlier, without them the level just runs down.
+  const arr = [{ source_key: "G1", material_id: G, eta_to_plant: "2027-01-20", qty_base: 9000 }];
+  const input = { as_of: AS_OF, horizon_end: "2027-03-31", opening_qty_by_material: { [G]: 20000, [T]: 0 }, own_demand: [], group_demand: groups, confirmed_arrivals: arr, policies: [G, T].map(pol), level_days: true } as unknown as FamilyPlannerInput;
+  const withLots = planFamily({ ...input, plan_buys: true });
+  const pure = planFamily({ ...input, plan_buys: false });
+  assert(withLots.advisory_buys.some((b) => (b as { lots?: unknown[] }).lots?.length), "the suggested run does add a lot in this shape");
+  assert(pure.advisory_buys.every((b) => !((b as { lots?: unknown[] }).lots?.length)), "the pure run adds none");
+  const coverOn = (r: ReturnType<typeof planFamily>, day: string) => r.level_days.find((d) => d.day === day)?.levels.find((l) => l.level_kind === "GROUP")?.cover_days ?? null;
+  const day = "2027-01-19"; // the evening before the order lands
+  const a = coverOn(pure, day); const b = coverOn(withLots, day);
+  assert(a !== null && b !== null && b > a, `with a suggested lot the cover is higher (${b}) than without (${a})`);
+});
