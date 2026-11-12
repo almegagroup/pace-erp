@@ -16,7 +16,7 @@
  * Authority: Frontend
  */
 
-import { useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
@@ -239,17 +239,59 @@ export default function BulkComponentMapPage() {
   });
   const chaOptions = Array.isArray(chaOptionsQuery.data?.items) ? chaOptionsQuery.data.items : [];
 
-  const allVisibleSelected = searchedRows.length > 0 && searchedRows.every((row) => selectedIds.includes(row[rowKeyField]));
+  // The grid has its OWN per-column funnel filters on top of the page search above
+  // (columnFilter below). "Visible" must mean what the user actually SEES -- the
+  // grid's own filtered rows -- not just the page-search result: selecting
+  // `searchedRows` ignored the funnel, so "select all" after funnel-filtering to one
+  // material silently selected EVERY row and a bulk apply landed on all of them
+  // (found live 2026-11-12, CMP011: Dolomite GRNs + 40 unrelated GRNs got mapped).
+  const [gridRows, setGridRows] = useState(null);
+  // The grid re-emits a fresh array whenever its `columns` prop identity changes
+  // (ours is rebuilt every render), so only commit when the visible row set really
+  // changed -- otherwise this would re-render forever.
+  const handleGridFilteredRows = useCallback((visible) => {
+    const next = Array.isArray(visible) ? visible : null;
+    setGridRows((prev) => {
+      if (prev === next) return prev;
+      if (prev && next && prev.length === next.length && prev.every((row, index) => row[rowKeyField] === next[index][rowKeyField])) return prev;
+      return next;
+    });
+  }, []);
+  const visibleRows = gridRows ?? searchedRows;
+  const visibleIdSet = useMemo(() => new Set(visibleRows.map((row) => row[rowKeyField])), [visibleRows]);
+
+  // Selection may never contain a row the user can no longer see: when a
+  // search/funnel filter hides a selected row, drop it from the selection.
+  useEffect(() => {
+    setSelectedIds((current) => {
+      const next = current.filter((id) => visibleIdSet.has(id));
+      return next.length === current.length ? current : next;
+    });
+  }, [visibleIdSet]);
+
+  const allVisibleSelected = visibleRows.length > 0 && visibleRows.every((row) => selectedIds.includes(row[rowKeyField]));
   function toggleRow(id) {
     setSelectedIds((current) => (current.includes(id) ? current.filter((x) => x !== id) : [...current, id]));
   }
   function toggleAllVisible() {
     if (allVisibleSelected) {
-      const visibleIds = new Set(searchedRows.map((row) => row[rowKeyField]));
-      setSelectedIds((current) => current.filter((id) => !visibleIds.has(id)));
+      setSelectedIds((current) => current.filter((id) => !visibleIdSet.has(id)));
     } else {
-      setSelectedIds((current) => [...new Set([...current, ...searchedRows.map((row) => row[rowKeyField])])]);
+      setSelectedIds((current) => [...new Set([...current, ...visibleRows.map((row) => row[rowKeyField])])]);
     }
+  }
+
+  // Plain-language summary of what is about to be mapped, so a wrong selection
+  // (e.g. several different materials) is obvious before it is applied.
+  function describeSelection() {
+    const byMaterial = new Map();
+    for (const row of rows) {
+      if (!selectedIds.includes(row[rowKeyField])) continue;
+      const label = String(row.item_name ?? row.material_name ?? "—");
+      byMaterial.set(label, (byMaterial.get(label) ?? 0) + 1);
+    }
+    const parts = [...byMaterial.entries()].sort((a, b) => b[1] - a[1]).map(([label, count]) => `${label}: ${count}`);
+    return `${selectedIds.length} GRN${selectedIds.length === 1 ? "" : "s"}\n${parts.join("\n")}`;
   }
 
   // The acknowledgement applies to the exact lines/mode on screen -- any
@@ -314,6 +356,9 @@ export default function BulkComponentMapPage() {
     setError(""); setNotice("");
     if (!invoiceVerified) { setError('Check "I Verify" before applying.'); return; }
     if (selectedIds.length === 0) { setError("Select at least one GRN first."); return; }
+    // Applying appends the same lines again every time it is run -- confirm the
+    // exact GRN/material mix first so a wrong selection is caught before it writes.
+    if (!window.confirm(`Map these components onto:\n\n${describeSelection()}\n\nContinue?`)) return;
     setApplying(true);
     try {
       const result = await applyBulkComponentMap({ ...buildRequestBody(), invoice_verified: true });
@@ -557,7 +602,7 @@ export default function BulkComponentMapPage() {
 
         <ErpSectionCard
           eyebrow="GRNs"
-          title={listQuery.isLoading ? "Loading…" : `${searchedRows.length} GRN${searchedRows.length === 1 ? "" : "s"} (from ${origin === "PO12" ? "PO12 Tab 1" : "AC01"})`}
+          title={listQuery.isLoading ? "Loading…" : `${visibleRows.length} GRN${visibleRows.length === 1 ? "" : "s"} (from ${origin === "PO12" ? "PO12 Tab 1" : "AC01"})`}
         >
           <div className="mb-3 flex items-center gap-2">
             <input
@@ -589,6 +634,7 @@ export default function BulkComponentMapPage() {
               },
             ]}
             rows={searchedRows}
+            onFilteredRowsChange={handleGridFilteredRows}
             rowKey={(row) => row[rowKeyField]}
             columnFilter
             rangeSelect
