@@ -6651,6 +6651,45 @@ async function reverseMtsProcessOrderHandler(
     return poErr(req, ctx, "PROD_PO_PI_BLOCKED", 409, "One or more materials/locations on this MTS Process PO are under an active Physical Inventory count — reversal is blocked until the PID is posted or cancelled.");
   }
 
+  // Machine-bucket (distribution) restore. Verify wrote one OUT/CONSUMPTION
+  // machine_stock_log row per machine-tracked RM line; the stock_ledger P262 above puts
+  // the qty back in the location, but Page 4 availability for machine-tracked lines
+  // reads machine_stock_log -- so without a mirrored IN row the qty stays "consumed"
+  // from the machine's bucket forever (found live 2026-11-12, PO 9300001412: 2252.25 KG
+  // restored in stock_ledger, 0 restored to the machine bucket). Mirror each OUT row as
+  // an IN row for the SAME machine/batch; complete_process_po_verify inserts
+  // p_context.machine_stock_log_rows atomically with the movements.
+  const { data: machineConsumptionRows, error: machineConsumptionErr } = await serviceRoleClient
+    .schema("erp_production").from("machine_stock_log")
+    .select("company_id, storage_location_id, material_id, machine_id, batch_number, qty, direction, source_type")
+    .eq("reference_document_type", "PROCESS_PO")
+    .eq("reference_document_id", id)
+    .eq("source_type", "CONSUMPTION");
+  if (machineConsumptionErr) {
+    console.error("[process_order.reverseMtsProcessOrder] machine bucket lookup failed:", JSON.stringify(machineConsumptionErr));
+    throw new Error("PROD_MTS_REVERSE_MACHINE_BUCKET_LOOKUP_FAILED");
+  }
+  const consumptionRows = (machineConsumptionRows ?? []) as JsonRecord[];
+  // Idempotency: never mirror twice (a PO already carrying IN rows was restored once).
+  const alreadyRestored = consumptionRows.some((row) => toUpperTrimmedString(row.direction) === "IN");
+  const machineStockLogRows: JsonRecord[] = alreadyRestored
+    ? []
+    : consumptionRows
+      .filter((row) => toUpperTrimmedString(row.direction) === "OUT" && Number(row.qty ?? 0) > 0)
+      .map((row) => ({
+        company_id: row.company_id,
+        storage_location_id: row.storage_location_id,
+        material_id: row.material_id,
+        machine_id: row.machine_id ?? null,
+        batch_number: row.batch_number ?? null,
+        qty: Number(row.qty),
+        direction: "IN",
+        source_type: "CONSUMPTION",
+        reference_document_type: "PROCESS_PO",
+        reference_document_id: id,
+        created_by: ctx.auth_user_id,
+      }));
+
   await cancelReservationsForProcessOrder(id, ctx.auth_user_id, new Date().toISOString());
 
   const postings = await postDocument({
@@ -6660,6 +6699,7 @@ async function reverseMtsProcessOrderHandler(
     postedBy: ctx.auth_user_id,
     context: {
       mts_reverse: { reason, actor_id: ctx.auth_user_id, hold_reversals: holdReversals },
+      machine_stock_log_rows: machineStockLogRows,
     },
   });
 
