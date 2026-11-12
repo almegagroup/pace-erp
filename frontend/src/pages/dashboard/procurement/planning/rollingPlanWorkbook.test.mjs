@@ -241,3 +241,18 @@ test("Group tabs: MHEC and RDP families sit on their own tabs; the lean block is
   assert.ok(cells.some((t) => t.includes("Stock lasts:") && t.includes("Max cover:")), "today's cover days and the Max cover are shown for the level");
   assert.equal(wb.getWorksheet("RM Group").rowCount, 1, "no other RM group family -> only the empty-text row");
 });
+
+test("Requirement sheet: an item used through a group shows the group and the group's demand, so a 0 own demand is not read as no need", () => {
+  const base = company("a", "Almeha Coatings");
+  const row = { ...base.requirement[0], material: "RP-4099", current_req: 0, req_nm: 0, current_stock: 40838, current_stk_days: null, current_stk_days_note: "Via RDP", group_via: "RDP — RDP", group_demand: 301000 };
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, requirement: [row] }], asOf: "2026-10-21" });
+  const sheet = wb.getWorksheet("Almeha Coatings RM_PM");
+  const header = sheet.getRow(1).values.map((v) => String(v ?? ""));
+  const at = (label) => header.indexOf(label);
+  assert.ok(at("Group (via)") > 0 && at("Group demand (CM+NM)") > 0, "both columns exist");
+  const r = sheet.getRow(2);
+  assert.equal(r.getCell(at("Group (via)")).value, "RDP — RDP");
+  assert.equal(r.getCell(at("Group demand (CM+NM)")).value, 301000);
+  assert.equal(r.getCell(at("CURRENT_STOCK")).value, 40838, "the item's own stock stays visible");
+  assert.equal(r.getCell(at("CURRENT STK DAYS")).value, "Via RDP", "a blank cover says why");
+});
