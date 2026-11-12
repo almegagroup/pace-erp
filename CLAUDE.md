@@ -17,6 +17,20 @@ Claude সবসময় **`agent/claude`**-এ কাজ করবে (session
 
 - Report and page screens must be self-explanatory and simple: keep on-screen text minimal (short labels, at most one short hint line), no long explanatory paragraphs or footnotes. If a number could look inconsistent, show it with a clear label or column instead of writing a paragraph. (business owner, 2026-11-10)
 
+## Auto-routing — plugins, skills, connectors (business owner, 2026-11-12)
+
+Business owner কখনো বলে দেবে না কোন plugin/skill/connector লাগবে — Claude নিজে task দেখে সঠিকটা বেছে নেবে এবং **না জিজ্ঞেস করেই** ব্যবহার করবে। নতুন plugin/connector যোগ হলে একই নীতিতে নিজে বুঝে কাজে লাগাবে।
+
+- Bug / unexpected behavior → `superpowers:systematic-debugging` আগে, তারপর উপরের bug-pattern checklist।
+- নতুন feature / behavior change → `superpowers:brainstorming`, তারপর `writing-plans`; কিন্তু design-first rule অনুযায়ী আগে feasibility doc-এর locked section পড়ো।
+- কাজ "done/fixed" বলার আগে বা commit-এর আগে → `superpowers:verification-before-completion` (deno check, eslint, `scripts/*-guard.mjs`, migration-integrity)।
+- বড় file/log/doc (CLAUDE.md, feasibility doc, OM-IMPLEMENTATION-LOG, Render log, big JSON/CSV) → `headroom` দিয়ে আগে outline, শুধু দরকারি অংশ পড়ো।
+- DB schema/data → Supabase MCP (dev only; prod কখনো সরাসরি নয়)। Deploy/log/service status → Render MCP। Docs/files → Drive/Docs connector।
+- `main` merge বা go-live-এর আগে, বা company-scope/ACL/auth-এ বড় change → `claude-security` scan অফার করো (token-heavy, তাই চালানোর আগে একবার জানাও)।
+- Business owner কোনো correction/lasting preference বললে → `task-observer` দিয়ে এই section-এর "Working preferences"-এ ছোট করে সংরক্ষণ করো।
+- `omniout` (LLM retry) ও `apify` (scraping) — এই project-এর কাজে লাগে না, ব্যবহার করো না যদি না task সত্যিই তা চায়। `caveman` শুধু চাইলে।
+- **Branch override:** Superpowers-এর worktree/branch skill যাই বলুক, §0 বহাল — নতুন branch/worktree নয়, শুধু `agent/claude` (cloud session-এ system যে branch দেয় সেটা)।
+
 ---
 
 ## 1. Claude কীভাবে এই project access করে
