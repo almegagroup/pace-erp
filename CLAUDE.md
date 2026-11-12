@@ -17,6 +17,33 @@ Claude সবসময় **`agent/claude`**-এ কাজ করবে (session
 
 - Report and page screens must be self-explanatory and simple: keep on-screen text minimal (short labels, at most one short hint line), no long explanatory paragraphs or footnotes. If a number could look inconsistent, show it with a clear label or column instead of writing a paragraph. (business owner, 2026-11-10)
 
+## Auto-routing — plugins, skills, connectors (business owner, 2026-11-12)
+
+Business owner কখনো বলে দেবে না কোন plugin/skill/connector লাগবে — Claude নিজে task দেখে সঠিকটা বেছে নেবে এবং **না জিজ্ঞেস করেই** ব্যবহার করবে। নতুন plugin/connector যোগ হলে একই নীতিতে নিজে বুঝে কাজে লাগাবে।
+
+- Bug / unexpected behavior → `superpowers:systematic-debugging` আগে, তারপর উপরের bug-pattern checklist।
+- নতুন feature / behavior change → `superpowers:brainstorming`, তারপর `writing-plans`; কিন্তু design-first rule অনুযায়ী আগে feasibility doc-এর locked section পড়ো।
+- কাজ "done/fixed" বলার আগে বা commit-এর আগে → `superpowers:verification-before-completion` (deno check, eslint, `scripts/*-guard.mjs`, migration-integrity)।
+- বড় file/log/doc (CLAUDE.md, feasibility doc, OM-IMPLEMENTATION-LOG, Render log, big JSON/CSV) → `headroom` দিয়ে আগে outline, শুধু দরকারি অংশ পড়ো।
+- **Connectors — নিজে থেকে, প্রতি session-এ (নতুন ও পুরনো সব):** tool schema না থাকলে `ToolSearch` দিয়ে আগে load করো, তারপর ব্যবহার করো; "access নেই" বলার আগে অবশ্যই চেষ্টা করো। কোনো MCP server connect না হলে (যেমন Apify `ERR_PROXY_TUNNEL`) সেটাকে "missing" ধরো না — user-কে জানাও connect fail করেছে।
+  - **Supabase MCP** — DB-সংক্রান্ত যেকোনো প্রশ্ন/bug/schema/ACL/data যাচাইয়ে অনুমান না করে আগে live query করো (§2 connection test: `SELECT current_database(), now();`)। **শুধু dev (`ytapuwiqicmvpanmzelb`)**, prod কখনো সরাসরি নয়। Schema change = migration file আগে, তারপর §8A migration-integrity + `NOTIFY pgrst, 'reload schema'`। Data config হলে জিজ্ঞেস করো "এটা কি migration-এ যাবে?"। বড় আলাদা-কাজের আগে `get_advisors` চালাতে পারো।
+  - **Render MCP** — deploy fail, 500/crash, slow API, "deploy হয়েছে কিনা" — আগে `list_deploys`/`list_logs`/`get_metrics` দেখো, তারপর কারণ বলো। Read-only নিজে থেকে; `trigger_deploy`/env-var বদল/service create শুধু user বললে।
+  - **GitHub MCP** (শুধু `almegagroup/pace-erp`) — PR/CI/check/job-log দেখা নিজে থেকে (CI guard fail হলে `get_job_logs`)। PR create/comment/merge শুধু user বললে। Branch rule §0 বহাল।
+  - **Drive / Docs connector** — user কোনো doc/sheet/file link দিলে বা report/doc চাইলে নিজে পড়ো/বানাও; local file বা paste চাওয়ার আগে connector চেষ্টা করো।
+  - **Artifact** — নিজের ব্যবহারের বাইরে অন্যের পড়ার/দেখার জিনিস (report, dashboard, explainer) হলে artifact অফার করো।
+  - নতুন connector যোগ হলে `SearchMcpRegistry`/tool list দেখে এই একই নীতিতে (পড়া = নিজে থেকে, লেখা/deploy/delete = user বললে) নিজেই বুঝে কাজে লাগাও।
+- `main` merge বা go-live-এর আগে, বা company-scope/ACL/auth-এ বড় change → `claude-security` scan অফার করো (token-heavy, তাই চালানোর আগে একবার জানাও)।
+- Business owner কোনো correction/lasting preference বললে → `task-observer` দিয়ে এই section-এর "Working preferences"-এ ছোট করে সংরক্ষণ করো।
+- `omniout` (LLM retry) ও `apify` (scraping) — এই project-এর কাজে লাগে না, ব্যবহার করো না যদি না task সত্যিই তা চায়। `caveman` শুধু চাইলে।
+- **বাকি সব installed skill (নিজে বুঝে, জিজ্ঞেস না করে):**
+  - বড় diff / commit-এর আগে → `code-review` (ACL/company-scope/posting হলে high effort); implement শেষে → `simplify`; auth/ACL/scope-এর change → `security-review`।
+  - Frontend change যাচাই করতে → `run` (app চালিয়ে দেখো, শুধু lint নয়)। ২+ স্বাধীন কাজ → `dispatching-parallel-agents`। Review comment এলে → `receiving-code-review` (অন্ধভাবে মানবে না, verify করো)।
+  - Chart/dashboard/report visual → `dataviz` + `artifact-design`; diagram → `artifact-diagramming`; Docs/Drive → `anthropic-skills:docs`/`google-workspace`। `docx/pptx/xlsx/pdf` শুধু user সেই format চাইলে।
+  - Recurring check/poll → `loop`; permission prompt বা settings/hook বদল → `update-config`/`fewer-permission-prompts`।
+  - `superpowers:finishing-a-development-branch`-এর merge/PR option বাদ — আমাদের flow §0 (`agent/claude`→`dev`→`main`, fast-forward), PR শুধু user বললে। `test-driven-development` শুধু যেখানে test infra আছে; ERP page/handler-এ guard script + `deno check` + eslint ই মান।
+  - `claude-api`, `omniout` — শুধু যদি app নিজে LLM call করে। `canvas-design`, `init`, `keybindings-help`, `plugin-authoring`, `session-start-hook`, `skill-creator`, `import-memory`, `morning` — শুধু user চাইলে।
+- **Branch override:** Superpowers-এর worktree/branch skill যাই বলুক, §0 বহাল — নতুন branch/worktree নয়, শুধু `agent/claude` (cloud session-এ system যে branch দেয় সেটা)।
+
 ---
 
 ## 1. Claude কীভাবে এই project access করে
