@@ -25,7 +25,13 @@ Business owner কখনো বলে দেবে না কোন plugin/skill
 - নতুন feature / behavior change → `superpowers:brainstorming`, তারপর `writing-plans`; কিন্তু design-first rule অনুযায়ী আগে feasibility doc-এর locked section পড়ো।
 - কাজ "done/fixed" বলার আগে বা commit-এর আগে → `superpowers:verification-before-completion` (deno check, eslint, `scripts/*-guard.mjs`, migration-integrity)।
 - বড় file/log/doc (CLAUDE.md, feasibility doc, OM-IMPLEMENTATION-LOG, Render log, big JSON/CSV) → `headroom` দিয়ে আগে outline, শুধু দরকারি অংশ পড়ো।
-- DB schema/data → Supabase MCP (dev only; prod কখনো সরাসরি নয়)। Deploy/log/service status → Render MCP। Docs/files → Drive/Docs connector।
+- **Connectors — নিজে থেকে, প্রতি session-এ (নতুন ও পুরনো সব):** tool schema না থাকলে `ToolSearch` দিয়ে আগে load করো, তারপর ব্যবহার করো; "access নেই" বলার আগে অবশ্যই চেষ্টা করো। কোনো MCP server connect না হলে (যেমন Apify `ERR_PROXY_TUNNEL`) সেটাকে "missing" ধরো না — user-কে জানাও connect fail করেছে।
+  - **Supabase MCP** — DB-সংক্রান্ত যেকোনো প্রশ্ন/bug/schema/ACL/data যাচাইয়ে অনুমান না করে আগে live query করো (§2 connection test: `SELECT current_database(), now();`)। **শুধু dev (`ytapuwiqicmvpanmzelb`)**, prod কখনো সরাসরি নয়। Schema change = migration file আগে, তারপর §8A migration-integrity + `NOTIFY pgrst, 'reload schema'`। Data config হলে জিজ্ঞেস করো "এটা কি migration-এ যাবে?"। বড় আলাদা-কাজের আগে `get_advisors` চালাতে পারো।
+  - **Render MCP** — deploy fail, 500/crash, slow API, "deploy হয়েছে কিনা" — আগে `list_deploys`/`list_logs`/`get_metrics` দেখো, তারপর কারণ বলো। Read-only নিজে থেকে; `trigger_deploy`/env-var বদল/service create শুধু user বললে।
+  - **GitHub MCP** (শুধু `almegagroup/pace-erp`) — PR/CI/check/job-log দেখা নিজে থেকে (CI guard fail হলে `get_job_logs`)। PR create/comment/merge শুধু user বললে। Branch rule §0 বহাল।
+  - **Drive / Docs connector** — user কোনো doc/sheet/file link দিলে বা report/doc চাইলে নিজে পড়ো/বানাও; local file বা paste চাওয়ার আগে connector চেষ্টা করো।
+  - **Artifact** — নিজের ব্যবহারের বাইরে অন্যের পড়ার/দেখার জিনিস (report, dashboard, explainer) হলে artifact অফার করো।
+  - নতুন connector যোগ হলে `SearchMcpRegistry`/tool list দেখে এই একই নীতিতে (পড়া = নিজে থেকে, লেখা/deploy/delete = user বললে) নিজেই বুঝে কাজে লাগাও।
 - `main` merge বা go-live-এর আগে, বা company-scope/ACL/auth-এ বড় change → `claude-security` scan অফার করো (token-heavy, তাই চালানোর আগে একবার জানাও)।
 - Business owner কোনো correction/lasting preference বললে → `task-observer` দিয়ে এই section-এর "Working preferences"-এ ছোট করে সংরক্ষণ করো।
 - `omniout` (LLM retry) ও `apify` (scraping) — এই project-এর কাজে লাগে না, ব্যবহার করো না যদি না task সত্যিই তা চায়। `caveman` শুধু চাইলে।
