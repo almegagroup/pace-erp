@@ -12,6 +12,7 @@ import type { ContextResolution } from "../../../_pipeline/context.ts";
 import { getServiceRoleClientWithContext } from "../../../_shared/serviceRoleClient.ts";
 import { okResponse, errorResponse } from "../../../_core/response.ts";
 import { log } from "../../../_lib/logger.ts";
+import { refreshCompanyAcl } from "../../../_shared/refreshCompanyAcl.ts";
 
 function assertAdmin(
   ctx: { context: ContextResolution },
@@ -162,11 +163,14 @@ export async function unmapCompanyProjectHandler(
       event: "PROJECT_COMPANY_UNMAPPED",
       meta: { company_id: companyId, project_id: projectId },
     });
+    const menuRefresh = await refreshCompanyAcl(db, companyId, "Company project unmapped");
+
     return okResponse(
       {
         status: "UNMAPPED",
         company_id: companyId,
         project_id: projectId,
+        menu_refreshed: menuRefresh.refreshed,
       },
       ctx.request_id,
     );

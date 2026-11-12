@@ -13,6 +13,7 @@ import type { ContextResolution } from "../../../_pipeline/context.ts";
 import { okResponse, errorResponse } from "../../response.ts";
 import { log } from "../../../_lib/logger.ts";
 import { generateRequestId } from "../../../_lib/request_id.ts";
+import { refreshCompanyAcl } from "../../../_shared/refreshCompanyAcl.ts";
 
 /* =========================================================
  * Types
@@ -141,11 +142,14 @@ export async function disableCompanyModuleHandler(
       meta: { company_id: companyId, module_code: moduleCode },
     });
 
+    const menuRefresh = await refreshCompanyAcl(db, companyId, `Company module disabled: ${moduleCode}`);
+
     return okResponse(
       {
         company_id: companyId,
         module_code: moduleCode,
         enabled: false,
+        menu_refreshed: menuRefresh.refreshed,
       },
       requestId
     );
