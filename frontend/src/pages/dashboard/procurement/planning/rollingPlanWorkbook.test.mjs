@@ -212,7 +212,7 @@ test("Group tabs: MHEC and RDP families sit on their own tabs; the lean block is
   const base = company("a", "Almeha Coatings");
   const rec = { etd: "2026-09-24", etd_actual: true, port: "2026-11-06", port_actual: true, plant: "2026-11-12", type: "IMPORT" };
   const lot = { kind: "Existing order", ref: "PO ASC/PO123/2026-27/1 · CSN 3000000229 (TRN)", material: "TS U2121", supplier: "SHANDONG", status: "IN_TRANSIT", lot_qty: 25000, existing_eta: "2026-11-12", engine_eta: "2026-11-12", action: "", etd: "", port: "", plant: "2026-11-12", why: "Long reason. More words.", absent: "If PO X · CSN 3000000239 (ORD) (2026-12-24) does not come: this order must land at plant by 2026-11-30 (24 d before its recorded date)", to_level: 25000, pct: 1, min_a: 51, max_a: 60, min_b: 51, max_b: 60, excess: 100, excess_split: "TS U2121: 100 KG", level_status: "Above Min", rec };
-  const mhec = { ...base.blocks[0], title: "MHEC", members: ["Gabrosa", "TS U2121"], level_sections: [{ label: "MHEC", kind: "GROUP", members: ["Gabrosa", "TS U2121"], target_days: 30, max_days: 60, critical_days: 15, rows: [{ kind: "Stock today", min_a: 60, max_a: null, prorata_b: 1250 }, { ...lot, prorata_a: 1250, prorata_b: 1300 }] }],
+  const mhec = { ...base.blocks[0], title: "MHEC", members: ["Gabrosa", "TS U2121"], level_sections: [{ label: "MHEC", kind: "GROUP", members: ["Gabrosa", "TS U2121"], target_days: 30, max_days: 60, critical_days: 15, rows: [{ kind: "Stock today", min_a: 60, max_a: null, prorata_b: 1250 }, { ...lot, ref: "PO ASC/PO999/2026-27 · CSN 3000000555 (ORD)", min_a: 22, min_b: 31, prorata_a: 1, prorata_b: 1 }, { ...lot, prorata_a: 1250, prorata_b: 1300, new_lots_a: [{ day: "2026-11-05", material: "Gabrosa", qty: 11000 }], new_lots_b: [] }] }],
     level_today: [{ label: "MHEC", opening: [{ material: "TS U2121", qty: 26000 }], reserve: [{ material: "TS U2121", qty: 25000 }], left: [{ material: "TS U2121", qty: 1000 }] }], excess_after: [{ material: "TS U2121", qty: 1000 }],
     pool_diary: [{ day: "2026-11-12", lands_a: ["+ TS U2121 25,000 (ASC/PO123/2026-27)"], pool_a: { total: 100, by: [{ material: "TS U2121", qty: 100 }] }, lands_b: [], pool_b: null, notes: [] }], projection_total: [], prediction: [] };
   const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [mhec] }], asOf: "2026-10-21" });
@@ -224,6 +224,11 @@ test("Group tabs: MHEC and RDP families sit on their own tabs; the lean block is
   assert.ok(cells.some((t) => t.startsWith("1. CURRENT STATUS")), "current status first");
   assert.ok(cells.some((t) => t.startsWith("2. ORDERS ON THE WAY")) && cells.some((t) => t.startsWith("3. NEW ORDERS")) && cells.some((t) => t.startsWith("4. EXCESS POOL OVER TIME")), "orders, new orders and the excess pool sections");
   assert.ok(cells.some((t) => t.includes("ETD 2026-09-24 (ATD)")), "the recorded ATD");
+  assert.ok(cells.some((t) => t.includes("NEW lot not counted") && t.includes("2026-11-05") && t.includes("11,000") && t.includes("section 3")), "a suggested lot that lands before this order is mentioned, not counted");
+  const amber = []; sheet.eachRow((row) => row.eachCell((c) => { if (String(c.value ?? "").includes("Min 22 d") && c.fill?.fgColor?.argb === "FFFFF2CC") amber.push(c.address); }));
+  assert.ok(amber.length >= 1, "a level below its Min on that date is amber");
+  assert.ok(cells.some((t) => t.startsWith("Suggestions only")), "section 3 says its lots are suggestions, not counted above");
+  assert.equal(new Set(cells.filter((t) => t.includes("NEW lot not counted"))).size, 1, "only the recorded-date view had a lot (merged cells repeat their value)");
   assert.ok(cells.some((t) => t === "1,250") && cells.some((t) => t.includes("Pro-rata 1,250/day")) && cells.some((t) => t.includes("Pro-rata 1,300/day")), "pro-rata today and on both landing dates");
   assert.ok(!cells.some((t) => t === "Passes on to next level (KG)" || t.includes("% of lot")), "no per-lot level-takes percentage");
   assert.ok(!cells.some((t) => t.includes("POOL DIARY") || t.includes("ALL ORDERS AT A GLANCE")), "glance and pool diary removed");

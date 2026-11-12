@@ -310,11 +310,18 @@ function writeLeanFamily(sheet, b, company) {
       if (r.kind === "Stock today") continue;
       const key = r.kind === "Projection" ? `P|${r.material}|${r.existing_eta ?? ""}|${r.engine_eta ?? ""}` : `E|${r.ref}|${r.material}`;
       const entry = perLevel.get(key) ?? { row: r, levels: [] };
-      entry.levels.push({ label: sct.label, ...r });
+      entry.levels.push({ label: sct.label, target_days: sct.target_days, ...r });
       perLevel.set(key, entry);
     }
   }
-  const minMaxText = (levels, view) => levels.map((l) => `${l.label}: Pro-rata ${proTxt(view === "A" ? l.prorata_a : l.prorata_b)}/day · Min ${beforeTxt(view === "A" ? l.min_a_before : l.min_b_before)}${dTxt(view === "A" ? l.min_a : l.min_b)} · Max ${mxTxt(view === "A" ? l.max_a : l.max_b)}`).join("\n") || "—";
+  // A NEW (suggested) lot is never counted in an existing order's Min / Max; when one lands before this order, say so in one line.
+  const newLotLine = (levels, view) => {
+    const seen = new Map();
+    for (const l of levels) for (const x of (view === "A" ? l.new_lots_a : l.new_lots_b) ?? []) seen.set(`${x.day}|${x.material}`, x);
+    const lots = [...seen.values()].sort((a, b) => String(a.day).localeCompare(String(b.day)));
+    return lots.length ? `NEW lot not counted: ${lots.map((x) => `${day(x.day)} · ${qty(x.qty)}`).join("; ")} → see section 3` : "";
+  };
+  const minMaxText = (levels, view) => [levels.map((l) => `${l.label}: Pro-rata ${proTxt(view === "A" ? l.prorata_a : l.prorata_b)}/day · Min ${beforeTxt(view === "A" ? l.min_a_before : l.min_b_before)}${dTxt(view === "A" ? l.min_a : l.min_b)} · Max ${mxTxt(view === "A" ? l.max_a : l.max_b)}`).join("\n"), newLotLine(levels, view)].filter(Boolean).join("\n") || "—";
 
   // ── 2. orders on the way (CSN / PO)
   title("2. ORDERS ON THE WAY (CSN / PO) — recorded date and engine date, and the Min / Max of each level on each date", { size: 12, fillArgb: L_BLUE });
@@ -329,11 +336,16 @@ function writeLeanFamily(sheet, b, company) {
     const out = rs([[`${r.material}\n${refName(r.ref)}\n${r.supplier ?? ""} · ${r.status ?? ""}`], [qty(r.lot_qty)], [recordedText(r.rec, r.existing_eta), 2], [engineText],
       [minMaxText(levels, "A"), 2], [minMaxText(levels, "B"), 2], [[r.action, r.absent, r.arr_note].filter(Boolean).join("\n") || "—", 3]]);
     if (en && r.existing_eta && en !== r.existing_eta) fill(out.getCell(5), L_AMBER);
+    // Below its Min on that date = amber, so the breach is seen without reading the numbers.
+    const belowMin = (view) => levels.some((l) => { const m = view === "A" ? l.min_a : l.min_b; return m !== null && m !== undefined && l.target_days != null && m < l.target_days; });
+    if (belowMin("A")) fill(out.getCell(6), L_AMBER);
+    if (belowMin("B")) fill(out.getCell(8), L_AMBER);
   }
   sheet.addRow([]);
 
   // ── 3. new orders the engine adds
   title("3. NEW ORDERS THE ENGINE ADDS — dates, Min / Max on each date, and the other route", { size: 12, fillArgb: L_BLUE });
+  title("Suggestions only — you decide. Not counted in the Min / Max of section 2.", { bold: false, italic: true });
   rs([["New order"], ["Qty · vendor"], ["Date (recorded-date view)", 2], ["Date (engine-date view)"], ["Pro-rata · Min / Max in the RECORDED-date view", 2], ["Pro-rata · Min / Max in the ENGINE-date view", 2], ["Alternate route", 3]], { bold: true, fillArgb: L_GREY });
   const projections = (b.projection_total ?? []);
   if (!projections.length) rs([["The engine adds no new order for this family.", LEAN_COLS]]);
