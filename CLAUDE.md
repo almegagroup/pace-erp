@@ -35,6 +35,13 @@ Business owner কখনো বলে দেবে না কোন plugin/skill
 - `main` merge বা go-live-এর আগে, বা company-scope/ACL/auth-এ বড় change → `claude-security` scan অফার করো (token-heavy, তাই চালানোর আগে একবার জানাও)।
 - Business owner কোনো correction/lasting preference বললে → `task-observer` দিয়ে এই section-এর "Working preferences"-এ ছোট করে সংরক্ষণ করো।
 - `omniout` (LLM retry) ও `apify` (scraping) — এই project-এর কাজে লাগে না, ব্যবহার করো না যদি না task সত্যিই তা চায়। `caveman` শুধু চাইলে।
+- **বাকি সব installed skill (নিজে বুঝে, জিজ্ঞেস না করে):**
+  - বড় diff / commit-এর আগে → `code-review` (ACL/company-scope/posting হলে high effort); implement শেষে → `simplify`; auth/ACL/scope-এর change → `security-review`।
+  - Frontend change যাচাই করতে → `run` (app চালিয়ে দেখো, শুধু lint নয়)। ২+ স্বাধীন কাজ → `dispatching-parallel-agents`। Review comment এলে → `receiving-code-review` (অন্ধভাবে মানবে না, verify করো)।
+  - Chart/dashboard/report visual → `dataviz` + `artifact-design`; diagram → `artifact-diagramming`; Docs/Drive → `anthropic-skills:docs`/`google-workspace`। `docx/pptx/xlsx/pdf` শুধু user সেই format চাইলে।
+  - Recurring check/poll → `loop`; permission prompt বা settings/hook বদল → `update-config`/`fewer-permission-prompts`।
+  - `superpowers:finishing-a-development-branch`-এর merge/PR option বাদ — আমাদের flow §0 (`agent/claude`→`dev`→`main`, fast-forward), PR শুধু user বললে। `test-driven-development` শুধু যেখানে test infra আছে; ERP page/handler-এ guard script + `deno check` + eslint ই মান।
+  - `claude-api`, `omniout` — শুধু যদি app নিজে LLM call করে। `canvas-design`, `init`, `keybindings-help`, `plugin-authoring`, `session-start-hook`, `skill-creator`, `import-memory`, `morning` — শুধু user চাইলে।
 - **Branch override:** Superpowers-এর worktree/branch skill যাই বলুক, §0 বহাল — নতুন branch/worktree নয়, শুধু `agent/claude` (cloud session-এ system যে branch দেয় সেটা)।
 
 ---
