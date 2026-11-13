@@ -42,7 +42,19 @@ const COMMUNICATION_TYPES = new Set(["EMAIL", "WHATSAPP", "VERBAL_COMMUNICATION"
 const SHAREABLE_SFG_PO_TYPES = new Set(["MTO", "HPS", "MTS", "MTEST"]);
 const USABLE_PO_TYPES = new Set([...SHAREABLE_SFG_PO_TYPES, "INT"]);
 
-function validateCommunicationDetails(values: JsonRecord): string | null {
+// The ±3-month window is a typo guard for a date being ENTERED, not a rule about how old a
+// real communication may be. A stroke re-opened later (e.g. to add an alternate group) keeps
+// its original, genuine Communication Date, so:
+//   - create:  window always applies (no options);
+//   - update:  window is skipped ONLY when the date is exactly the value already stored on the
+//              stroke (`unchangedFrom`, read from the DB, never from the client) -- any other
+//              date, older or newer, is still window-checked;
+//   - approve: `skipWindow` -- the date was already checked when it was entered/changed, and
+//              re-checking the stored value would block every old stroke from re-approval.
+function validateCommunicationDetails(
+  values: JsonRecord,
+  opts: { unchangedFrom?: unknown; skipWindow?: boolean } = {},
+): string | null {
   const communicationDate = toTrimmedString(values.communication_date);
   const communicationType = toUpperTrimmedString(values.communication_type);
   const communicatorName = toTrimmedString(values.communicator_name);
@@ -51,7 +63,13 @@ function validateCommunicationDetails(values: JsonRecord): string | null {
     return "PROD_STROKE_COMMUNICATION_REQUIRED";
   }
   if (!COMMUNICATION_TYPES.has(communicationType)) return "PROD_STROKE_COMMUNICATION_TYPE_INVALID";
-  if (!isManualDocumentDateWithinWindow(communicationDate)) return "PROD_STROKE_COMMUNICATION_DATE_OUTSIDE_ALLOWED_WINDOW";
+  const storedDate = toTrimmedString(opts.unchangedFrom).slice(0, 10);
+  const isUnchanged = storedDate !== "" && communicationDate === storedDate;
+  if (!opts.skipWindow && !isUnchanged && !isManualDocumentDateWithinWindow(communicationDate)) {
+    return "PROD_STROKE_COMMUNICATION_DATE_OUTSIDE_ALLOWED_WINDOW";
+  }
+  // Format must still be a real YYYY-MM-DD date even when the window is skipped.
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(communicationDate)) return "PROD_STROKE_COMMUNICATION_DATE_OUTSIDE_ALLOWED_WINDOW";
   return null;
 }
 
@@ -979,7 +997,7 @@ export async function updateStrokeMasterHandler(
       communicator_name: body.communicator_name !== undefined ? toTrimmedString(body.communicator_name) : existing.communicator_name,
       communication_reference: body.communication_reference !== undefined ? toTrimmedString(body.communication_reference) : existing.communication_reference,
     };
-    const communicationError = validateCommunicationDetails(communicationDetails);
+    const communicationError = validateCommunicationDetails(communicationDetails, { unchangedFrom: existing.communication_date });
     if (communicationError) {
       return strokeError(req, ctx, communicationError, 400, communicationError === "PROD_STROKE_COMMUNICATION_DATE_OUTSIDE_ALLOWED_WINDOW" ? MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE : "Communication Date, Type, Communicator Name, and Communication Reference are required.");
     }
@@ -1176,7 +1194,7 @@ export async function approveStrokeMasterHandler(
     if (existing.status !== "DRAFT") {
       return strokeError(req, ctx, "PROD_STROKE_ALREADY_APPROVED", 409, "Only DRAFT strokes can be approved");
     }
-    const communicationError = validateCommunicationDetails(existing);
+    const communicationError = validateCommunicationDetails(existing, { skipWindow: true });
     if (communicationError) {
       return strokeError(req, ctx, communicationError, 422, communicationError === "PROD_STROKE_COMMUNICATION_DATE_OUTSIDE_ALLOWED_WINDOW" ? MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE : "Communication Date, Type, Communicator Name, and Communication Reference are required before approval.");
     }

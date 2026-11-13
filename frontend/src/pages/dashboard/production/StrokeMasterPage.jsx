@@ -41,7 +41,7 @@ import {
   DuplicateLinesConfirmModal, describeDuplicateLines,
 } from "./strokeShared.jsx";
 import { formatPreciseNumber, formatSum } from "./productionPrecision.js";
-import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../utils/manualDocumentDateWindow.js";
+import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, isManualDocumentDateAcceptable, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../utils/manualDocumentDateWindow.js";
 import SalesReturnPendingButton from "./SalesReturnPendingButton.jsx";
 
 const EMPTY_ARRAY = [];
@@ -76,6 +76,8 @@ export default function StrokeMasterPage() {
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerMode, setDrawerMode] = useState("create"); // create | detail
   const [detail, setDetail] = useState(null);
+  // Communication Date exactly as stored in the DB when the drawer opened (the edit form mutates `detail`).
+  const [storedCommunicationDate, setStoredCommunicationDate] = useState("");
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailEditLines, setDetailEditLines] = useState(null);
   const [attemptedSave, setAttemptedSave] = useState(false);
@@ -359,12 +361,14 @@ export default function StrokeMasterPage() {
     setDrawerMode("detail");
     setAttemptedSave(false);
     setDetail(null);
+    setStoredCommunicationDate("");
     setDetailEditLines(null);
     setDetailLoading(true);
     setDrawerOpen(true);
     try {
       const d = await getStrokeMaster(id);
       setDetail(d);
+      setStoredCommunicationDate(d.communication_date ?? "");
       if (d.status === "DRAFT") {
         setDetailEditLines((d.lines ?? []).map((l) => ({
           id: l.id,
@@ -492,7 +496,7 @@ export default function StrokeMasterPage() {
 
   async function handleSaveDraft(duplicatesConfirmed = false) {
     setAttemptedSave(true);
-    if (!hasCommunicationDetails(detail) || !isManualDocumentDateWithinWindow(detail.communication_date)) {
+    if (!hasCommunicationDetails(detail) || !isManualDocumentDateAcceptable(detail.communication_date, storedCommunicationDate)) {
       toast(!hasCommunicationDetails(detail) ? "Communication Date, Type, Communicator Name, and Communication Reference are required." : MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE, "error");
       return;
     }
@@ -534,7 +538,7 @@ export default function StrokeMasterPage() {
 
   async function handleSaveApproveDraft(duplicatesConfirmed = false) {
     setAttemptedSave(true);
-    if (!hasCommunicationDetails(detail) || !isManualDocumentDateWithinWindow(detail.communication_date)) {
+    if (!hasCommunicationDetails(detail) || !isManualDocumentDateAcceptable(detail.communication_date, storedCommunicationDate)) {
       toast(!hasCommunicationDetails(detail) ? "Communication Date, Type, Communicator Name, and Communication Reference are required." : MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE, "error");
       return;
     }
