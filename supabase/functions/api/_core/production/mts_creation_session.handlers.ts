@@ -16,7 +16,7 @@ import { canMaintainCompanyResource } from "../../_shared/companyResourceAccess.
 import type { ProdHandlerContext } from "./production.shared.ts";
 import { assertProdReadRole, parseBody, parseNonNegativeNumber, parsePositiveInt, parsePositiveNumber, toTrimmedString } from "./production.shared.ts";
 import { resolveMtsBatchRangeNumbers } from "./batch_series.handlers.ts";
-import { buildMtsMaterialPlanGroupsForOrder, computeMtsAutoDeriveRowsForGroup, validateStrokeLinesForProcessCreation } from "./process_order.handlers.ts";
+import { attachMtsStockElsewhere, buildMtsMaterialPlanGroupsForOrder, computeMtsAutoDeriveRowsForGroup, validateStrokeLinesForProcessCreation } from "./process_order.handlers.ts";
 import { fetchPackSizeOptions } from "./mts_packing_plan.handlers.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -240,11 +240,13 @@ async function buildMaterialPlanPreview(session: SessionHeader): Promise<JsonRec
     session.companyId, strokeLines, session.machineStorageLocationId, session.strokeShopFloorLocationId,
     session.machineId, session.plannedQty,
   );
+  await attachMtsStockElsewhere(session.companyId, groups);
   const materialIds = new Set<string>();
   const locationIds = new Set<string>();
   for (const group of groups) {
     materialIds.add(group.stroke_line_material_id);
     locationIds.add(group.storage_location_id);
+    for (const elsewhere of group.stock_elsewhere ?? []) locationIds.add(elsewhere.storage_location_id);
     for (const row of group.rows) materialIds.add(row.actual_material_id);
     for (const id of group.group_member_ids) materialIds.add(id);
   }

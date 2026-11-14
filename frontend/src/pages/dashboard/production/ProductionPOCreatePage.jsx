@@ -2487,6 +2487,31 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
     return row ? Number(row.available_qty ?? 0) < Number(g.standard_qty) - EPSILON_FRONTEND : false;
   }
   const shortGroups = groups.filter((g) => g.short || selectionIsShort(g));
+
+  // What the "not enough stock" notice shows for one short line: what the recipe needs, which ACTUAL material(s) are
+  // currently selected to cover it (and how much of each is really there), what is still missing, and where else the
+  // group's stock is sitting -- so the user can tell "move stock" from "there is none" without opening another report.
+  function shortageDetail(group) {
+    const standard = Number(group.standard_qty) || 0;
+    let selected;
+    let covered;
+    if (group.auto_derive_applicable) {
+      selected = rowsForGroup(group).filter((row) => Number(row.actual_qty) > EPSILON_FRONTEND);
+      covered = selected.reduce((sum, row) => sum + Number(row.actual_qty), 0);
+    } else {
+      const pick = group.manual_material_selection_required === false ? group.stroke_line_material_id : manualPicks[group.stroke_line_id];
+      const row = group.rows.find((r) => r.actual_material_id === pick);
+      selected = row ? [row] : [];
+      covered = row ? Math.min(Number(row.available_qty ?? 0), standard) : 0;
+    }
+    const byLocation = new Map();
+    for (const entry of group.stock_elsewhere ?? []) {
+      const list = byLocation.get(entry.storage_location_id) ?? [];
+      list.push(entry);
+      byLocation.set(entry.storage_location_id, list);
+    }
+    return { standard, covered, shortfall: Math.max(0, standard - covered), selected, elsewhere: [...byLocation.entries()] };
+  }
   const manualPickMissing = groups.some((g) => !g.auto_derive_applicable
     && g.manual_material_selection_required !== false
     && !manualPicks[g.stroke_line_id]
@@ -2619,8 +2644,47 @@ function MtsMaterialPlanStep({ session, overrides, setOverrides, onCancel, onCon
       </div>
 
       {shortGroups.length > 0 && (
-        <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-          Insufficient stock for the selected material(s) of: {shortGroups.map((g) => materialLabel(g.stroke_line_material_id)).join(", ")}. Pick another material or arrange stock.
+        <div className="rounded border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800">
+          <div className="font-semibold">Not enough stock</div>
+          {shortGroups.map((g) => {
+            const d = shortageDetail(g);
+            return (
+              <div key={g.stroke_line_id} className="mt-2 border-t border-rose-200 pt-2">
+                <div className="font-medium">
+                  {materialLabel(g.stroke_line_material_id)}
+                  <span className="font-normal text-rose-700"> · {slocLabel(g.storage_location_id)}</span>
+                </div>
+                <div className="mt-1 flex flex-wrap gap-x-6 gap-y-0.5 text-xs">
+                  <span>Needed <b>{formatPreciseNumber(d.standard, "0.###")}</b></span>
+                  <span>Available <b>{formatPreciseNumber(d.covered, "0.###")}</b></span>
+                  <span>Short <b className="text-rose-700">{formatPreciseNumber(d.shortfall, "0.###")}</b></span>
+                </div>
+                <div className="mt-1 text-xs">
+                  <span className="font-semibold">Selected material:</span>{" "}
+                  {d.selected.length === 0
+                    ? "none has stock here"
+                    : d.selected.map((row, i) => (
+                      <span key={row.actual_material_id}>
+                        {i > 0 ? "; " : ""}{materialLabel(row.actual_material_id)} ({formatPreciseNumber(g.auto_derive_applicable ? row.actual_qty : row.available_qty, "0.###")}
+                        {g.auto_derive_applicable ? ` of ${formatPreciseNumber(row.available_qty, "0.###")} here` : " here"})
+                      </span>
+                    ))}
+                </div>
+                <div className="mt-1 text-xs">
+                  <span className="font-semibold">Stock in other locations:</span>{" "}
+                  {d.elsewhere.length === 0
+                    ? "none"
+                    : d.elsewhere.map(([locationId, entries], i) => (
+                      <span key={locationId}>
+                        {i > 0 ? "; " : ""}<b>{slocLabel(locationId)}</b>{" "}
+                        {entries.map((e) => `${materialLabel(e.material_id)} ${formatPreciseNumber(e.quantity, "0.###")}`).join(", ")}
+                      </span>
+                    ))}
+                </div>
+              </div>
+            );
+          })}
+          <div className="mt-2 text-xs text-rose-700">Move stock to the location shown above (and to this machine), then retry.</div>
         </div>
       )}
 

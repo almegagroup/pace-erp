@@ -47,6 +47,7 @@ import {
 } from "./batch_series.handlers.ts";
 import { generateGlobalDocNumber } from "./production.utils.ts";
 import { fetchAllRows } from "../../_shared/fetchAllRows.ts";
+import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { findFirstPhysicalInventoryBlock, hasPhysicalInventoryBlockForBatch } from "../../_shared/physicalInventoryBlock.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -3058,6 +3059,9 @@ type MtsPlanGroup = {
   group_member_ids: string[];
   short: boolean;
   shortfall_qty: number;
+  // Preview only (attachMtsStockElsewhere): on-hand UNRESTRICTED stock of this group's members in the company's OTHER
+  // locations, so a short line can tell the user where the stock actually is. Never used by save/validation.
+  stock_elsewhere?: Array<{ material_id: string; storage_location_id: string; quantity: number }>;
 };
 
 async function fetchMtsPoAndStrokeLines(id: string): Promise<{
@@ -3266,6 +3270,7 @@ export async function getMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerCo
     const groups = await buildMtsMaterialPlanGroupsForOrder(
       String(po.company_id), strokeLines, machineStorageLocationId, strokeShopFloorLocationId, machineId, Number(po.planned_qty ?? 0),
     );
+    await attachMtsStockElsewhere(String(po.company_id), groups);
 
     const materialIds = new Set<string>();
     for (const group of groups) {
@@ -3276,7 +3281,7 @@ export async function getMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerCo
     const materialMap = await getMaterialMapByIds(
       [...materialIds], "[process_order.mtsMaterialPlan]", "PROD_PO_MTS_PLAN_FAILED", "id, pace_code, material_name, base_uom_code, material_type",
     );
-    const slocIds = new Set(groups.map((g) => g.storage_location_id));
+    const slocIds = new Set(groups.flatMap((g) => [g.storage_location_id, ...(g.stock_elsewhere ?? []).map((e) => e.storage_location_id)]));
     const slocMap = await getStorageLocationMapByIds([...slocIds], "[process_order.mtsMaterialPlan]", "PROD_PO_MTS_PLAN_FAILED");
 
     return okResponse({
@@ -3434,6 +3439,30 @@ export async function buildMtsMaterialPlanGroupsForOrder(
   }
 
   return groups;
+}
+
+// Preview-only enrichment: where a short group's stock really is. For every group, the on-hand UNRESTRICTED quantity of
+// each member (formulation + registered alternates) in the company's OTHER locations. On-hand, not net of reservations:
+// it answers "where is it", the group's own availability above already answers "how much can this PO use".
+export async function attachMtsStockElsewhere(companyId: string, groups: MtsPlanGroup[]): Promise<void> {
+  const memberIds = [...new Set(groups.flatMap((group) => [group.stroke_line_material_id, ...group.group_member_ids]).filter(Boolean))];
+  if (memberIds.length === 0) return;
+  let rows: JsonRecord[];
+  try {
+    rows = await fetchInChunks<JsonRecord>(memberIds, (idChunk) =>
+      serviceRoleClient.schema("erp_inventory").from("stock_snapshot")
+        .select("material_id, storage_location_id, quantity")
+        .eq("company_id", companyId).eq("stock_type_code", "UNRESTRICTED").gt("quantity", 0).in("material_id", idChunk));
+  } catch {
+    throw new Error("PROD_PO_MTS_PLAN_FAILED");
+  }
+  for (const group of groups) {
+    const members = new Set([group.stroke_line_material_id, ...group.group_member_ids]);
+    group.stock_elsewhere = rows
+      .filter((row) => members.has(String(row.material_id)) && String(row.storage_location_id) !== group.storage_location_id)
+      .map((row) => ({ material_id: String(row.material_id), storage_location_id: String(row.storage_location_id), quantity: Number(row.quantity ?? 0) }))
+      .sort((a, b) => b.quantity - a.quantity);
+  }
 }
 
 export async function saveMtsMaterialPlanHandler(req: Request, ctx: ProdHandlerContext): Promise<Response> {
