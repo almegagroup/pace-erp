@@ -9599,5 +9599,27 @@
         "skipAcl": false
       }
     ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/MtsFormulationReportPage.jsx",
+    "dependencyCount": 2,
+    "deps": [
+      {
+        "fn": "getMtsFormulationReport",
+        "method": "GET",
+        "path": "/api/production/mts-formulation-report",
+        "resourceCode": "PROD_MTS_FORMULATION_REPORT",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listMaterials",
+        "method": "GET",
+        "path": "/api/om/materials",
+        "resourceCode": "OM_MATERIAL_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      }
+    ]
   }
 ]
