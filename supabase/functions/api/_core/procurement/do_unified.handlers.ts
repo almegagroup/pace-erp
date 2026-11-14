@@ -3600,7 +3600,14 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
     // invoice, reservation, or reconciliation write rolls all groups back.
     const { error: postGroupsError } = await serviceRoleClient.schema("erp_inventory")
       .rpc("post_sales_invoice_groups_atomic", { p_groups: postGroups, p_posted_by: ctx.auth_user_id });
-    if (postGroupsError) return doErrorResponse(req, ctx, "PGI_POST_FAILED", 500, postGroupsError.message || "Unable to post PGI and invoice.");
+    if (postGroupsError) {
+      // The posting transaction itself refuses a second active invoice for a DO group (migration 20261114120000) --
+      // a refused duplicate rolls back its stock issue and its numbers, so it is a clean conflict, not a failure.
+      if ((postGroupsError.message ?? "").includes("DO_ALREADY_INVOICED")) {
+        return doErrorResponse(req, ctx, "DO_ALREADY_INVOICED", 409, "This delivery order already has an active invoice.");
+      }
+      return doErrorResponse(req, ctx, "PGI_POST_FAILED", 500, postGroupsError.message || "Unable to post PGI and invoice.");
+    }
 
     return okResponse({ dc_id: dcId, invoices: results }, ctx.request_id, req);
   } catch (error) {

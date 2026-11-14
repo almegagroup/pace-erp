@@ -115,6 +115,8 @@ export default function SO02BulkPostingPage() {
   const [companyId, setCompanyId] = useState("");
   const [selected, setSelected] = useState(() => new Set());
   const [posting, setPosting] = useState(false);
+  // State updates are asynchronous: two quick clicks both read posting=false. A ref is synchronous, so only one run starts.
+  const postingRef = useRef(false);
   const [notice, setNotice] = useState("");
   const [search, setSearch] = useState("");
   const [checkFilter, setCheckFilter] = useState("");
@@ -202,10 +204,10 @@ export default function SO02BulkPostingPage() {
   }
 
   async function post() {
-    if (!selected.size) return;
+    if (!selected.size || postingRef.current) return;
     // Server posts DOs one by one and accepts at most 100 per request.
     if (selected.size > MAX_DOS_PER_POST) { setNotice(`Select at most ${MAX_DOS_PER_POST} delivery orders per Bulk Post (${selected.size} selected).`); return; }
-    setPosting(true); setNotice("");
+    postingRef.current = true; setPosting(true); setNotice("");
     try {
       const result = await bulkPostDeliveryOrders([...selected]);
       const outcomes = Array.isArray(result?.results) ? result.results : [];
@@ -218,8 +220,14 @@ export default function SO02BulkPostingPage() {
         : `Posted ${outcomes.length || selected.size} delivery order(s).`);
       setSelected(new Set()); await query.refetch();
     }
-    catch (error) { setNotice(error instanceof Error ? error.message : "BULK_POST_FAILED"); }
-    finally { setPosting(false); }
+    catch (error) {
+      // A lost connection or timeout does NOT mean nothing was posted: the server keeps going. Never invite a retry.
+      setNotice(error?.ambiguousWrite
+        ? "Posting may still be running. Wait a minute, then refresh the queue before posting again."
+        : (error instanceof Error ? error.message : "BULK_POST_FAILED"));
+      if (error?.ambiguousWrite) void query.refetch();
+    }
+    finally { postingRef.current = false; setPosting(false); }
   }
 
   const correctionCounts = useMemo(() => {

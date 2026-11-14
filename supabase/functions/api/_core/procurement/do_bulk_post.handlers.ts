@@ -231,7 +231,15 @@ export async function bulkPostDeliveryOrdersHandler(req: Request, ctx: Procureme
       const dcId = text(doc.id); const companyId = text(doc.selling_company_id);
       const denied = await assertInvoiceAccess(req, ctx, companyId, "WRITE"); if (denied) return denied;
       const isDeferredVdc = doc.pgi_deferred === true;
-      if (doc.is_bulk_uploaded !== true || upper(doc.status) !== "CREATED") {
+      // Read the status NOW, not the snapshot taken when the request started: a run that overlaps this one (a second
+      // click, tab or retry) may have already posted this DO while earlier DOs in this loop were being posted.
+      const { data: freshDoc, error: freshError } = await serviceRoleClient.schema("erp_procurement").from("delivery_challan")
+        .select("status").eq("id", dcId).maybeSingle();
+      if (freshError) {
+        results.push({ dc_id: dcId, ok: false, code: "BULK_POST_STATUS_CHECK_FAILED", message: "Could not re-check the delivery order status." });
+        continue;
+      }
+      if (doc.is_bulk_uploaded !== true || upper((freshDoc as JsonRecord | null)?.status) !== "CREATED") {
         results.push({ dc_id: dcId, ok: false, code: "BULK_POST_DO_NOT_READY", message: "Delivery order is not ready for this SO02 posting action." });
         continue;
       }
