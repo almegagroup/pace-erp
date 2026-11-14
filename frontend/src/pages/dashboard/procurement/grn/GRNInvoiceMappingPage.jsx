@@ -25,6 +25,7 @@ import {
   splitGrn,
   unmapGrnInvoice,
 } from "../procurementApi.js";
+import { defaultReceivedQty, summarizeSplit } from "./grnSplitMath.js";
 
 const PENDING_COLUMNS = [
   { key: "vendor_name", label: "Vendor Name", width: "200px", render: (row) => row.vendor_name || "—" },
@@ -80,7 +81,7 @@ export default function GRNInvoiceMappingPage() {
   // §3.9.5 "GRN Split" (1 GRN : many Invoices) — Bulk-only.
   const [splitTarget, setSplitTarget] = useState(null);
   const [splitSlices, setSplitSlices] = useState([]);
-  const [sliceDraft, setSliceDraft] = useState({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", gstPct: "", quantity: "" });
+  const [sliceDraft, setSliceDraft] = useState({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", gstPct: "", invoiceQty: "", receivedQty: "" });
   const [splitSaving, setSplitSaving] = useState(false);
   const [splitError, setSplitError] = useState("");
 
@@ -249,14 +250,13 @@ export default function GRNInvoiceMappingPage() {
     }
   }
 
-  const splitSlicesTotal = splitSlices.reduce((sum, s) => sum + Number(s.quantity || 0), 0);
   const splitTargetQty = Number(splitTarget?.received_qty ?? 0);
-  const splitQtyMatches = splitSlices.length >= 2 && Math.abs(splitSlicesTotal - splitTargetQty) < 0.0001;
+  const splitSummary = summarizeSplit(splitSlices, splitTargetQty);
 
   function openSplit(row) {
     setSplitTarget(row);
     setSplitSlices([]);
-    setSliceDraft({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", gstPct: "", quantity: "" });
+    setSliceDraft({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", gstPct: "", invoiceQty: "", receivedQty: "" });
     setSplitError("");
   }
   function closeSplit() {
@@ -265,13 +265,25 @@ export default function GRNInvoiceMappingPage() {
     setSplitError("");
   }
   function addSlice() {
-    const qty = Number(sliceDraft.quantity);
-    if (!sliceDraft.invoiceNumber.trim() || !sliceDraft.invoiceDate || !sliceDraft.invoiceRate || String(sliceDraft.gstPct).trim() === "" || !qty || qty <= 0) {
-      setSplitError("Every slice needs an Invoice Number, Date, Rate, GST %, and a positive Quantity.");
+    const invoiceQty = Number(sliceDraft.invoiceQty);
+    if (!sliceDraft.invoiceNumber.trim() || !sliceDraft.invoiceDate || !sliceDraft.invoiceRate || String(sliceDraft.gstPct).trim() === "" || !invoiceQty || invoiceQty <= 0) {
+      setSplitError("Every invoice needs a Number, Date, Rate, GST % and a positive Invoice Qty.");
       return;
     }
-    setSplitSlices((current) => [...current, { ...sliceDraft, invoiceNumber: sliceDraft.invoiceNumber.trim(), quantity: qty }]);
-    setSliceDraft({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", gstPct: "", quantity: "" });
+    // Blank Received Qty = the full Invoice Qty, capped at what is left of the GRN (so the last invoice takes a shortage).
+    const receivedQty = String(sliceDraft.receivedQty).trim() === ""
+      ? defaultReceivedQty(invoiceQty, splitSlices, splitTargetQty)
+      : Number(sliceDraft.receivedQty);
+    if (!(receivedQty > 0)) {
+      setSplitError("Received Qty must be above zero. Nothing is left of this GRN to give this invoice.");
+      return;
+    }
+    if (receivedQty - invoiceQty > 0.0001) {
+      setSplitError(`Received Qty (${receivedQty}) cannot be more than this invoice's Invoice Qty (${invoiceQty}).`);
+      return;
+    }
+    setSplitSlices((current) => [...current, { ...sliceDraft, invoiceNumber: sliceDraft.invoiceNumber.trim(), invoiceQty, receivedQty }]);
+    setSliceDraft({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", gstPct: "", invoiceQty: "", receivedQty: "" });
     setSplitError("");
   }
   function removeSlice(index) {
@@ -280,8 +292,8 @@ export default function GRNInvoiceMappingPage() {
 
   async function handleSplit() {
     setSplitError("");
-    if (!splitQtyMatches) {
-      setSplitError("Slice quantities must sum exactly to the GRN's received quantity before splitting.");
+    if (!splitSummary.canSplit) {
+      setSplitError("Received Qty of all invoices must add up exactly to the GRN's received quantity, and never exceed each invoice's Invoice Qty.");
       return;
     }
     setSplitSaving(true);
@@ -293,7 +305,9 @@ export default function GRNInvoiceMappingPage() {
           invoice_date: s.invoiceDate,
           invoice_rate: Number(s.invoiceRate),
           gst_pct: Number(s.gstPct),
-          quantity: Number(s.quantity),
+          // quantity = RECEIVED qty (what the new GRN carries); invoice_quantity is only the check against it.
+          quantity: Number(s.receivedQty),
+          invoice_quantity: Number(s.invoiceQty),
         })),
       });
       setActionNotice(`GRN ${splitTarget.grn_number} split into ${splitSlices.length} new GRNs.`);
@@ -536,7 +550,7 @@ export default function GRNInvoiceMappingPage() {
               <div className="mb-3 border border-rose-300 bg-rose-50 px-3 py-2 text-sm text-rose-800">{splitError}</div>
             )}
             <p className="mb-3 text-xs text-slate-500">
-              Vendor split this one truck's material across multiple invoices. Add each invoice's own Number/Date/Rate/GST %/Quantity below — the quantities must sum exactly to this GRN's own received quantity ({Number(splitTarget.received_qty ?? 0).toFixed(4)}) before Split is enabled. Same Truck Number, Delivery Challan Number, and RST Number carry over automatically to every new GRN.
+              Add each invoice below. Received Qty of all invoices must add up to this GRN ({Number(splitTarget.received_qty ?? 0).toFixed(4)}); it can be below Invoice Qty when the truck was short. Truck, Challan and RST numbers carry over to every new GRN.
             </p>
 
             <div className="overflow-x-auto border border-slate-200">
@@ -547,7 +561,8 @@ export default function GRNInvoiceMappingPage() {
                     <th className="px-3 py-2 text-left">Invoice Date</th>
                     <th className="px-3 py-2 text-right">Rate</th>
                     <th className="px-3 py-2 text-right">GST %</th>
-                    <th className="px-3 py-2 text-right">Quantity</th>
+                    <th className="px-3 py-2 text-right">Invoice Qty</th>
+                    <th className="px-3 py-2 text-right">Received Qty</th>
                     <th className="px-3 py-2 w-16"></th>
                   </tr>
                 </thead>
@@ -558,7 +573,8 @@ export default function GRNInvoiceMappingPage() {
                       <td className="px-3 py-2">{s.invoiceDate}</td>
                       <td className="px-3 py-2 text-right">{Number(s.invoiceRate).toFixed(4)}</td>
                       <td className="px-3 py-2 text-right">{Number(s.gstPct).toFixed(2)}</td>
-                      <td className="px-3 py-2 text-right">{Number(s.quantity).toFixed(4)}</td>
+                      <td className="px-3 py-2 text-right">{Number(s.invoiceQty).toFixed(4)}</td>
+                      <td className={`px-3 py-2 text-right ${s.receivedQty < s.invoiceQty - 0.0001 ? "font-semibold text-amber-700" : ""}`}>{Number(s.receivedQty).toFixed(4)}</td>
                       <td className="px-3 py-2 text-center">
                         <button onClick={() => removeSlice(i)} className="text-xs text-rose-600 hover:underline">Remove</button>
                       </td>
@@ -609,8 +625,20 @@ export default function GRNInvoiceMappingPage() {
                         type="number"
                         min="0"
                         step="0.0001"
-                        value={sliceDraft.quantity}
-                        onChange={(e) => setSliceDraft((d) => ({ ...d, quantity: e.target.value }))}
+                        placeholder="Invoice Qty"
+                        value={sliceDraft.invoiceQty}
+                        onChange={(e) => setSliceDraft((d) => ({ ...d, invoiceQty: e.target.value }))}
+                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-right outline-none focus:border-sky-500"
+                      />
+                    </td>
+                    <td className="px-2 py-2">
+                      <input
+                        type="number"
+                        min="0"
+                        step="0.0001"
+                        placeholder={sliceDraft.invoiceQty ? String(defaultReceivedQty(Number(sliceDraft.invoiceQty), splitSlices, splitTargetQty)) : "Received Qty"}
+                        value={sliceDraft.receivedQty}
+                        onChange={(e) => setSliceDraft((d) => ({ ...d, receivedQty: e.target.value }))}
                         className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-right outline-none focus:border-sky-500"
                       />
                     </td>
@@ -624,9 +652,16 @@ export default function GRNInvoiceMappingPage() {
               </table>
             </div>
 
-            <p className={`mt-3 text-xs ${splitQtyMatches ? "text-emerald-700" : "text-amber-700"}`}>
-              Slices total: <strong>{splitSlicesTotal.toFixed(4)}</strong> vs. GRN quantity: <strong>{splitTargetQty.toFixed(4)}</strong>
-              {splitSlices.length < 2 ? " — add at least 2 slices." : splitQtyMatches ? " — match, ready to split." : " — mismatch."}
+            <p className={`mt-3 text-xs ${splitSummary.canSplit ? "text-emerald-700" : "text-amber-700"}`}>
+              Received <strong>{splitSummary.receivedTotal.toFixed(4)}</strong> of GRN <strong>{splitTargetQty.toFixed(4)}</strong>
+              {splitSummary.shortage > 0 ? <> · Invoiced <strong>{splitSummary.invoiceTotal.toFixed(4)}</strong> · Short <strong>{splitSummary.shortage.toFixed(4)}</strong></> : null}
+              {splitSlices.length < 2
+                ? " — add at least 2 invoices."
+                : splitSummary.anyReceivedExceedsInvoice
+                  ? " — an invoice has more Received than Invoice Qty."
+                  : splitSummary.receivedMatches
+                    ? " — ready to split."
+                    : ` — ${splitSummary.remaining > 0 ? `${splitSummary.remaining.toFixed(4)} still to place` : `${Math.abs(splitSummary.remaining).toFixed(4)} too much`}.`}
             </p>
 
             <div className="mt-4 flex justify-end gap-2">
@@ -635,7 +670,7 @@ export default function GRNInvoiceMappingPage() {
               </button>
               <button
                 onClick={() => void handleSplit()}
-                disabled={splitSaving || !splitQtyMatches}
+                disabled={splitSaving || !splitSummary.canSplit}
                 className="h-9 px-4 border border-amber-700 bg-amber-100 text-sm font-semibold text-amber-950 disabled:opacity-50"
               >
                 {splitSaving ? "Splitting…" : "Split"}

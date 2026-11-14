@@ -2347,7 +2347,10 @@ export async function splitGrnHandler(
       invoiceDate: toTrimmedString((s as JsonRecord).invoice_date),
       invoiceRate: parseNullableNumber((s as JsonRecord).invoice_rate),
       gstPct: parseNullableNumber((s as JsonRecord).gst_pct),
+      // `quantity` is the RECEIVED quantity the new GRN carries (what payable / landed cost follow).
       quantity: parseNullableNumber((s as JsonRecord).quantity),
+      // Optional: what the vendor's invoice says. Never stored (same as plain Map); only checked against `quantity`.
+      invoiceQuantity: parseNullableNumber((s as JsonRecord).invoice_quantity),
     }));
     if (!grnId || rawSlicesParsed.length < 2) {
       return procurementErrorResponse(req, ctx, "GRN_SPLIT_INVALID", 400, "grn_id and at least 2 invoice slices are required.");
@@ -2360,7 +2363,15 @@ export async function splitGrnHandler(
     }
     // Re-typed with non-null quantity/invoiceRate -- every element already
     // passed the validation loop above, so this narrowing is safe.
-    const slices = rawSlicesParsed as { invoiceNumber: string; invoiceDate: string; invoiceRate: number; gstPct: number; quantity: number }[];
+    const slices = rawSlicesParsed as { invoiceNumber: string; invoiceDate: string; invoiceRate: number; gstPct: number; quantity: number; invoiceQuantity: number | null }[];
+    // Same rule as plain Map ("GRN quantity cannot exceed Invoice Quantity"), applied per invoice: a truck that arrived
+    // short is fine (Received below Invoice Qty), but an invoice can never carry more received stock than it invoices.
+    for (let i = 0; i < slices.length; i += 1) {
+      const invoiceQuantity = slices[i].invoiceQuantity;
+      if (invoiceQuantity !== null && (invoiceQuantity <= 0 || slices[i].quantity - invoiceQuantity > 0.0001)) {
+        return procurementErrorResponse(req, ctx, "GRN_SPLIT_RECEIVED_EXCEEDS_INVOICE", 400, `Invoice ${slices[i].invoiceNumber}: Received Qty (${slices[i].quantity}) cannot exceed its Invoice Qty (${invoiceQuantity}).`);
+      }
+    }
 
     const { data: grn, error: grnError } = await serviceRoleClient
       .schema("erp_procurement").from("goods_receipt")
@@ -2391,7 +2402,7 @@ export async function splitGrnHandler(
     const originalReceivedQty = parsePositiveNumber(grn.received_qty) ?? 0;
     const sliceQtySum = Number(slices.reduce((sum, s) => sum + (s.quantity ?? 0), 0).toFixed(6));
     if (Math.abs(sliceQtySum - originalReceivedQty) > 0.0001) {
-      return procurementErrorResponse(req, ctx, "GRN_SPLIT_QTY_MISMATCH", 400, `Invoice quantities (${sliceQtySum}) must sum exactly to the GRN's received quantity (${originalReceivedQty}).`);
+      return procurementErrorResponse(req, ctx, "GRN_SPLIT_QTY_MISMATCH", 400, `Received quantities of all invoices (${sliceQtySum}) must add up exactly to the GRN's received quantity (${originalReceivedQty}).`);
     }
 
     const geQtyShares = splitProportionally(parseNullableNumber(grn.ge_qty) ?? 0, slices, originalReceivedQty);
