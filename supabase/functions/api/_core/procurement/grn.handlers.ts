@@ -2167,6 +2167,19 @@ export async function mapGrnInvoiceHandler(
         `Selected GRN quantity (${selectedGrnQty.toFixed(4)}) cannot exceed Invoice Quantity (${invoiceQty.toFixed(4)}).`,
       );
     }
+    // One GRN against one invoice: record the Invoice Qty and the difference exactly like a normal GRN does
+    // (ge_qty = Invoice qty, discrepancy_qty = Invoice - Received, remarks required when they differ). With several
+    // GRNs on one invoice there is no per-GRN invoice quantity, so nothing is stored (only the check above applies).
+    const singleGrn = grns.length === 1 ? grns[0] : null;
+    let singleGrnDifference: { diff: number; remarks: string | null } | null = null;
+    if (singleGrn) {
+      const diff = Number((invoiceQty - Number(singleGrn.received_qty ?? 0)).toFixed(6));
+      const remarks = toTrimmedString(body.discrepancy_remarks) || toTrimmedString(singleGrn.discrepancy_remarks) || null;
+      if (Math.abs(diff) > 0.0001 && !remarks) {
+        return procurementErrorResponse(req, ctx, "GRN_MAPPING_DISCREPANCY_REMARKS_REQUIRED", 400, "Remarks are required when the Invoice Quantity differs from the GRN quantity.");
+      }
+      singleGrnDifference = { diff, remarks: Math.abs(diff) > 0.0001 ? remarks : null };
+    }
     const shipToByGrnId = new Map<string, string | null>();
     for (const grn of grns) {
       // §8A pattern #2 -- scope + EDIT-level PROC_GRN_LIST at the GRN company OR the ITC owner (PO company).
@@ -2208,6 +2221,9 @@ export async function mapGrnInvoiceHandler(
           gst_pct: gstPct,
           ship_to_company_id: shipToByGrnId.get(String(grn.id)) ?? null,
           rate_confirmed: true,
+          ...(singleGrn && singleGrnDifference && String(grn.id) === String(singleGrn.id)
+            ? { ge_qty: invoiceQty, discrepancy_qty: singleGrnDifference.diff, discrepancy_remarks: singleGrnDifference.remarks }
+            : {}),
           last_updated_at: new Date().toISOString(),
         })
         .eq("id", String(grn.id));
@@ -2268,13 +2284,37 @@ export async function unmapGrnInvoiceHandler(
       }
     }
 
+    // Map stored the invoice quantity in ge_qty; unmapping takes the invoice away, so give back the quantity the gate
+    // entry recorded. A split child keeps its own ge_qty (it is only part of the truck), so it is left alone.
+    const geLineIdByGrn = new Map<string, string>();
+    for (const grn of grns) {
+      const geLineId = toTrimmedString(grn.gate_entry_line_id) || toTrimmedString(grn.source_gate_entry_line_id);
+      if (geLineId && !grn.split_source_grn_id) geLineIdByGrn.set(String(grn.id), geLineId);
+    }
+    const geQtyByLine = new Map<string, number>();
+    const geLineRows = await fetchInChunks<JsonRecord>([...new Set(geLineIdByGrn.values())], (idChunk) =>
+      serviceRoleClient.schema("erp_procurement").from("gate_entry_line").select("id, ge_qty").in("id", idChunk));
+    for (const row of geLineRows) {
+      const qty = parseNullableNumber(row.ge_qty);
+      if (qty !== null) geQtyByLine.set(String(row.id), qty);
+    }
+
     const results: JsonRecord[] = [];
     // DEPENDENT: see mapGrnInvoiceHandler's own note -- same cascade engine,
     // same reasoning for processing one GRN at a time.
     for (const grn of grns) {
+      const gateQty = geQtyByLine.get(geLineIdByGrn.get(String(grn.id)) ?? "");
+      const restoredDiff = gateQty === undefined ? null : Number((gateQty - Number(grn.received_qty ?? 0)).toFixed(6));
       const { error: updateError } = await serviceRoleClient
         .schema("erp_procurement").from("goods_receipt")
         .update({
+          ...(gateQty !== undefined && restoredDiff !== null
+            ? {
+              ge_qty: gateQty,
+              discrepancy_qty: restoredDiff,
+              discrepancy_remarks: Math.abs(restoredDiff) > 0.0001 ? (toTrimmedString(grn.discrepancy_remarks) || null) : null,
+            }
+            : {}),
           invoice_number: null,
           invoice_date: null,
           invoice_rate: null,
@@ -2351,6 +2391,8 @@ export async function splitGrnHandler(
       quantity: parseNullableNumber((s as JsonRecord).quantity),
       // Optional: what the vendor's invoice says. Never stored (same as plain Map); only checked against `quantity`.
       invoiceQuantity: parseNullableNumber((s as JsonRecord).invoice_quantity),
+      // Why this invoice's Received is below its Invoice Qty (required then, same as a normal GRN's discrepancy remarks).
+      remarks: toTrimmedString((s as JsonRecord).remarks) || null,
     }));
     if (!grnId || rawSlicesParsed.length < 2) {
       return procurementErrorResponse(req, ctx, "GRN_SPLIT_INVALID", 400, "grn_id and at least 2 invoice slices are required.");
@@ -2363,13 +2405,17 @@ export async function splitGrnHandler(
     }
     // Re-typed with non-null quantity/invoiceRate -- every element already
     // passed the validation loop above, so this narrowing is safe.
-    const slices = rawSlicesParsed as { invoiceNumber: string; invoiceDate: string; invoiceRate: number; gstPct: number; quantity: number; invoiceQuantity: number | null }[];
+    const slices = rawSlicesParsed as { invoiceNumber: string; invoiceDate: string; invoiceRate: number; gstPct: number; quantity: number; invoiceQuantity: number | null; remarks: string | null }[];
     // Same rule as plain Map ("GRN quantity cannot exceed Invoice Quantity"), applied per invoice: a truck that arrived
     // short is fine (Received below Invoice Qty), but an invoice can never carry more received stock than it invoices.
     for (let i = 0; i < slices.length; i += 1) {
       const invoiceQuantity = slices[i].invoiceQuantity;
       if (invoiceQuantity !== null && (invoiceQuantity <= 0 || slices[i].quantity - invoiceQuantity > 0.0001)) {
         return procurementErrorResponse(req, ctx, "GRN_SPLIT_RECEIVED_EXCEEDS_INVOICE", 400, `Invoice ${slices[i].invoiceNumber}: Received Qty (${slices[i].quantity}) cannot exceed its Invoice Qty (${invoiceQuantity}).`);
+      }
+      // Same rule as a normal GRN: any Invoice-vs-Received difference needs remarks.
+      if (invoiceQuantity !== null && Math.abs(invoiceQuantity - slices[i].quantity) > 0.0001 && !slices[i].remarks) {
+        return procurementErrorResponse(req, ctx, "GRN_SPLIT_DISCREPANCY_REMARKS_REQUIRED", 400, `Invoice ${slices[i].invoiceNumber}: remarks are required when Received Qty differs from Invoice Qty.`);
       }
     }
 
@@ -2429,7 +2475,15 @@ export async function splitGrnHandler(
         id: newId,
         grn_number: newGrnNumber,
         received_qty: slice.quantity,
-        ge_qty: geQtyShares[i],
+        // "Invoice qty" is the ge_qty column everywhere else (GRN post, AC01). With an Invoice Qty given it is that
+        // invoice's own quantity; for an old caller it stays this slice's share of the original.
+        ge_qty: slice.invoiceQuantity ?? geQtyShares[i],
+        // Recomputed per child. It used to be copied whole from the original, so every child of a short GRN showed the
+        // original's full shortage again (prod GRN 2000000701: 1 on each of two children, 2 in total instead of 1).
+        discrepancy_qty: Number(((slice.invoiceQuantity ?? geQtyShares[i]) - slice.quantity).toFixed(6)),
+        discrepancy_remarks: Math.abs((slice.invoiceQuantity ?? geQtyShares[i]) - slice.quantity) > 0.0001
+          ? (slice.remarks ?? toTrimmedString(grn.discrepancy_remarks) ?? null) || null
+          : null,
         considered_qty: consideredQtyShares[i],
         net_weight_from_weighbridge: netWeightShares[i],
         invoice_number: slice.invoiceNumber,

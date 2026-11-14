@@ -67,6 +67,8 @@ export default function GRNInvoiceMappingPage() {
   const [invoiceNumber, setInvoiceNumber] = useState("");
   const [invoiceDate, setInvoiceDate] = useState("");
   const [invoiceQty, setInvoiceQty] = useState("");
+  // Why the Invoice Qty differs from the GRN quantity (one GRN on one invoice only), same as a normal GRN's discrepancy remarks.
+  const [mapRemarks, setMapRemarks] = useState("");
   const [invoiceRate, setInvoiceRate] = useState("");
   const [gstPct, setGstPct] = useState("");
   const [shipToCompanyId, setShipToCompanyId] = useState("");
@@ -81,7 +83,7 @@ export default function GRNInvoiceMappingPage() {
   // §3.9.5 "GRN Split" (1 GRN : many Invoices) — Bulk-only.
   const [splitTarget, setSplitTarget] = useState(null);
   const [splitSlices, setSplitSlices] = useState([]);
-  const [sliceDraft, setSliceDraft] = useState({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", gstPct: "", invoiceQty: "", receivedQty: "" });
+  const [sliceDraft, setSliceDraft] = useState({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", gstPct: "", invoiceQty: "", receivedQty: "", remarks: "" });
   const [splitSaving, setSplitSaving] = useState(false);
   const [splitError, setSplitError] = useState("");
 
@@ -109,6 +111,9 @@ export default function GRNInvoiceMappingPage() {
   const typedInvoiceQty = Number(invoiceQty);
   const hasValidInvoiceQty = invoiceQty.trim() !== "" && Number.isFinite(typedInvoiceQty) && typedInvoiceQty > 0;
   const selectedQtyExceedsInvoiceQty = hasValidInvoiceQty && selectedTotalQty - typedInvoiceQty > 0.0001;
+  // With exactly one GRN the Invoice Qty is recorded against it, so a shortfall needs remarks (as a normal GRN does).
+  const mapShortfall = selectedRows.length === 1 && hasValidInvoiceQty ? Number((typedInvoiceQty - selectedTotalQty).toFixed(6)) : 0;
+  const mapNeedsRemarks = mapShortfall > 0.0001 && !selectedRows[0]?.discrepancy_remarks;
   const selectedNeedsShipTo = selectedRows.some((row) => row.requires_ship_to);
   const selectedShipToOptions = useMemo(() => {
     const byId = new Map();
@@ -202,6 +207,7 @@ export default function GRNInvoiceMappingPage() {
       return;
     }
     if (selectedNeedsShipTo && !shipToCompanyId) { setActionError("Ship To company is required for the selected CRCP invoice GRN(s)."); return; }
+    if (mapNeedsRemarks && !mapRemarks.trim()) { setActionError("Remarks are required when the Invoice Quantity differs from the GRN quantity."); return; }
     setSaving(true);
     try {
       await mapGrnInvoice({
@@ -212,9 +218,10 @@ export default function GRNInvoiceMappingPage() {
         invoice_rate: Number(invoiceRate),
         gst_pct: Number(gstPct),
         ship_to_company_id: shipToCompanyId || null,
+        discrepancy_remarks: mapShortfall > 0.0001 && mapRemarks.trim() ? mapRemarks.trim() : undefined,
       });
       setSelectedIds([]);
-      setInvoiceNumber(""); setInvoiceDate(""); setInvoiceQty(""); setInvoiceRate(""); setGstPct(""); setShipToCompanyId(""); setMapToExisting(false);
+      setInvoiceNumber(""); setInvoiceDate(""); setInvoiceQty(""); setMapRemarks(""); setInvoiceRate(""); setGstPct(""); setShipToCompanyId(""); setMapToExisting(false);
       setActionNotice(`${selectedIds.length} GRN${selectedIds.length === 1 ? "" : "s"} mapped to invoice successfully.`);
       await listQuery.refetch();
       queryClient.invalidateQueries({ queryKey: ["procurement", "grns"] });
@@ -256,7 +263,7 @@ export default function GRNInvoiceMappingPage() {
   function openSplit(row) {
     setSplitTarget(row);
     setSplitSlices([]);
-    setSliceDraft({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", gstPct: "", invoiceQty: "", receivedQty: "" });
+    setSliceDraft({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", gstPct: "", invoiceQty: "", receivedQty: "", remarks: "" });
     setSplitError("");
   }
   function closeSplit() {
@@ -282,8 +289,12 @@ export default function GRNInvoiceMappingPage() {
       setSplitError(`Received Qty (${receivedQty}) cannot be more than this invoice's Invoice Qty (${invoiceQty}).`);
       return;
     }
-    setSplitSlices((current) => [...current, { ...sliceDraft, invoiceNumber: sliceDraft.invoiceNumber.trim(), invoiceQty, receivedQty }]);
-    setSliceDraft({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", gstPct: "", invoiceQty: "", receivedQty: "" });
+    if (invoiceQty - receivedQty > 0.0001 && !String(sliceDraft.remarks ?? "").trim()) {
+      setSplitError("Remarks are required when Received Qty is below Invoice Qty.");
+      return;
+    }
+    setSplitSlices((current) => [...current, { ...sliceDraft, invoiceNumber: sliceDraft.invoiceNumber.trim(), invoiceQty, receivedQty, remarks: String(sliceDraft.remarks ?? "").trim() }]);
+    setSliceDraft({ invoiceNumber: "", invoiceDate: "", invoiceRate: "", gstPct: "", invoiceQty: "", receivedQty: "", remarks: "" });
     setSplitError("");
   }
   function removeSlice(index) {
@@ -308,6 +319,7 @@ export default function GRNInvoiceMappingPage() {
           // quantity = RECEIVED qty (what the new GRN carries); invoice_quantity is only the check against it.
           quantity: Number(s.receivedQty),
           invoice_quantity: Number(s.invoiceQty),
+          remarks: s.remarks || undefined,
         })),
       });
       setActionNotice(`GRN ${splitTarget.grn_number} split into ${splitSlices.length} new GRNs.`);
@@ -406,7 +418,23 @@ export default function GRNInvoiceMappingPage() {
                 onChange={(e) => setInvoiceQty(e.target.value)}
                 className={`h-9 w-full border px-3 text-sm outline-none ${selectedQtyExceedsInvoiceQty ? "border-rose-500 bg-rose-50 text-rose-950 focus:border-rose-600" : "border-slate-300 bg-white focus:border-sky-500"}`}
               />
+              {mapShortfall > 0.0001 ? (
+                <p className="mt-1 text-xs text-amber-700">
+                  Invoice <strong>{typedInvoiceQty.toFixed(4)}</strong> vs GRN <strong>{selectedTotalQty.toFixed(4)}</strong> — short <strong>{mapShortfall.toFixed(4)}</strong>
+                </p>
+              ) : null}
             </ErpDenseFormRow>
+            {mapShortfall > 0.0001 ? (
+              <ErpDenseFormRow label={<>Difference Remarks {mapNeedsRemarks ? <span className="text-red-500">*</span> : null}</>}>
+                <input
+                  type="text"
+                  placeholder={selectedRows[0]?.discrepancy_remarks ? `Already noted: ${selectedRows[0].discrepancy_remarks}` : "Why is the GRN short of the invoice?"}
+                  value={mapRemarks}
+                  onChange={(e) => setMapRemarks(e.target.value)}
+                  className="h-9 w-full border border-slate-300 bg-white px-3 text-sm outline-none focus:border-sky-500"
+                />
+              </ErpDenseFormRow>
+            ) : null}
             <ErpDenseFormRow label={<>Rate <span className="text-red-500">*</span></>}>
               <input
                 type="number"
@@ -563,6 +591,7 @@ export default function GRNInvoiceMappingPage() {
                     <th className="px-3 py-2 text-right">GST %</th>
                     <th className="px-3 py-2 text-right">Invoice Qty</th>
                     <th className="px-3 py-2 text-right">Received Qty</th>
+                    <th className="px-3 py-2 text-left">Remarks</th>
                     <th className="px-3 py-2 w-16"></th>
                   </tr>
                 </thead>
@@ -574,7 +603,8 @@ export default function GRNInvoiceMappingPage() {
                       <td className="px-3 py-2 text-right">{Number(s.invoiceRate).toFixed(4)}</td>
                       <td className="px-3 py-2 text-right">{Number(s.gstPct).toFixed(2)}</td>
                       <td className="px-3 py-2 text-right">{Number(s.invoiceQty).toFixed(4)}</td>
-                      <td className={`px-3 py-2 text-right ${s.receivedQty < s.invoiceQty - 0.0001 ? "font-semibold text-amber-700" : ""}`}>{Number(s.receivedQty).toFixed(4)}</td>
+                      <td className={`px-3 py-2 text-right ${s.receivedQty < s.invoiceQty - 0.0001 ? "font-semibold text-amber-700" : ""}`}>{Number(s.receivedQty).toFixed(4)}{s.receivedQty < s.invoiceQty - 0.0001 ? <span className="block text-[11px] font-normal">short {(s.invoiceQty - s.receivedQty).toFixed(4)}</span> : null}</td>
+                      <td className="px-3 py-2 text-xs text-slate-600">{s.remarks || "—"}</td>
                       <td className="px-3 py-2 text-center">
                         <button onClick={() => removeSlice(i)} className="text-xs text-rose-600 hover:underline">Remove</button>
                       </td>
@@ -640,6 +670,15 @@ export default function GRNInvoiceMappingPage() {
                         value={sliceDraft.receivedQty}
                         onChange={(e) => setSliceDraft((d) => ({ ...d, receivedQty: e.target.value }))}
                         className="h-8 w-full border border-slate-300 bg-white px-2 text-sm text-right outline-none focus:border-sky-500"
+                      />
+                    </td>
+                    <td className="px-2 py-2">
+                      <input
+                        type="text"
+                        placeholder="Remarks (if short)"
+                        value={sliceDraft.remarks}
+                        onChange={(e) => setSliceDraft((d) => ({ ...d, remarks: e.target.value }))}
+                        className="h-8 w-full border border-slate-300 bg-white px-2 text-sm outline-none focus:border-sky-500"
                       />
                     </td>
                     <td className="px-2 py-2 text-center">
