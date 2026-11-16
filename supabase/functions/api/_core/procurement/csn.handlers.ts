@@ -1143,7 +1143,19 @@ function pickMotherFieldsForSubCsn(source: JsonRecord): JsonRecord {
 // mother_csn_id/po_id/sto_source_snapshot for audit but is never overwritten.
 async function syncSubCsnsFromMother(motherId: string, updates: JsonRecord, actorId: string): Promise<void> {
   const motherFields = pickMotherFieldsForSubCsn(updates);
-  if (Object.keys(motherFields).length === 0) {
+
+  // A Sub-CSN travels with its Mother: once the Mother is in transit, every
+  // still-ORD Sub-CSN is in transit too (owner rule). Read the Mother's
+  // current status so this also self-heals when only other fields changed.
+  const { data: motherRow } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("consignment_note")
+    .select("status")
+    .eq("id", motherId)
+    .maybeSingle();
+  const motherInTransit = toUpperTrimmedString((motherRow as JsonRecord | null)?.status) === CSN_STATUS.IN_TRANSIT;
+
+  if (Object.keys(motherFields).length === 0 && !motherInTransit) {
     return;
   }
 
@@ -1167,6 +1179,9 @@ async function syncSubCsnsFromMother(motherId: string, updates: JsonRecord, acto
       last_updated_at: new Date().toISOString(),
       last_updated_by: actorId,
     };
+    if (motherInTransit && toUpperTrimmedString(sub.status) === CSN_STATUS.ORDERED) {
+      subUpdates.status = CSN_STATUS.IN_TRANSIT;
+    }
     for (const ownComputed of ["transit_days_snapshot", "eta_to_plant_calculated"]) {
       if (cascade[ownComputed] !== undefined) {
         subUpdates[ownComputed] = cascade[ownComputed];
@@ -1837,7 +1852,10 @@ export async function createSubCSNHandler(req: Request, ctx: ProcurementHandlerC
       // The Mother's snapshot is its own consignee's transit; the Sub-CSN takes
       // its own from the allotted company's master row (Brief §5.4).
       transit_days_snapshot: null,
-      status: CSN_STATUS.ORDERED,
+      // Mother already in transit -> its Sub-CSN is in transit from the start.
+      status: toUpperTrimmedString(mother.status) === CSN_STATUS.IN_TRANSIT
+        ? CSN_STATUS.IN_TRANSIT
+        : CSN_STATUS.ORDERED,
       dispatch_qty: 0,
       total_received_qty: 0,
       gate_entry_id: null,
