@@ -398,7 +398,7 @@ function writeLeanFamily(sheet, b, company) {
     const from = sheet.rowCount + 1;
     row(["Date", "Opening", "ETA to Plant", "Quantity to Dispatch", "Pro-rata", "Closing", "Excess (not needed yet)", "Max Days", "Min Stk", "Min Days", "PO / CSN · Qty · Supplier · Status · Recorded (CSN Tracker)", ""], { bold: true, fillArgb: L_GREY });
     for (const r of b.rows) {
-      const refs = (r.references ?? []).map((ref, i) => `${ref} · ${r.qtys?.[i] ?? ""} · ${r.suppliers?.[i] ?? ""} · ${STATUS_LABEL[r.statuses?.[i]] ?? r.statuses?.[i] ?? ""}${r.rec_cells?.[i] ? ` · ${recordedText(r.rec_cells[i], null).replace(/\n/g, " ")}` : ""}`).join("\n");
+      const refs = (r.references ?? []).map((ref, i) => `${ref} · ${r.qtys?.[i] ?? ""} · ${r.suppliers?.[i] ?? ""} · ${STATUS_LABEL[r.statuses?.[i]] ?? r.statuses?.[i] ?? ""}${r.rec_cells?.[i] ? ` · ${recordedText(r.rec_cells[i], null).replace(/\n/g, " ")}` : ""}`).concat(suggestedText(r).map((t, k) => `${t} · ${suggestedQty(r, b.uom)[k] ?? ""}`)).join("\n");
       const out = row([day(r.day), num(r.opening), num(r.arrivals) || null, num(r.dispatch), num(r.use), num(r.closing), num(r.excess), coverCell(r.max_days, r.max_days_est, r.closing, b.plan_end), num(r.min_stock), coverCell(r.min_days, r.min_days_est, r.closing, b.plan_end), refs, ""]);
       for (const c of [2, 3, 4, 5, 6, 7, 9]) out.getCell(c).numFmt = NUM;
     }
@@ -408,6 +408,9 @@ function writeLeanFamily(sheet, b, company) {
   sheet.addRow([]);
 }
 
+/** A suggested lot lands on this day but is never counted in the numbers beside it (owner 2026-11-12): list it in the PO / CSN column. */
+const suggestedText = (r) => (r.suggested_lot !== null && r.suggested_lot !== undefined && Number(r.suggested_lot) > 0 ? ["NEW lot (suggested, not counted)"] : []);
+const suggestedQty = (r, uom) => (suggestedText(r).length ? [`${qty(r.suggested_lot)} ${uom ?? ""}`.trim()] : []);
 function writeBlocks(sheet, companies, kind, { filter = () => true, sections = false, emptyText } = {}) {
   const list = companies.flatMap((c) => (c.blocks ?? []).filter((b) => b.kind === kind && filter(b)).map((b) => ({ ...b, company: c })))
     .sort((a, b) => a.title.localeCompare(b.title) || companyLabel(a.company).localeCompare(companyLabel(b.company)));
@@ -450,8 +453,8 @@ function writeBlocks(sheet, companies, kind, { filter = () => true, sections = f
     for (const r of b.rows) {
       const row = sheet.addRow([
         day(r.day), num(r.opening), num(r.arrivals) || null, num(r.dispatch), num(r.use), num(r.closing), num(r.excess), coverCell(r.max_days, r.max_days_est, r.closing, b.plan_end), num(r.min_stock), coverCell(r.min_days, r.min_days_est, r.min_stock, b.plan_end),
-        r.references.join("\n"), r.qtys.join("\n"), r.suppliers.join("\n"),
-        r.statuses.map((s) => STATUS_LABEL[s] ?? s).join("\n"),
+        [...r.references, ...suggestedText(r, b.uom)].join("\n"), [...r.qtys, ...suggestedQty(r, b.uom)].join("\n"), [...r.suppliers, ...suggestedText(r, b.uom).map(() => "—")].join("\n"),
+        [...r.statuses.map((s) => STATUS_LABEL[s] ?? s), ...suggestedText(r, b.uom).map(() => "Suggested")].join("\n"),
         ...bestColumns(r),
         (r.rec_cells ?? []).map((rec) => recordedText(rec, null)).filter((t) => t !== "—").join("\n"),
       ]);

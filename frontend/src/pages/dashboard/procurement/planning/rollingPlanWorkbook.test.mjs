@@ -256,3 +256,16 @@ test("Requirement sheet: an item used through a group shows the group and the gr
   assert.equal(r.getCell(at("CURRENT_STOCK")).value, 40838, "the item's own stock stays visible");
   assert.equal(r.getCell(at("CURRENT STK DAYS")).value, "Via RDP", "a blank cover says why");
 });
+
+test("Day table (Stand-alone / folded): a suggested lot is listed on the day it lands, labelled not counted", () => {
+  const base = company("a", "Almeha Coatings");
+  const block = { ...base.blocks[0], title: "PULMIX 4033", is_family: false, members: ["PULMIX 4033"], uom: "KG", rows: [
+    { day: "2026-11-16", opening: 3477.52, arrivals: 0, dispatch: null, use: 168.84, closing: 3308.68, excess: 0, max_days: 22, min_stock: 3308.68, min_days: 22, references: [], qtys: [], suppliers: [], statuses: [], best_dates: [], suggested_lot: null },
+    { day: "2026-11-21", opening: 2633.32, arrivals: 0, dispatch: null, use: 168.84, closing: 2464.48, excess: 0, max_days: 14, min_stock: 2464.48, min_days: 14, references: [], qtys: [], suppliers: [], statuses: [], best_dates: [], suggested_lot: 4600 },
+  ] };
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [block] }], asOf: "2026-10-21" });
+  const cells = [];
+  wb.getWorksheet("RM Stand-alone").eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
+  assert.ok(cells.some((t) => t.includes("NEW lot (suggested, not counted)")), "the suggested lot is named on its day");
+  assert.ok(cells.some((t) => t.includes("4,600 KG")), "with its quantity");
+});

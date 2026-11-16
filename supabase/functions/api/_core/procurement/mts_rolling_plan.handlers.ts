@@ -74,7 +74,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       serviceRoleClient.schema("erp_master").from("companies").select("company_code, company_name").eq("id", companyId).maybeSingle(),
     ]);
     const plan = await computePlanning({ companyId, ...parsed.params!, extraMonths: ROLLING_EXTRA_MONTHS, manualLots: userLots, scheduleChecks: true });
-    const { req: reqData, projection, assembly, calendar, vendorOptions, selections } = plan._internal;
+    const { req: reqData, projection, projectionPure, assembly, calendar, vendorOptions, selections } = plan._internal;
     const mattersForGaps = (m: string) => {
       const rowsOf = projection.rows.filter((r) => r.material_id === m);
       return memberMattersForGaps({
@@ -441,13 +441,20 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const unmet = new Map(days.map((day) => [day, 0]));
       for (const u of projection.group_unmet) if (groupSet.has(u.group_id) && unmet.has(u.day)) unmet.set(u.day, (unmet.get(u.day) ?? 0) + u.qty_base);
       const grid = familyDayGrid(days, memberRows, unmet);
+      // The day table shows today's stock and the existing orders only (owner 2026-11-12); `grid` (with suggested lots) keeps driving the alarms.
+      const pureRows = projectionPure.rows.filter((r) => memberSet.has(r.material_id));
+      const unmetPure = new Map(days.map((day) => [day, 0]));
+      for (const u of projectionPure.group_unmet) if (groupSet.has(u.group_id) && unmetPure.has(u.day)) unmetPure.set(u.day, (unmetPure.get(u.day) ?? 0) + u.qty_base);
+      const gridPure = familyDayGrid(days, pureRows, unmetPure);
+      const suggestedByDay = new Map<string, number>();
+      for (const r of memberRows) if (r.planned_lot_qty_base > 0.000001) suggestedByDay.set(r.day, (suggestedByDay.get(r.day) ?? 0) + r.planned_lot_qty_base);
       const fu = familyUnit(memberIds);
       const gridByDay = new Map(grid.map((g) => [g.day, g]));
       // Owner 2026-10-28: what is left in the pool (held for no level) after each day's receipts — the latest Material x Level snapshot on or before the day.
       // A snapshot belongs to one planned part (a family, or a lone item), so several snapshots can share a day: take each member's own
       // latest pool quantity and add them up (the last snapshot of the day alone would show only one part, e.g. 195 KG instead of the pool).
       const poolByMember = new Map<string, Array<{ day: string; qty: number }>>();
-      for (const snap of projection.level_matrix ?? []) {
+      for (const snap of projectionPure.level_matrix ?? []) {
         for (const [id, q] of Object.entries(snap.pool)) {
           if (!memberSet.has(id)) continue;
           const list = poolByMember.get(id) ?? [];
@@ -472,12 +479,13 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const events = memberIds.flatMap((m) => (rowById.get(m)?.inbound_events ?? []).map((e) => ({ ...e, member: m })));
       const ownByDay = new Map<string, number>();
       for (const l of userLots) if (memberSet.has(l.material_id)) ownByDay.set(l.plant_eta, (ownByDay.get(l.plant_eta) ?? 0) + l.qty_base);
-      const rows = grid.filter((g, index) => index === 0 || g.arrivals > 0 || ownByDay.has(g.day)).map((g) => {
+      const rows = gridPure.filter((g, index) => index === 0 || g.arrivals > 0 || ownByDay.has(g.day) || suggestedByDay.has(g.day)).map((g) => {
         // Owner 2026-10-26: an open piece whose ETA passed or is missing is counted today (as the
         // planner does), so it must be listed on today's row with its PO / vendor / status.
         const today = events.filter((e) => (e.date && e.date >= calendar.asOf ? e.date : calendar.asOf) === g.day);
         return {
           day: g.day, opening: inUnit(fu, g.opening), arrivals: inUnit(fu, g.arrivals), dispatch: inUnit(fu, ownByDay.get(g.day) ?? 0) || null,
+          suggested_lot: suggestedByDay.has(g.day) ? inUnit(fu, suggestedByDay.get(g.day) ?? 0) : null,
           use: inUnit(fu, g.use), closing: inUnit(fu, g.closing), excess: excessAt(g.day), max_days: g.max_days, max_days_est: g.max_days_est, min_stock: inUnit(fu, g.min_stock), min_days: g.min_days, min_days_est: g.min_days_est,
           references: today.map((e) => e.reference),
           qtys: today.map((e) => `${dq(e.member, e.qty)} ${uomOf(e.member) ?? ""}`.trim()),

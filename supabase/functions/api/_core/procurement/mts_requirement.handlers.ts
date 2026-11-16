@@ -76,6 +76,7 @@ import {
   type PolicyOverride,
   effectivePlanAt,
   partitionPoLineInbound,
+  effectiveOpenQty,
   rToRTransferRoute,
   type PlanLineVersion,
   type PoLineInboundInput,
@@ -701,7 +702,7 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
   const poById = new Map(pos.map((p) => [text(p.id), p]));
   const lines = pos.length === 0 ? [] : (await fetchInChunks<JsonRecord>(pos.map((p) => text(p.id)), (chunk) => serviceRoleClient
     .schema("erp_procurement").from("purchase_order_line")
-    .select("id, po_id, line_number, material_id, ordered_qty, ordered_qty_base_uom, po_uom_code, open_qty, line_status")
+    .select("id, po_id, line_number, material_id, ordered_qty, ordered_qty_base_uom, po_uom_code, open_qty, knocked_off_qty, line_status")
     .in("po_id", chunk).in("line_status", OPEN_PO_LINE_STATUSES)))
     .filter((line) => universe.has(text(line.material_id)));
   const lineIds = lines.map((l) => text(l.id));
@@ -772,7 +773,8 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
       po_line_id: text(line.id),
       po_number: text(po.po_number),
       line_number: Number(line.line_number ?? 0),
-      open_qty: Number(line.open_qty ?? 0),
+      // Owner 2026-11-16: a knocked-off remainder is not an expected arrival (the CSN Tracker only adds to knocked_off_qty, open_qty stays).
+      open_qty: effectiveOpenQty(Number(line.open_qty ?? 0), Number(line.knocked_off_qty ?? 0)),
       base_per_po_unit: ratio,
       expected_delivery_date: text(po.expected_delivery_date) || null,
       delivery_type: text(po.delivery_type) || null,
