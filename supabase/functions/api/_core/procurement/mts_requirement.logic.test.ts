@@ -8,6 +8,7 @@
  *   [T22] Excel export parity         → frontend exports the grid's own filtered rows/columns
  */
 import {
+  sameDayStockTypeShift,
   displayUnitOf,
   effectiveProductionAssignments,
   groupCoveredBy,
@@ -1129,4 +1130,19 @@ Deno.test("Sub-CSN: when its Mother CSN is in transit, the share counts as in tr
   assertEqual([a.dispatched, a.open_po, a.cm_dispatched], [0, 9000, 0], "mother not shipped: still an open PO piece");
   const b = bucketInbound([moving], calendar);
   assertEqual([b.dispatched, b.open_po, b.cm, b.cm_dispatched], [9000, 0, 9000, 9000], "mother in transit: dispatched, same date and quantity");
+});
+
+Deno.test("same-day QA release: P321 moves stock QA -> Unrestricted today, nothing else is added (owner 2026-11-16)", () => {
+  const rows = sameDayStockTypeShift([
+    { material_id: "CF", storage_location_id: "R2", stock_type_code: "QUALITY_INSPECTION", direction: "OUT", qty: 1000 },
+    { material_id: "CF", storage_location_id: "R2", stock_type_code: "UNRESTRICTED", direction: "IN", qty: 1000 },
+  ]);
+  const get = (type: string) => rows.find((r) => r.stock_type_code === type)?.qty;
+  assert(get("QUALITY_INSPECTION") === -1000 && get("UNRESTRICTED") === 1000, `got ${JSON.stringify(rows)}`);
+  assert(sameDayStockTypeShift([]).length === 0, "no legs -> no rows");
+  const back = sameDayStockTypeShift([
+    { material_id: "CF", storage_location_id: "R2", stock_type_code: "UNRESTRICTED", direction: "OUT", qty: 400 },
+    { material_id: "CF", storage_location_id: "R2", stock_type_code: "UNRESTRICTED", direction: "IN", qty: 400 },
+  ]);
+  assert(back.length === 0, "a leg and its exact reversal net to nothing");
 });

@@ -990,6 +990,27 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
 export type StockRow = { material_id: string; storage_location_id: string; stock_type_code: string; qty: number };
 export type ReservationRow = { material_id: string; storage_location_id: string; qty: number };
 
+/** One stock-ledger leg posted on the as-of day itself (only the QA release / return legs are read, see below). */
+export type SameDayStockLeg = { material_id: string; storage_location_id: string; stock_type_code: string; direction: string; qty: number };
+
+/**
+ * Owner 2026-11-16: the plan's opening stock is the ledger closing of the day BEFORE as-of. A QA decision posted on as-of day
+ * itself (P321 QA -> Unrestricted, P322 back) only moves the same physical stock between types, so it must show today, not
+ * tomorrow: otherwise stock that is already usable shows as short. Consumption posted today is NOT added (today's use is
+ * planned from demand, counting it twice would double-cut). Returns delta rows to append to the stock rows.
+ */
+export function sameDayStockTypeShift(legs: readonly SameDayStockLeg[]): StockRow[] {
+  const acc = new Map<string, StockRow>();
+  for (const leg of legs) {
+    const sign = String(leg.direction).toUpperCase() === "IN" ? 1 : -1;
+    const key = `${leg.material_id}|${leg.storage_location_id}|${leg.stock_type_code}`;
+    const row = acc.get(key) ?? { material_id: leg.material_id, storage_location_id: leg.storage_location_id, stock_type_code: leg.stock_type_code, qty: 0 };
+    row.qty += sign * Number(leg.qty);
+    acc.set(key, row);
+  }
+  return [...acc.values()].filter((row) => Math.abs(row.qty) > 0.0000001);
+}
+
 /**
  * R→R advisory route (source contract §5, owner D1/D12): a transfer is only ever suggested between
  * raw-material stores (R-series codes). Every source must be an R store (otherwise the qty is not

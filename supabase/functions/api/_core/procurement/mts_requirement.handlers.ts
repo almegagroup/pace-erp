@@ -62,6 +62,7 @@ import {
   suggestSafetyDays,
   type ConfiguredLeadTime,
   consumptionFromConsBucket,
+  sameDayStockTypeShift,
   type GroupMember,
   type InboundEvent,
   isIsoDate,
@@ -505,6 +506,15 @@ async function loadStockAndConsumption(companyId: string, cmStart: string, asOf:
     }), STOCK_HISTORY_MATERIAL_CHUNK);
   const stock: StockRow[] = [];
   const consumption = new Map<string, number>();
+  // Owner 2026-11-16: a QA decision posted today already made that stock usable (same physical stock, new type).
+  const todayLegs = materialIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient
+    .schema("erp_inventory").from("stock_ledger")
+    .select("material_id, storage_location_id, stock_type_code, direction, quantity, movement_type_code")
+    .eq("company_id", companyId).eq("posting_date", asOf).in("movement_type_code", ["P321", "P322"]).in("material_id", chunk));
+  stock.push(...sameDayStockTypeShift(todayLegs.map((row) => ({
+    material_id: text(row.material_id), storage_location_id: text(row.storage_location_id), stock_type_code: text(row.stock_type_code),
+    direction: text(row.direction), qty: Number(row.quantity ?? 0),
+  }))));
   for (const row of rows) {
     const materialId = text(row.material_id);
     const closing = Number(row.closing ?? 0);
