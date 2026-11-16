@@ -184,7 +184,11 @@ const groupDemand = (row) => (groupPools(row).length ? groupPools(row).reduce((s
 /** Why a cover-days cell is blank: stock outlasts the PO21 plan, or the item is used only through a group (its cover is the group's). */
 const coverEmptyText = (row) => {
   const ownDemand = Number(row.cm_prorata ?? 0) + Number(row.nm_req ?? 0) > 0;
-  if (ownDemand && Number(row.current_stock ?? 0) > 0) return "Beyond plan";
+  if (ownDemand && Number(row.current_stock ?? 0) > 0) {
+    // Stock outlasts the PO21 plan: show the days at the plan's average daily use so a small stock and a huge one do not look alike.
+    const daily = Number(row.total_prorata_daily ?? 0);
+    return daily > 0.000001 ? `Beyond plan (≈ ${Math.floor(Number(row.current_stock) / daily)} d)` : "Beyond plan";
+  }
   if (!ownDemand && Number(row.group_share_qty ?? 0) > 0) return `Via ${groupVia(row).split(" — ").pop().split("; ")[0] || "group"}`;
   return null;
 };
