@@ -33,6 +33,7 @@ import { bulkOnlyGroupIds, loadBulkMaterialIds } from "./mts_bulk_materials.ts";
 import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, type RefillMethod, familyMoveCost, optimizeFamilyArrival, optimizeFamilyTogether, planFamily } from "./mts_family_planner.logic.ts";
 import { assemblePlanningInput, familyArrivalEta, priceUnitCode, familyArrivalRisk, isFamilyAllocatableArrival, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
+import { planningShareKey } from "./mts_planning_share.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
 import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, economicCycleDays, landedAdder, type LandedCostBasis, rankCostOptions, resolvePurchaseCurrency } from "./mts_cost.logic.ts";
 import { interestPctAt } from "./mts_planning_cost.logic.ts";
@@ -440,7 +441,23 @@ function costOptionsFor(
  */
 export const PLANNING_EXTRA_MONTHS = 4;
 
-export async function computePlanning(p: PlanningParams) {
+// Owner 2026-11-16: the Requirement page fires the same heavy /planning call from several widgets at once (prod log: four
+// ~20 s computations in parallel pinned the only CPU and login took 94 s). Identical calls that overlap share ONE computation;
+// nothing is kept after it finishes, so no stale answer is ever served. Simulations (overrides) are never shared.
+const planningInFlight = new Map<string, Promise<unknown>>();
+export function computePlanning(p: PlanningParams) {
+  const key = planningShareKey(p);
+  if (key === null) return computePlanningOnce(p);
+  const running = planningInFlight.get(key);
+  if (running) return running as ReturnType<typeof computePlanningOnce>;
+  const started = computePlanningOnce(p);
+  planningInFlight.set(key, started);
+  const release = () => { if (planningInFlight.get(key) === started) planningInFlight.delete(key); };
+  started.then(release, release);
+  return started;
+}
+
+async function computePlanningOnce(p: PlanningParams) {
   const calendar = buildCalendar(p.planMonth, p.asOf, p.extraMonths ?? 0);
   if (!calendar) throw new Error("MTS_REQ_AS_OF_OUTSIDE_MONTH");
   const req = await computeRequirement(p.companyId, calendar, p.asOf, p.today, p.demandAt, {
@@ -597,6 +614,8 @@ export async function computePlanning(p: PlanningParams) {
   // Owner 2026-11-12: the same plan WITHOUT the engine's suggested lots (only today's stock and the existing orders). The day tables of the report
   // are built from this one, so a suggestion never changes an Opening / Closing / Min / Excess number; the suggested lots are listed beside it.
   const projectionPure = planFamily({ ...familyInput, plan_buys: false, refill_method: "FIRST", refill_picks: refillPicks });
+  // Owner 2026-11-16: the day tables show the recorded orders, then the engine's own lots counted once the recorded orders end.
+  const projectionShown = planFamily({ ...familyInput, lots_after_recorded: true, refill_method: "FIRST", refill_picks: refillPicks });
   const plannerMs = Date.now() - plannerStarted;
   const groupAssignments = (() => {
     type AssignmentReason = "SINGLE_SELECTED" | "CHEAPEST_SELECTED" | "NONE_SELECTED";
@@ -1265,7 +1284,7 @@ export async function computePlanning(p: PlanningParams) {
   };
   console.log(JSON.stringify({ event: "MTS_TIMING", step: "planning_done", reuse, planner_ms: plannerMs, total_ms: Date.now() - planningStarted }));
   // Internal pieces for the P1 item plan (never serialised by the Planning endpoint).
-  const internal = { req, assembly, projection, projectionPure, calendar, vendorOptions, vendorTerms, orderUnitFor, familyInputFor, selections: selections.map };
+  const internal = { req, assembly, projection, projectionPure, projectionShown, calendar, vendorOptions, vendorTerms, orderUnitFor, familyInputFor, selections: selections.map };
   Object.defineProperty(payload, "_internal", { value: internal, enumerable: false });
   return payload as typeof payload & { readonly _internal: typeof internal };
 }

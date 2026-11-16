@@ -1083,3 +1083,21 @@ Deno.test("report contract: a run without plan_buys carries no suggested lot, so
   const a = coverOn(pure, day); const b = coverOn(withLots, day);
   assert(a !== null && b !== null && b > a, `with a suggested lot the cover is higher (${b}) than without (${a})`);
 });
+
+Deno.test("family planner: no engine lot lands inside the recorded orders; lots are planned and counted after the last one (owner 2026-11-16)", () => {
+  const days = daysTo("2027-02-28");
+  const input: FamilyPlannerInput = {
+    as_of: AS_OF, horizon_end: "2027-02-28",
+    opening_qty_by_material: { SOLO: 300 },
+    own_demand: days.map((d) => ({ material_id: "SOLO", required_by: d, qty_base: 10 })),
+    group_demand: [],
+    confirmed_arrivals: [{ material_id: "SOLO", eta_to_plant: "2026-11-20", qty_base: 400, source_key: "csn-1" }],
+    policies: [policy("SOLO", 20, 10, [{ vendor: "V", lead: 5, cost: 1 }])],
+  };
+  const counted = planFamily(input);
+  const shown = planFamily({ ...input, lots_after_recorded: true });
+  const lotDays = (r: ReturnType<typeof planFamily>) => r.rows.filter((x) => x.planned_lot_qty_base > 0).map((x) => x.day);
+  assert(lotDays(shown).length > 0, "the engine still plans lots after the recorded orders");
+  assert(lotDays(shown).every((d) => d > "2026-11-20"), `no lot on/before the last recorded arrival, got ${lotDays(shown).join(",")}`);
+  assert(lotDays(counted).length >= lotDays(shown).length, "the advice run is unchanged");
+});

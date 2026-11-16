@@ -269,3 +269,13 @@ test("Day table (Stand-alone / folded): a suggested lot is listed on the day it 
   assert.ok(cells.some((t) => t.includes("NEW lot (suggested, not counted)")), "the suggested lot is named on its day");
   assert.ok(cells.some((t) => t.includes("4,600 KG")), "with its quantity");
 });
+
+test("QA stock + a shortage: the family title and the QA row say it may be a QA delay, not a missing order", async () => {
+  const base = company("a", "Almeha Coatings");
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], first_shortage_day: "2027-01-17", level_sections: [], level_today: [], excess_after: [], qa_stock: [{ material: "Gabrosa", uom: "KG", qty: 2500 }], qa_extra_days: 3 }] }], asOf: "2026-11-16" });
+  const cells = [];
+  wb.getWorksheet("RM RDP").eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
+  assert.ok(cells.some((l) => l.includes("RUNS OUT 2027-01-17 (but 2,500 KG is still in QA")), "the title names the QA stock");
+  assert.ok(cells.some((l) => l.includes("may be a QA delay, not a missing order")), "the QA row warns before ordering");
+  await wb.xlsx.writeBuffer();
+});

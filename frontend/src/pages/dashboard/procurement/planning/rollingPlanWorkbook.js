@@ -278,7 +278,7 @@ function writeLeanFamily(sheet, b, company) {
   };
   title(`${companyLabel(company)} — ${b.title} (family: ${b.members.join(", ")})`, { size: 13, fillArgb: TITLE_FILL });
   const alarm = Boolean(b.first_shortage_day || (b.gaps ?? []).length);
-  const facts = [`Unit ${u || "—"}`, b.first_shortage_day ? `RUNS OUT ${b.first_shortage_day}` : "", (b.gaps ?? []).length ? `ENGINE CANNOT PLAN — ${b.gaps.join("; ")}` : ""].filter(Boolean).join(" · ");
+  const facts = [`Unit ${u || "—"}`, b.first_shortage_day ? `RUNS OUT ${b.first_shortage_day}${(b.qa_stock ?? []).length ? ` (but ${qty(b.qa_stock.reduce((sum, x) => sum + x.qty, 0))} ${u} is still in QA — see the QA row)` : ""}` : "", (b.gaps ?? []).length ? `ENGINE CANNOT PLAN — ${b.gaps.join("; ")}` : ""].filter(Boolean).join(" · ");
   title(facts, { bold: alarm, color: alarm ? RED : null });
   if (b.refill_method) title(`Refill method used for this family: ${b.refill_method}${b.refill_method_why ? ` — ${b.refill_method_why}` : ""}`, { bold: false, italic: true });
   title("How to read: a family is split into levels (narrow level first). Every level keeps its own reserve and its daily use is taken from that reserve. Stock that no level needs yet stays in the shared EXCESS POOL. Recorded = dates in the PO / CSN (CSN Tracker: ATD / ATA when they exist, else ETD / ETA). Engine = the dates the engine advises.", { bold: false, italic: true });
@@ -304,7 +304,7 @@ function writeLeanFamily(sheet, b, company) {
   rs([["EXCESS POOL today\n(no level needs it yet)"], [matLines(b.excess_after), 2], ["", 9]], { bold: true, fillArgb: L_GREEN });
   if ((b.qa_stock ?? []).length) {
     const qaTotal = b.qa_stock.reduce((sum, x) => sum + x.qty, 0);
-    rs([["IN QA today\n(not counted in the stock above)"], [matLines(b.qa_stock), 2], [b.qa_extra_days !== null && b.qa_extra_days !== undefined ? `If all ${qty(qaTotal)} ${u} passes QA, the family's cover grows by about ${b.qa_extra_days} d (at the family's average daily use).` : "Cover effect not shown: no planned use.", 9]], { bold: false, fillArgb: L_AMBER });
+    rs([["IN QA today\n(not counted in the stock above)"], [matLines(b.qa_stock), 2], [b.qa_extra_days !== null && b.qa_extra_days !== undefined ? `If all ${qty(qaTotal)} ${u} passes QA, the family's cover grows by about ${b.qa_extra_days} d (at the family's average daily use).${b.first_shortage_day ? ` The shortage from ${b.first_shortage_day} may be a QA delay, not a missing order: chase QA before ordering.` : ""}` : "Cover effect not shown: no planned use.", 9]], { bold: false, fillArgb: L_AMBER });
   }
   sheet.addRow([]);
 
@@ -409,8 +409,16 @@ function writeLeanFamily(sheet, b, company) {
 }
 
 /** A suggested lot lands on this day but is never counted in the numbers beside it (owner 2026-11-12): list it in the PO / CSN column. */
-const suggestedText = (r) => (r.suggested_lot !== null && r.suggested_lot !== undefined && Number(r.suggested_lot) > 0 ? ["NEW lot (suggested, not counted)"] : []);
-const suggestedQty = (r, uom) => (suggestedText(r).length ? [`${qty(r.suggested_lot)} ${uom ?? ""}`.trim()] : []);
+const hasQty = (v) => v !== null && v !== undefined && Number(v) > 0;
+// Inside the recorded orders a lot is only a suggestion (not counted); after them the engine's lot is counted (owner 2026-11-16).
+const suggestedText = (r) => [
+  ...(hasQty(r.suggested_lot) ? ["NEW lot (suggested, not counted)"] : []),
+  ...(hasQty(r.new_lot) ? ["NEW lot (counted in projection)"] : []),
+];
+const suggestedQty = (r, uom) => [
+  ...(hasQty(r.suggested_lot) ? [`${qty(r.suggested_lot)} ${uom ?? ""}`.trim()] : []),
+  ...(hasQty(r.new_lot) ? [`${qty(r.new_lot)} ${uom ?? ""}`.trim()] : []),
+];
 function writeBlocks(sheet, companies, kind, { filter = () => true, sections = false, emptyText } = {}) {
   const list = companies.flatMap((c) => (c.blocks ?? []).filter((b) => b.kind === kind && filter(b)).map((b) => ({ ...b, company: c })))
     .sort((a, b) => a.title.localeCompare(b.title) || companyLabel(a.company).localeCompare(companyLabel(b.company)));
