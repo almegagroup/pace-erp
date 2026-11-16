@@ -116,6 +116,12 @@ export type FamilyPlannerInput = {
   selection_controlled_members?: ReadonlySet<string>;
   /** Planning off: only simulate (arrival optimizer). */
   plan_buys?: boolean;
+  /**
+   * Owner 2026-11-16: inside the span of the recorded orders (up to the last confirmed arrival of a family) a lot is only a
+   * suggestion the user decides on, so no engine lot is planned there; from the day after the last recorded arrival the
+   * engine plans and counts its lots (the projection). Display run only; the advice run never sets it.
+   */
+  lots_after_recorded?: boolean;
   /** false = skip the event log / Material × Level matrix (the arrival optimizer re-runs the family many times). */
   trace?: boolean;
   /** Owner 2026-10-30: also return, for every day, each level's cover / Min / Max (days) and the pool, for the schedule check Excel. */
@@ -601,6 +607,8 @@ export function planFamily(input: FamilyPlannerInput): FamilyResult {
 function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): FamilyResult {
   if (!ISO_DAY.test(input.as_of) || !ISO_DAY.test(input.horizon_end) || input.horizon_end < input.as_of) throw new Error("FAMILY_PLANNER_INVALID_HORIZON");
   const allDays = dayList(input.as_of, input.horizon_end);
+  const lastRecordedDay = [...input.confirmed_arrivals.map((a) => String(a.eta_to_plant)), ...(input.manual_lots ?? []).map((l) => String(l.plant_eta))].reduce((max, d) => (d > max ? d : max), "");
+  const noLotFrom = input.lots_after_recorded === true && lastRecordedDay ? allDays.filter((d) => d <= lastRecordedDay).length : 0;
   const N = allDays.length;
   const dayIndex = new Map(allDays.map((d, i) => [d, i]));
   const policyOf = new Map(input.policies.map((p) => [p.material_id, p]));
@@ -1273,7 +1281,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
     if (usesGroupAsIndividualDemand) return null;
     const memberUse = own[m];
     if (!policy || memberUse.every((q) => q <= EPSILON)) return null;
-    const from = (pendingOwn.get(id) ?? -1) + 1;
+    const from = Math.max((pendingOwn.get(id) ?? -1) + 1, noLotFrom);
     for (let i = from; i < N; i += 1) {
       const t = targets[m][i].target;
       if (t === null || targets[m][i].critical === null) continue;
@@ -1311,7 +1319,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
 
   const groupNeed = (sim: Sim, p: number): Need | null => {
     const pool = pools[p];
-    const from = (pendingGroup.get(pool.key) ?? -1) + 1;
+    const from = Math.max((pendingGroup.get(pool.key) ?? -1) + 1, noLotFrom);
     // Free stock of the pool's members after day i, against the pool's own use ahead.
     const freeCover = (i: number) => coverDays(sim.poolFree[p][i], pool.demand, i);
     let best: Need | null = null;

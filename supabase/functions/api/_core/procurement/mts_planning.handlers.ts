@@ -597,6 +597,8 @@ export async function computePlanning(p: PlanningParams) {
   // Owner 2026-11-12: the same plan WITHOUT the engine's suggested lots (only today's stock and the existing orders). The day tables of the report
   // are built from this one, so a suggestion never changes an Opening / Closing / Min / Excess number; the suggested lots are listed beside it.
   const projectionPure = planFamily({ ...familyInput, plan_buys: false, refill_method: "FIRST", refill_picks: refillPicks });
+  // Owner 2026-11-16: the day tables show the recorded orders, then the engine's own lots counted once the recorded orders end.
+  const projectionShown = planFamily({ ...familyInput, lots_after_recorded: true, refill_method: "FIRST", refill_picks: refillPicks });
   const plannerMs = Date.now() - plannerStarted;
   const groupAssignments = (() => {
     type AssignmentReason = "SINGLE_SELECTED" | "CHEAPEST_SELECTED" | "NONE_SELECTED";
@@ -1265,7 +1267,7 @@ export async function computePlanning(p: PlanningParams) {
   };
   console.log(JSON.stringify({ event: "MTS_TIMING", step: "planning_done", reuse, planner_ms: plannerMs, total_ms: Date.now() - planningStarted }));
   // Internal pieces for the P1 item plan (never serialised by the Planning endpoint).
-  const internal = { req, assembly, projection, projectionPure, calendar, vendorOptions, vendorTerms, orderUnitFor, familyInputFor, selections: selections.map };
+  const internal = { req, assembly, projection, projectionPure, projectionShown, calendar, vendorOptions, vendorTerms, orderUnitFor, familyInputFor, selections: selections.map };
   Object.defineProperty(payload, "_internal", { value: internal, enumerable: false });
   return payload as typeof payload & { readonly _internal: typeof internal };
 }

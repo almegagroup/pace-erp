@@ -409,8 +409,16 @@ function writeLeanFamily(sheet, b, company) {
 }
 
 /** A suggested lot lands on this day but is never counted in the numbers beside it (owner 2026-11-12): list it in the PO / CSN column. */
-const suggestedText = (r) => (r.suggested_lot !== null && r.suggested_lot !== undefined && Number(r.suggested_lot) > 0 ? ["NEW lot (suggested, not counted)"] : []);
-const suggestedQty = (r, uom) => (suggestedText(r).length ? [`${qty(r.suggested_lot)} ${uom ?? ""}`.trim()] : []);
+const hasQty = (v) => v !== null && v !== undefined && Number(v) > 0;
+// Inside the recorded orders a lot is only a suggestion (not counted); after them the engine's lot is counted (owner 2026-11-16).
+const suggestedText = (r) => [
+  ...(hasQty(r.suggested_lot) ? ["NEW lot (suggested, not counted)"] : []),
+  ...(hasQty(r.new_lot) ? ["NEW lot (counted in projection)"] : []),
+];
+const suggestedQty = (r, uom) => [
+  ...(hasQty(r.suggested_lot) ? [`${qty(r.suggested_lot)} ${uom ?? ""}`.trim()] : []),
+  ...(hasQty(r.new_lot) ? [`${qty(r.new_lot)} ${uom ?? ""}`.trim()] : []),
+];
 function writeBlocks(sheet, companies, kind, { filter = () => true, sections = false, emptyText } = {}) {
   const list = companies.flatMap((c) => (c.blocks ?? []).filter((b) => b.kind === kind && filter(b)).map((b) => ({ ...b, company: c })))
     .sort((a, b) => a.title.localeCompare(b.title) || companyLabel(a.company).localeCompare(companyLabel(b.company)));
