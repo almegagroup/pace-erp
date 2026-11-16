@@ -8,11 +8,111 @@
  * Authority: Backend
  */
 
-import type { DbClient } from "./db_client.ts";
+import type { DbClient, DbQueryBuilder } from "./db_client.ts";
 import {
   listAvailableWorkContexts,
   listCanonicalCompanyIds,
 } from "./canonical_access.ts";
+
+/** Key-order-insensitive JSON text, so jsonb read-back (keys re-sorted by
+ *  Postgres) compares equal to a freshly built array. */
+function stableStringify(value: unknown): string {
+  if (Array.isArray(value)) {
+    return `[${value.map(stableStringify).join(",")}]`;
+  }
+  if (value && typeof value === "object") {
+    const record = value as Record<string, unknown>;
+    return `{${
+      Object.keys(record)
+        .sort()
+        .map((key) => `${JSON.stringify(key)}:${stableStringify(record[key])}`)
+        .join(",")
+    }}`;
+  }
+  return JSON.stringify(value) ?? "null";
+}
+
+type SessionMenuSnapshotTarget = {
+  sessionId: string;
+  authUserId: string;
+  universe: string;
+  companyId: string | null;
+  workContextId: string | null;
+  snapshotVersion: number;
+  menuJson: unknown[];
+};
+
+/**
+ * Write one erp_cache.session_menu_snapshot row.
+ *
+ * PERF (prod "Disk IO Budget" warning, 2026-11-12): this cache is rebuilt every
+ * MENU_SNAPSHOT_CACHE_TTL_SECONDS per session and used to DELETE + INSERT the
+ * row each time even when the menu was identical. That rewrites ~9 KB of TOASTed
+ * jsonb plus 8 index entries per rebuild. When the stored row already holds the
+ * same menu we now only touch created_at (the TTL clock menu.handler.ts reads),
+ * a HOT update that leaves menu_json and every index alone.
+ *
+ * `scope` applies the same filters the old delete used, so stale rows from
+ * older shapes are still cleared whenever the menu really changed.
+ */
+async function writeSessionMenuSnapshot(
+  db: DbClient,
+  target: SessionMenuSnapshotTarget,
+  scope: (query: DbQueryBuilder) => DbQueryBuilder,
+  errorCodes: { delete: string; insert: string },
+): Promise<void> {
+  const table = () => db.schema("erp_cache").from("session_menu_snapshot");
+
+  const { data: existing, error: existingError } = await scope(
+    table().select(
+      "snapshot_id, menu_json, snapshot_version, company_id, work_context_id",
+    ),
+  );
+
+  // A failed lookup just falls through to the original delete + insert path.
+  if (!existingError && Array.isArray(existing) && existing.length === 1) {
+    const current = existing[0];
+    const sameShape = (current.company_id ?? null) === target.companyId &&
+      (current.work_context_id ?? null) === target.workContextId;
+
+    if (
+      sameShape &&
+      stableStringify(current.menu_json) === stableStringify(target.menuJson)
+    ) {
+      const { data: touched, error: touchError } = await table()
+        .update({
+          created_at: new Date().toISOString(),
+          snapshot_version: target.snapshotVersion,
+        })
+        .eq("snapshot_id", current.snapshot_id)
+        .select("snapshot_id");
+
+      if (!touchError && Array.isArray(touched) && touched.length === 1) {
+        return;
+      }
+    }
+  }
+
+  const { error: deleteError } = await scope(table().delete());
+
+  if (deleteError) {
+    throw new Error(errorCodes.delete);
+  }
+
+  const { error: insertError } = await table().insert({
+    session_id: target.sessionId,
+    auth_user_id: target.authUserId,
+    universe: target.universe,
+    company_id: target.companyId,
+    work_context_id: target.workContextId,
+    snapshot_version: target.snapshotVersion,
+    menu_json: target.menuJson,
+  });
+
+  if (insertError) {
+    throw new Error(errorCodes.insert);
+  }
+}
 
 type MenuSnapshotRow = {
   menu_code: string;
@@ -115,35 +215,28 @@ export async function rebuildAdminSessionMenuSnapshot(
   }
 
   if (sessionId) {
-    const { error: deleteError } = await db
-      .schema("erp_cache")
-      .from("session_menu_snapshot")
-      .delete()
-      .eq("session_id", sessionId)
-      .eq("universe", "SA")
-      .is("company_id", null)
-      .is("work_context_id", null);
-
-    if (deleteError) {
-      throw new Error("ADMIN_SESSION_MENU_SNAPSHOT_DELETE_FAILED");
-    }
-
-    const { error: insertError } = await db
-      .schema("erp_cache")
-      .from("session_menu_snapshot")
-      .insert({
-        session_id: sessionId,
-        auth_user_id: authUserId,
+    await writeSessionMenuSnapshot(
+      db,
+      {
+        sessionId,
+        authUserId,
         universe: "SA",
-        company_id: null,
-        work_context_id: null,
-        snapshot_version: menuRows?.[0]?.snapshot_version ?? 0,
-        menu_json: menuRows ?? [],
-      });
-
-    if (insertError) {
-      throw new Error("ADMIN_SESSION_MENU_SNAPSHOT_INSERT_FAILED");
-    }
+        companyId: null,
+        workContextId: null,
+        snapshotVersion: menuRows?.[0]?.snapshot_version ?? 0,
+        menuJson: menuRows ?? [],
+      },
+      (query) =>
+        query
+          .eq("session_id", sessionId)
+          .eq("universe", "SA")
+          .is("company_id", null)
+          .is("work_context_id", null),
+      {
+        delete: "ADMIN_SESSION_MENU_SNAPSHOT_DELETE_FAILED",
+        insert: "ADMIN_SESSION_MENU_SNAPSHOT_INSERT_FAILED",
+      },
+    );
   }
 
   return menuRows ?? [];
@@ -225,35 +318,28 @@ export async function rebuildAclSessionMenuSnapshot(
   }
 
   if (sessionId) {
-    const { error: deleteError } = await db
-      .schema("erp_cache")
-      .from("session_menu_snapshot")
-      .delete()
-      .eq("session_id", sessionId)
-      .eq("universe", "ACL")
-      .eq("company_id", companyId)
-      .eq("work_context_id", workContextId);
-
-    if (deleteError) {
-      throw new Error("ACL_SESSION_MENU_SNAPSHOT_DELETE_FAILED");
-    }
-
-    const { error: insertError } = await db
-      .schema("erp_cache")
-      .from("session_menu_snapshot")
-      .insert({
-        session_id: sessionId,
-        auth_user_id: authUserId,
+    await writeSessionMenuSnapshot(
+      db,
+      {
+        sessionId,
+        authUserId,
         universe: "ACL",
-        company_id: companyId,
-        work_context_id: workContextId,
-        snapshot_version: menuRows?.[0]?.snapshot_version ?? 0,
-        menu_json: menuRows ?? [],
-      });
-
-    if (insertError) {
-      throw new Error("ACL_SESSION_MENU_SNAPSHOT_INSERT_FAILED");
-    }
+        companyId,
+        workContextId,
+        snapshotVersion: menuRows?.[0]?.snapshot_version ?? 0,
+        menuJson: menuRows ?? [],
+      },
+      (query) =>
+        query
+          .eq("session_id", sessionId)
+          .eq("universe", "ACL")
+          .eq("company_id", companyId)
+          .eq("work_context_id", workContextId),
+      {
+        delete: "ACL_SESSION_MENU_SNAPSHOT_DELETE_FAILED",
+        insert: "ACL_SESSION_MENU_SNAPSHOT_INSERT_FAILED",
+      },
+    );
   }
 
   return menuRows ?? [];
@@ -307,36 +393,31 @@ export async function rebuildAclUnionSessionMenuSnapshot(
   const unionMenuRows: MenuSnapshotRow[] = Array.from(rowsByMenuCode.values());
 
   if (sessionId) {
-    // No work_context_id filter on delete — clears both any stale
-    // per-context row from before this change and any prior union row.
-    const { error: deleteError } = await db
-      .schema("erp_cache")
-      .from("session_menu_snapshot")
-      .delete()
-      .eq("session_id", sessionId)
-      .eq("universe", "ACL")
-      .eq("company_id", companyId);
-
-    if (deleteError) {
-      throw new Error("ACL_UNION_SESSION_MENU_SNAPSHOT_DELETE_FAILED");
-    }
-
-    const { error: insertError } = await db
-      .schema("erp_cache")
-      .from("session_menu_snapshot")
-      .insert({
-        session_id: sessionId,
-        auth_user_id: authUserId,
+    // No work_context_id filter in scope — clears both any stale per-context
+    // row from before this change and any prior union row. The unchanged
+    // shortcut only fires when exactly one row exists AND it is the union row
+    // (work_context_id NULL) holding the same menu.
+    await writeSessionMenuSnapshot(
+      db,
+      {
+        sessionId,
+        authUserId,
         universe: "ACL",
-        company_id: companyId,
-        work_context_id: null,
-        snapshot_version: maxSnapshotVersion,
-        menu_json: unionMenuRows,
-      });
-
-    if (insertError) {
-      throw new Error("ACL_UNION_SESSION_MENU_SNAPSHOT_INSERT_FAILED");
-    }
+        companyId,
+        workContextId: null,
+        snapshotVersion: maxSnapshotVersion,
+        menuJson: unionMenuRows,
+      },
+      (query) =>
+        query
+          .eq("session_id", sessionId)
+          .eq("universe", "ACL")
+          .eq("company_id", companyId),
+      {
+        delete: "ACL_UNION_SESSION_MENU_SNAPSHOT_DELETE_FAILED",
+        insert: "ACL_UNION_SESSION_MENU_SNAPSHOT_INSERT_FAILED",
+      },
+    );
   }
 
   return unionMenuRows;
@@ -397,35 +478,28 @@ export async function rebuildGlobalAclMenuSnapshot(
 
   const unionMenuRows: MenuSnapshotRow[] = Array.from(rowsByMenuCode.values());
 
-  // 3. Delete any existing GLOBAL_ACL snapshot for this session
-  const { error: deleteError } = await db
-    .schema("erp_cache")
-    .from("session_menu_snapshot")
-    .delete()
-    .eq("session_id", sessionId)
-    .eq("universe", "GLOBAL_ACL");
-
-  if (deleteError) {
-    throw new Error("GLOBAL_ACL_SESSION_MENU_SNAPSHOT_DELETE_FAILED");
-  }
-
-  // 4. Insert the unified snapshot
-  const { error: insertError } = await db
-    .schema("erp_cache")
-    .from("session_menu_snapshot")
-    .insert({
-      session_id: sessionId,
-      auth_user_id: authUserId,
+  // 3+4. Replace the GLOBAL_ACL snapshot for this session (no write at all
+  // beyond the TTL touch when the unified menu is unchanged).
+  await writeSessionMenuSnapshot(
+    db,
+    {
+      sessionId,
+      authUserId,
       universe: "GLOBAL_ACL",
-      company_id: null,
-      work_context_id: null,
-      snapshot_version: 0,
-      menu_json: unionMenuRows,
-    });
-
-  if (insertError) {
-    throw new Error("GLOBAL_ACL_SESSION_MENU_SNAPSHOT_INSERT_FAILED");
-  }
+      companyId: null,
+      workContextId: null,
+      snapshotVersion: 0,
+      menuJson: unionMenuRows,
+    },
+    (query) =>
+      query
+        .eq("session_id", sessionId)
+        .eq("universe", "GLOBAL_ACL"),
+    {
+      delete: "GLOBAL_ACL_SESSION_MENU_SNAPSHOT_DELETE_FAILED",
+      insert: "GLOBAL_ACL_SESSION_MENU_SNAPSHOT_INSERT_FAILED",
+    },
+  );
 
   return unionMenuRows;
 }

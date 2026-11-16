@@ -54,10 +54,14 @@ const DEFAULT_VISIBLE_COLUMNS = [
   "value",
   "direction",
   "reference_document",
+  "output_material",
   "vendor_customer",
   "user_display",
   "entry_date_time",
 ];
+
+// Written to Excel as real numbers (calculable), never display strings.
+const NUMERIC_COLUMN_KEYS = new Set(["base_quantity", "pack_quantity", "value"]);
 
 function formatQuantity(value) {
   const amount = Number(value ?? 0);
@@ -351,6 +355,8 @@ export default function StockLedgerReportPage() {
   // — never both visible at once.
   const [page, setPage] = useState(1);
   const [machineWiseOpen, setMachineWiseOpen] = useState(false);
+  const [shownRows, setShownRows] = useState(null);
+  const [exporting, setExporting] = useState(false);
 
   const columnDefinitions = useMemo(
     () => [
@@ -373,6 +379,7 @@ export default function StockLedgerReportPage() {
       { key: "value", label: "Posted Value", width: "120px", align: "right", render: (row) => formatValue(row.value) },
       { key: "direction", label: "Direction", width: "100px" },
       { key: "reference_document", label: "Reference Document", width: "170px" },
+      { key: "output_material", label: "Output Material (SFG / SKU)", width: "280px" },
       { key: "vendor_customer", label: "Vendor / Customer", width: "260px" },
       { key: "user_display", label: "User", width: "220px" },
       { key: "entry_date_time", label: "Entry Date/Time", width: "180px" },
@@ -471,18 +478,41 @@ export default function StockLedgerReportPage() {
     return true;
   });
 
-  function handleExport() {
-    if (filteredRows.length === 0) {
+  // Real .xlsx (same helper as IN03/AC01), not CSV: quantity/value columns are
+  // written as numbers so they can be SUM()'d in Excel. Exports exactly what
+  // the grid shows -- the top search box AND every column funnel filter
+  // (shownRows is reported back by ErpDenseGrid after its own column filters).
+  const exportRows = shownRows ?? filteredRows;
+  async function handleExport() {
+    if (exportRows.length === 0 || exporting) {
       return;
     }
-    const csvColumns = gridColumns.map((column) => ({ key: column.key, label: column.label }));
-    downloadCsvFile({
-      fileName: `stock_ledger_${dateFrom || "from"}_${dateTo || "to"}.csv`,
-      columns: csvColumns,
-      // Exports whatever the search box currently shows, not the full fetch —
-      // matches ordinary spreadsheet "export what I see" expectations.
-      rows: filteredRows,
-    });
+    setExporting(true);
+    try {
+      const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
+      await downloadColoredExcelFile({
+        fileName: `stock_ledger_${dateFrom || "from"}_${dateTo || "to"}.xlsx`,
+        sheetName: "Stock Ledger",
+        columns: gridColumns.map((column) => ({
+          key: column.key,
+          label: column.label,
+          align: column.align,
+          width: column.width,
+          numFmt: NUMERIC_COLUMN_KEYS.has(column.key) ? "#,##0.000" : undefined,
+        })),
+        rows: exportRows,
+        getCellValue: (row, column) => {
+          if (NUMERIC_COLUMN_KEYS.has(column.key)) {
+            return row?.[column.key] == null ? "" : Number(row[column.key]);
+          }
+          return row?.[column.key] ?? "—";
+        },
+      });
+    } catch (exportError) {
+      setError(exportError instanceof Error ? exportError.message : "STOCK_LEDGER_EXPORT_FAILED");
+    } finally {
+      setExporting(false);
+    }
   }
 
   return (
@@ -520,8 +550,8 @@ export default function StockLedgerReportPage() {
               {
                 key: "export",
                 label: "Export Excel",
-                onClick: handleExport,
-                disabled: filteredRows.length === 0,
+                onClick: () => void handleExport(),
+                disabled: exportRows.length === 0 || exporting,
               },
               // §138.8 -- hidden entirely (not just disabled) for a company
               // with no MTS machines mapped, per business owner's own words.
@@ -691,6 +721,8 @@ export default function StockLedgerReportPage() {
             }
             virtualize
             rangeSelect
+            columnFilter
+            onFilteredRowsChange={setShownRows}
           />
         </ErpSectionCard>
       </div>
