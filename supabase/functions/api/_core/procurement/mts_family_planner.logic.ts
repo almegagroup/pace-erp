@@ -654,6 +654,21 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
   // must not be duplicated on every alternative member.
   // Owner 2026-10-28: the reserve applies across a no-demand GAP (later demand exists), not after the plan's last demand day —
   // a standalone item follows the same rule as the waterfall (no invented demand, no order after the plan).
+  // Owner 2026-11-16: the physical Min (and the Max refill) of a standalone item is `days` of the use that is ACTUALLY planned
+  // ahead of that day. The last month's rate only stands in over a gap with no planned use (Tot White). Using the last (peak)
+  // rate everywhere held Silres at ~2,330 KG = 35-48 days at its real November / January use, so lots landed far above Min.
+  const floorQty = (series: readonly number[], index: number, days: number, finalRate: number): number => {
+    if (finalRate <= EPSILON) return 0;
+    let lastActive = -1;
+    series.forEach((qty, i) => { if (qty > EPSILON) lastActive = i; });
+    let total = 0;
+    for (let d = index + 1; d <= index + days; d += 1) {
+      const qty = d < series.length ? series[d] : 0;
+      // Planned use counts as planned; a day after the plan's last use counts at the last approved rate (Tot White: no gap is "free").
+      total += qty > EPSILON ? qty : d > lastActive ? finalRate : 0;
+    }
+    return total;
+  };
   const finalOwnDailyUse = own.map((series) => {
     const finalRate = [...series].reverse().find((qty) => qty > EPSILON) ?? 0;
     let lastActive = -1;
@@ -1288,7 +1303,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       const cover = isSharedGroupMember[m]
         ? coverDays(sim.ownAvail[m][i], memberUse, i)
         : standaloneCoverageDays(sim.ownBalance[m][i], own[m], i, finalOwnDailyUse[m][i]);
-      const safetyFloor = isSharedGroupMember[m] ? 0 : finalOwnDailyUse[m][i] * t;
+      const safetyFloor = isSharedGroupMember[m] ? 0 : floorQty(own[m], i, t, finalOwnDailyUse[m][i]);
       const atCoverageTarget = cover !== null && cover <= t;
       const atPhysicalSafetyFloor = safetyFloor > EPSILON && sim.ownBalance[m][i] <= safetyFloor + EPSILON;
       if (atCoverageTarget || atPhysicalSafetyFloor) {
@@ -1306,7 +1321,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
           const coverAtArrival = isSharedGroupMember[m]
             ? coverDays(sim.ownAvail[m][ai], memberUse, ai)
             : standaloneCoverageDays(sim.ownBalance[m][ai], own[m], ai, finalOwnDailyUse[m][ai]);
-          const floorAtArrival = isSharedGroupMember[m] ? 0 : finalOwnDailyUse[m][ai] * t;
+          const floorAtArrival = isSharedGroupMember[m] ? 0 : floorQty(own[m], ai, t, finalOwnDailyUse[m][ai]);
           const coverOk = coverAtArrival === null || coverAtArrival > t;
           const floorOk = floorAtArrival <= EPSILON || sim.ownBalance[m][ai] > floorAtArrival + EPSILON;
           if (coverOk && floorOk) continue;
@@ -1410,7 +1425,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
       // reserve is being exhausted.  Refill to Target + order cycle using the
       // last approved non-zero daily own-use rate; do not simulate fake use.
       const safetyRequired = need.kind === "OWN" && !isSharedGroupMember[m]
-        ? Math.max(0, own[m][arrivalIndex] + finalOwnDailyUse[m][need.index] * window - availableBeforeArrival)
+        ? Math.max(0, own[m][arrivalIndex] + floorQty(own[m], need.index, window, finalOwnDailyUse[m][need.index]) - availableBeforeArrival)
         : 0;
       const required = Math.max(demandRequired, safetyRequired);
       const requiredByNeed = [required];
@@ -1426,7 +1441,7 @@ function planFamilyComponent(input: FamilyPlannerInput, tiltBasis: TiltBasis): F
           ? useAhead(otherMemberUse, otherBefore, otherWindow + 1) - Math.max(0, otherBefore >= 0 ? sim.ownBalance[m][otherBefore] : Number(input.opening_qty_by_material[id] ?? 0))
           : useAhead(other.pool!.demand, otherBefore, otherWindow + 1) - (otherBefore >= 0 ? sim.poolFree[otherPoolIndex][otherBefore] : 0);
         const otherSafetyRequired = other.kind === "OWN" && !isSharedGroupMember[m]
-          ? Math.max(0, own[m][arrivalIndex] + finalOwnDailyUse[m][other.index] * otherWindow - availableBeforeArrival)
+          ? Math.max(0, own[m][arrivalIndex] + floorQty(own[m], other.index, otherWindow, finalOwnDailyUse[m][other.index]) - availableBeforeArrival)
           : 0;
         requiredByNeed.push(Math.max(otherDemandRequired, otherSafetyRequired));
       }
