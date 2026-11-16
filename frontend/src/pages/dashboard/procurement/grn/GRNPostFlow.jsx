@@ -402,6 +402,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
     if (shipToMissing) { setError("Ship To Location Mentioned In Invoice is required for a CRCP-enabled document. (Tab: Receipt)"); setActiveTab(TABS.indexOf("Receipt")); return; }
     if (gstMissing) { setError("GST % from the invoice is required. Enter 0 when the invoice is zero-rated. (Tab: Accounts)"); setActiveTab(TABS.indexOf("Accounts")); return; }
     if (geLine.batch_tracking_required && !batchLotNumber.trim()) { setError("Batch/lot number is required for this material. (Tab: Pack & shelf life)"); setActiveTab(TABS.indexOf("Pack & shelf life")); return; }
+    if (!transporterId) { setError("Transporter is required. (Tab: Transporter)"); setActiveTab(TABS.indexOf("Transporter")); return; }
     if (isBulk && !physicalContainerNumber.trim()) { setError("Physical Container Number is required for a Bulk GRN. (Tab: Transporter)"); setActiveTab(TABS.indexOf("Transporter")); return; }
 
     setSaving(true);
@@ -796,7 +797,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
             </p>
             <div className="grid gap-3 md:grid-cols-3">
               <div className="md:col-span-3">
-                <ErpDenseFormRow label="Transporter">
+                <ErpDenseFormRow label={<>Transporter <span className="text-red-500">*</span></>}>
                   {transporterId && transporterName ? (
                     <div className="flex items-center gap-2">
                       <span className="flex-1 h-9 flex items-center px-3 border border-emerald-300 bg-emerald-50 text-sm text-emerald-900 rounded">

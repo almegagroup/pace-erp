@@ -952,6 +952,9 @@ export async function createAndPostGRNFromLineHandler(
     if (discrepancyQty !== 0 && !discrepancyRemarks) {
       return procurementErrorResponse(req, ctx, "GRN_DISCREPANCY_REMARKS_REQUIRED", 400, "Remarks are required when received qty differs from invoice qty.");
     }
+    if (!toTrimmedString(body.transporter_id)) {
+      return procurementErrorResponse(req, ctx, "GRN_TRANSPORTER_REQUIRED", 400, "Transporter is required.");
+    }
 
     // UOM conversion: if PO UOM ≠ base UOM, stock qty = received_qty × per_pack_qty
     const baseUomCode = toTrimmedString(material.base_uom_code) || toTrimmedString(geLine.uom_code) || "PCS";
