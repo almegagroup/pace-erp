@@ -1464,6 +1464,8 @@ export type InboundEvent = {
   original_date?: string | null;
   /** Owner 2026-10-30: a Sub-CSN share moves together with the other shares of its Mother CSN (one vessel); names the other companies' shares. */
   shared_note?: string;
+  /** Owner 2026-11-16: a Sub-CSN share whose Mother CSN is in transit is in transit too (the child's own status can still say ORD). */
+  mother_in_transit?: boolean;
 };
 
 /**
@@ -1635,11 +1637,12 @@ export function bucketInbound(events: InboundEvent[], calendar: PlanningCalendar
       continue;
     }
     buckets.total += event.qty;
-    if (event.kind === "SCHEDULED_LOT" || event.kind === "PO_REMAINDER" || event.kind === "SUB_CSN_PLANNED") buckets.open_po += event.qty;
+    const notShipped = event.kind === "SCHEDULED_LOT" || event.kind === "PO_REMAINDER" || (event.kind === "SUB_CSN_PLANNED" && !event.mother_in_transit);
+    if (notShipped) buckets.open_po += event.qty;
     else buckets.dispatched += event.qty;
     if (!event.date) { buckets.unknown += event.qty; assumeToday(event.qty); continue; }
     if (event.date < calendar.asOf) { buckets.overdue += event.qty; assumeToday(event.qty); continue; }
-    const isDispatched = !(event.kind === "SCHEDULED_LOT" || event.kind === "PO_REMAINDER" || event.kind === "SUB_CSN_PLANNED");
+    const isDispatched = !notShipped;
     if (event.date <= calendar.cmEnd) { buckets.cm += event.qty; if (isDispatched) buckets.cm_dispatched += event.qty; }
     else if (event.date <= calendar.nmEnd) { buckets.nm += event.qty; if (isDispatched) buckets.nm_dispatched += event.qty; }
     else { buckets.later += event.qty; continue; }

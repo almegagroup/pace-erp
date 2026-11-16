@@ -212,6 +212,9 @@ const INBOUND_KIND_LABELS = {
   SUB_CSN_PLANNED: "Sub-CSN transfer (planned)",
 };
 
+/** A Sub-CSN share whose Mother CSN is in transit is in transit too (its own status can still say ORD). */
+const inboundKindLabel = (e) => (e.kind === "SUB_CSN_PLANNED" && e.mother_in_transit ? "Sub-CSN (mother in transit)" : INBOUND_KIND_LABELS[e.kind] ?? e.kind);
+
 export default function MtsRequirementPage() {
   const { runtimeContext } = useMenu();
   const today = todayLocal();
@@ -558,7 +561,7 @@ function SourceDetail({ row, du }) {
     { key: "prodshades", label: "Prodshade(s) (PO21 plan)", width: "260px", render: (p) => p.prodshades.join("; "), copyValue: (p) => p.prodshades.join("; ") },
   ];
   const inboundColumns = [
-    { key: "kind", label: "Kind", width: "150px", render: (e) => INBOUND_KIND_LABELS[e.kind] ?? e.kind, copyValue: (e) => INBOUND_KIND_LABELS[e.kind] ?? e.kind },
+    { key: "kind", label: "Kind", width: "150px", render: (e) => inboundKindLabel(e), copyValue: (e) => inboundKindLabel(e) },
     { key: "reference", label: "Document (PO / CSN / GE / Lot)", width: "360px" },
     { key: "date", label: "ETA to Plant", width: "100px", render: (e) => e.date ?? "UNKNOWN", copyValue: (e) => e.date ?? "UNKNOWN" },
     { key: "date_source", label: "Date Source", width: "180px" },
