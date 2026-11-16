@@ -1520,6 +1520,15 @@ const CSN_CLOSED = new Set(["GRD", "GED", "KOF", "CAN"]);
  * has sub-CSNs is skipped (its children carry the quantity). Quantity promised
  * to another company by a Sub-CSN (committed_transfer_base) is removed first.
  */
+/**
+ * What is really still expected on a PO line: its open quantity minus what was knocked off.  The CSN Tracker's knock-off only adds to
+ * `knocked_off_qty` (it never reduces `open_qty`), so without this a knocked-off 0.5 MT short-delivery counted as an arrival for ever
+ * (owner 2026-11-16, DOLTEX 30/80: three lines, each 42 MT ordered, 41.5 MT delivered, 0.5 MT knocked off).
+ */
+export function effectiveOpenQty(openQty: number | null | undefined, knockedOffQty: number | null | undefined): number {
+  return Math.max(0, Number(openQty ?? 0) - Number(knockedOffQty ?? 0));
+}
+
 export function partitionPoLineInbound(line: PoLineInboundInput, asOf: string, warnings: Warning[]): InboundEvent[] {
   const events: InboundEvent[] = [];
   const ref = `PO ${line.po_number}/${line.line_number}`;

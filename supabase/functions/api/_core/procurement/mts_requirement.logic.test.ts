@@ -37,6 +37,7 @@ import {
   moqInBase,
   nmRequiredDays,
   partitionPoLineInbound,
+  effectiveOpenQty,
   type PlanLineVersion,
   type PolicyRow,
   type RequirementInput,
@@ -1103,4 +1104,19 @@ Deno.test("Coverage: a group member whose allocated demand ends because its own 
   // Control: stock well above the allocated demand with the plan ended = really beyond the plan.
   const beyond = coverageDays(90000, calendar, demand, null, 0);
   assertEqual(beyond.days, null, "stock left over after the plan ended is still 'beyond plan'");
+});
+
+Deno.test("PO22 knock-off: a knocked-off remainder is no longer an expected arrival", () => {
+  assertEqual(effectiveOpenQty(0.5, 0.5), 0, "42 MT ordered, 41.5 received, 0.5 knocked off: nothing is expected");
+  assertEqual(effectiveOpenQty(42, 0.5), 41.5, "42 open, 0.5 knocked off, CSN dispatched 41.5: the CSN is all that is left");
+  assertEqual(effectiveOpenQty(10, 0), 10, "no knock-off changes nothing");
+  assertEqual(effectiveOpenQty(1, 5), 0, "never negative");
+  assertEqual(effectiveOpenQty(null, null), 0, "missing values count as 0");
+  const warnings: Warning[] = [];
+  const events = partitionPoLineInbound({
+    material_id: "RM-A", po_line_id: "line", po_number: "ASCP2627-0192", line_number: 1, open_qty: effectiveOpenQty(42, 0.5), base_per_po_unit: 1,
+    expected_delivery_date: "2026-10-28", at_gate: [], lots: [],
+    csns: [{ id: "c", csn_number: "3000000370", status: "TRN", dispatch_qty: 41.5, received_qty: 0, eta: "2026-11-18", is_mother_with_children: false }],
+  } as never, "2026-11-16", warnings);
+  assertEqual(events.map((e) => [e.kind, e.qty]), [["IN_TRANSIT", 41.5]], "only the dispatched 41.5 remains, no 0.5 'open PO' remainder");
 });
