@@ -454,6 +454,15 @@ function writeBlocks(sheet, companies, kind, { filter = () => true, sections = f
       stockRow.getCell(1).font = { italic: true };
     }
     if (b.first_shortage_day || (b.gaps ?? []).length) factRow.getCell(1).font = { bold: true, color: { argb: RED } };
+    // Owner 2026-11-17: a stand-alone item already below its Min today says so (same wording as a family level) and names the shipment on the road.
+    if (!b.is_family) {
+      const first = (b.rows ?? [])[0];
+      const road = (b.rows ?? []).filter((r) => r.day > (first?.day ?? "") && (r.statuses ?? []).some((st) => st === "IN_TRANSIT" || st === "AT_GATE")).map((r) => r.day).sort()[0];
+      if (first && first.min_days !== null && first.min_days !== undefined && b.target_days !== null && b.target_days !== undefined && Number(first.min_days) < Number(b.target_days)) {
+        const line = sheet.addRow([`BELOW MIN TODAY (${Math.floor(Number(first.min_days))} d < Min ${b.target_days} d)${road ? `, until the shipment on the road lands ${day(road)}` : ""}. An order that has not shipped cannot fix these days.`]);
+        line.getCell(1).font = { bold: true, color: { argb: RED } };
+      }
+    }
     // Owner 2026-10-28: the family is reported as a whole (every group and the exclusive use of its members together); each level
     // is listed beneath, narrow first, with its own Min / Max / Critical days, reserve and next Min date.
     if (b.is_family && (b.waterfall?.levels ?? []).length) {

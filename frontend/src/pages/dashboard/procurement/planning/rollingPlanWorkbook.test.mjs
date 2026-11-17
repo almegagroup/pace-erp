@@ -320,3 +320,15 @@ test("a level already below Min today says so and names the shipment on the road
   assert.ok(cells.some((l) => l.includes("An order that has not shipped cannot fix these days.")), "and why no order date is chased");
   await wb.xlsx.writeBuffer();
 });
+
+test("a stand-alone item already below Min today says so and names the shipment on the road (not a family level)", async () => {
+  const base = company("a", "Almeha Coatings");
+  const solo = { ...base.blocks[0], title: "SILRES", is_family: false, members: ["SILRES"], target_days: 25, rows: [
+    { day: "2026-11-16", opening: 2000, arrivals: 0, dispatch: null, use: 100, closing: 1900, max_days: 19, min_stock: 1900, min_days: 19, references: [], qtys: [], suppliers: [], statuses: [], best_dates: [] },
+    { day: "2026-11-22", opening: 1300, arrivals: 2500, dispatch: null, use: 100, closing: 3700, max_days: 37, min_stock: 1200, min_days: 12, references: ["PO P1/1 · CSN 3000000352 (TRN)"], qtys: [2500], suppliers: ["X"], statuses: ["IN_TRANSIT"], best_dates: [""] }] };
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [solo] }], asOf: "2026-11-16" });
+  const cells = [];
+  wb.getWorksheet("RM Stand-alone").eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
+  assert.ok(cells.some((l) => l.includes("BELOW MIN TODAY (19 d < Min 25 d), until the shipment on the road lands")), "the stand-alone item says it is below Min today");
+  await wb.xlsx.writeBuffer();
+});
