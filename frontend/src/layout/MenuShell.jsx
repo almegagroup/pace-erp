@@ -45,6 +45,7 @@ import { subscribeRegisteredScreenCommands } from "../store/erpCommandPalette.js
 import { subscribeRegisteredScreenHotkeys } from "../store/erpScreenHotkeys.js";
 import {
   getNetworkActivitySnapshot,
+  releaseBlockingActivity,
   subscribeNetworkActivity,
 } from "../store/networkActivity.js";
 import { pushToast } from "../store/uiToast.js";
@@ -2185,6 +2186,21 @@ export default function MenuShell() {
           <div className="text-xs uppercase tracking-[0.16em] text-slate-500">
             Blocking actions: {networkActivity.blockingInFlightCount}
           </div>
+          {busyElapsedSeconds >= 120 ? (
+            <div className="grid gap-2 border border-amber-200 bg-amber-50 px-4 py-3">
+              <p className="text-sm leading-6 text-slate-700">
+                This is taking unusually long. The server may already have finished and the answer got lost on the way.
+                Do not press Save again - release the screen, then open the record or press Refresh to check.
+              </p>
+              <button
+                type="button"
+                onClick={() => releaseBlockingActivity()}
+                className="justify-self-start border border-amber-700 bg-white px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.14em] text-amber-900"
+              >
+                Stop waiting
+              </button>
+            </div>
+          ) : null}
         </div>
       </BlockingLayer>
     </div>
