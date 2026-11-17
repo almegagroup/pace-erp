@@ -7,6 +7,9 @@
 --    LR date + 5 days in gate_entry, gate_exit_inbound, goods_receipt (grn_date + posting_date), stock_document
 --    (posting_date + document_date), stock_ledger (posting_date), consignment_note (gate_entry_date + grn_date).
 -- stock_ledger is append-only through two rules; they are dropped for this transaction and re-created identically.
+-- NOTE: the before-image copy goes into erp_history.fg_sto_grn_cleanup_20261117 (id, source_table, source_key, row_data jsonb,
+-- archived_at). That table was created by hand on prod only (no migration, by design -- this is a one-off MCP correction);
+-- create it the same way before re-running this script anywhere else, and drop it once the backup is no longer needed.
 BEGIN;
 
 CREATE TEMP TABLE _ge_all ON COMMIT DROP AS
