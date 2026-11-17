@@ -603,7 +603,8 @@ async function loadSubCsnTransfers(companyId: string, materials: Map<string, Mat
     const others = siblingRows.filter((s) => text(s.mother_csn_id) === text(sub.mother_csn_id) && text(s.id) !== text(sub.id));
     if (others.length === 0) return undefined;
     const list = others.map((s) => `${companyCode.get(text(s.consignee_company_id)) || "another company"} ${new Intl.NumberFormat("en-IN").format(Number(s.dispatch_qty ?? 0))} ${text(s.po_uom_code)}`.trim()).join(", ");
-    return `Mother CSN ${motherNumber.get(text(sub.mother_csn_id)) || "?"} also feeds ${list}`;
+    const poNo = poNumberById.get(text(sub.po_id));
+    return `Mother CSN ${motherNumber.get(text(sub.mother_csn_id)) || "?"}${poNo ? ` (PO ${poNo})` : ""} also feeds ${list}`;
   };
   const stoIds = unique(relevant.map((s) => text(s.sto_id)).filter(Boolean));
   const stoLineIds = unique(relevant.map((s) => text(s.sto_line_id)).filter(Boolean));

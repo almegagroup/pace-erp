@@ -279,3 +279,17 @@ test("QA stock + a shortage: the family title and the QA row say it may be a QA 
   assert.ok(cells.some((l) => l.includes("may be a QA delay, not a missing order")), "the QA row warns before ordering");
   await wb.xlsx.writeBuffer();
 });
+
+test("a CSN is never named without its PO: section 2 Order column and the held-CSN table (owner 2026-11-17)", async () => {
+  const base = company("a", "Almeha Coatings");
+  const sections = [{ label: "Exclusive — Gabrosa", kind: "OWN", members: ["Gabrosa"], target_days: 30, max_days: 60, critical_days: 20,
+    rows: [{ kind: "Existing order", ref: "PO ASCP2627-0192/1 · CSN 3000000370 (TRN)", material: "Gabrosa", supplier: "DAIREN", status: "In transit", lot_qty: 41500, existing_eta: "2026-11-18", engine_eta: "2026-11-18", min_a: 40, max_a: 80, min_b: 40, max_b: 80 }] }];
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, held_csns: [{ csn_number: "3000000999", po_number: "ASCP2627-0300/1", material: "VAE A", supplier: "DAIREN", qty: 25000, uom: "KG", previous_status: "TRN", reason: "x", held_at: "2026-10-31", eta: "2026-11-06" }],
+    blocks: [{ ...base.blocks[0], level_sections: sections, level_today: [], excess_after: [] }] }], asOf: "2026-11-16" });
+  const cells = [];
+  wb.eachSheet((ws) => ws.eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? "")))));
+  assert.ok(cells.some((l) => l.includes("PO ASCP2627-0192/1 · CSN 3000000370 (in transit)")), "Order column names PO and CSN together");
+  assert.ok(!cells.some((l) => /^CSN 3000000370/m.test(l)), "no line starts with the CSN alone");
+  assert.ok(cells.includes("ASCP2627-0300/1") && cells.includes("3000000999"), "held CSN table lists the PO next to the CSN");
+  await wb.xlsx.writeBuffer();
+});

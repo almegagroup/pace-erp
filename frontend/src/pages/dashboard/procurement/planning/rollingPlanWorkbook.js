@@ -289,7 +289,7 @@ function writeLeanFamily(sheet, b, company) {
   const proTxt = (v) => (v === null || v === undefined ? "—" : qty(v));
   const dTxt = (v) => (v === null || v === undefined ? "—" : `${v} d`);
   const mxTxt = (v) => (v === null || v === undefined ? "beyond plan" : `${v} d`);
-  const refName = (ref) => String(ref).split(" · ").pop().replace(" (ORD)", "").replace(" (TRN)", " (in transit)");
+  const refName = (ref) => String(ref).replace(" (ORD)", "").replace(" (TRN)", " (in transit)"); // PO and CSN both (owner 2026-11-17)
 
   // ── 1. current status
   title("1. CURRENT STATUS — what each level holds today and where its daily use comes from", { size: 12, fillArgb: L_BLUE });
@@ -527,7 +527,7 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
     const held = summary.addRow(["CSNs on Hold — excluded from every planning total"]);
     held.getCell(1).font = { bold: true, color: { argb: "9A3412" } };
     addTable(summary, [
-      { label: "Company", key: "company" }, { label: "CSN", key: "csn_number" }, { label: "Material", key: "material" },
+      { label: "Company", key: "company" }, { label: "PO", key: "po_number" }, { label: "CSN", key: "csn_number" }, { label: "Material", key: "material" },
       { label: "Supplier", key: "supplier" }, { label: "Qty", value: (r) => num(r.qty), num: true }, { label: "UoM", key: "uom" },
       { label: "Before Hold", key: "previous_status" }, { label: "Hold reason", key: "reason" }, { label: "Held on", value: (r) => day(r.held_at) }, { label: "ETA", value: (r) => day(r.eta) },
     ], heldCsns, { color: () => AMBER });

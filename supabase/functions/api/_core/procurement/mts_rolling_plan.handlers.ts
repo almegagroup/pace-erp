@@ -121,7 +121,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       csnIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(csnIds, (chunk) => serviceRoleClient
         .schema("erp_procurement").from("consignment_note").select("id, vendor_id, csn_type, etd, bl_date, eta_at_port, ata_at_port, eta_to_plant_calculated").in("id", chunk)),
       serviceRoleClient.schema("erp_procurement").from("consignment_note")
-        .select("csn_number, material_id, vendor_id, dispatch_qty, po_qty, po_uom_code, hold_reason, inactive_from_status, inactive_at, eta_to_plant_calculated")
+        .select("csn_number, po_id, material_id, vendor_id, dispatch_qty, po_qty, po_uom_code, hold_reason, inactive_from_status, inactive_at, eta_to_plant_calculated")
         .or(`company_id.eq.${companyId},consignee_company_id.eq.${companyId}`).eq("status", "HLD").order("inactive_at", { ascending: false }).limit(10000),
       materialIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient
         .schema("erp_procurement").from("consignment_note").select("material_id, ata_at_port, eta_at_port, gate_entry_date")
@@ -137,6 +137,11 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     const vendorRows = vendorIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(vendorIds, (chunk) => serviceRoleClient
       .schema("erp_master").from("vendor_master").select("id, vendor_name").in("id", chunk));
     const vendorName = new Map(vendorRows.map((v) => [text(v.id), text(v.vendor_name) || "—"]));
+    // Owner 2026-11-17: a CSN is never named without its PO.
+    const heldPoIds = unique(heldCsns.map((c) => text(c.po_id)).filter(Boolean));
+    const heldPoRows = heldPoIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(heldPoIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("purchase_order").select("id, po_number").in("id", chunk));
+    const poNumberOfId = new Map(heldPoRows.map((r) => [text(r.id), text(r.po_number)]));
     const vendorByPo = new Map(pos.map((p) => [text(p.po_number), vendorName.get(text(p.vendor_id)) ?? null]));
     const vendorByCsn = new Map(csnRows.map((c) => [text(c.id), vendorName.get(text(c.vendor_id)) ?? null]));
     // CSN Tracker legs of every inbound piece: ATD (BL date) else ETD, ATA at port else ETA at port, ETA to plant (owner 2026-11-04).
@@ -147,7 +152,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     }));
     const recOf = (csnId?: string | null) => (csnId ? recordedByCsn.get(csnId) ?? null : null);
     const held_csns = heldCsns.map((c) => ({
-      csn_number: text(c.csn_number), material: nameOf(text(c.material_id)), supplier: vendorName.get(text(c.vendor_id)) ?? "—",
+      csn_number: text(c.csn_number), po_number: poNumberOfId.get(text(c.po_id)) || "—", material: nameOf(text(c.material_id)), supplier: vendorName.get(text(c.vendor_id)) ?? "—",
       qty: Number(c.dispatch_qty ?? c.po_qty ?? 0), uom: text(c.po_uom_code), previous_status: text(c.inactive_from_status),
       reason: text(c.hold_reason), held_at: text(c.inactive_at).slice(0, 10) || null, eta: text(c.eta_to_plant_calculated) || null,
     }));
