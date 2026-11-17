@@ -37,7 +37,9 @@ function fail(req: Request, ctx: Ctx, code: string, status: number, message: str
 
 type Candidate = {
   // INCLUSIVE = net GST out of a gross PO rate (also stores the net grn_rate); RESYNC = leg rate differs from the commercial rate.
-  kind: "INCLUSIVE" | "RESYNC";
+  // QA_RATE = an Inward QA decision leg (QI -> Unrestricted/Blocked/...) posted at a rate that is not the GRN leg's own rate
+  //           (the PO-UoM rate was used on a base-UoM quantity: MT rate on kg = 1000x).
+  kind: "INCLUSIVE" | "RESYNC" | "QA_RATE";
   grn_id: string;
   grn_number: string;
   company_id: string;
@@ -53,7 +55,13 @@ type Candidate = {
 async function findCandidates(ctx: Ctx, materialId: string): Promise<{ candidates: Candidate[]; skipped: JsonRecord[] }> {
   const inclusive = await findInclusiveCandidates(ctx, materialId);
   const resync = await findResyncCandidates(ctx, materialId, new Set(inclusive.candidates.map((c) => c.grn_id)));
-  return { candidates: [...inclusive.candidates, ...resync.candidates], skipped: [...inclusive.skipped, ...resync.skipped] };
+  // GRNs another kind is already correcting are left to it, so no receipt is re-valued twice in one action.
+  const claimed = new Set([...inclusive.candidates, ...resync.candidates].map((c) => c.grn_id));
+  const qaRate = await findQaRateCandidates(ctx, materialId, claimed);
+  return {
+    candidates: [...inclusive.candidates, ...resync.candidates, ...qaRate.candidates],
+    skipped: [...inclusive.skipped, ...resync.skipped, ...qaRate.skipped],
+  };
 }
 
 async function findInclusiveCandidates(ctx: Ctx, materialId: string): Promise<{ candidates: Candidate[]; skipped: JsonRecord[] }> {
@@ -133,6 +141,88 @@ async function findInclusiveCandidates(ctx: Ctx, materialId: string): Promise<{ 
 }
 
 const RESYNC_REASON = "GRN valuation re-sync (receipt leg rate vs commercial rate)";
+const QA_RATE_REASON = "Inward QA leg rate set to the GRN leg rate (UoM mix-up)";
+const QA_RATE_TOLERANCE = 0.005; // 0.5 %
+
+// Inward QA posted the usage-decision legs at the GRN's PO-UoM rate while the quantity is in base UoM (MT rate on kg: 1000x).
+// For every QA decision leg that went IN to a bucket, the right leg rate is the GRN's own receipt-leg rate
+// (commercial rate / base-per-PO-unit), the same figure the GRN posted. Left alone: GRNs another correction already handles,
+// and GRNs with AC01 landed cost (their leg legitimately differs; re-saving AC01 re-values the QA legs through the cascade).
+async function findQaRateCandidates(ctx: Ctx, materialId: string, claimedGrnIds: Set<string>): Promise<{ candidates: Candidate[]; skipped: JsonRecord[] }> {
+  const skipped: JsonRecord[] = [];
+  const qaDocs: JsonRecord[] = [];
+  for (let from = 0; ; from += 1000) {
+    let query = serviceRoleClient.schema("erp_procurement").from("inward_qa_document")
+      .select("id, grn_id, material_id, company_id").not("grn_id", "is", null)
+      .order("id", { ascending: true }).range(from, from + 999);
+    if (materialId) query = query.eq("material_id", materialId);
+    const { data, error } = await query;
+    if (error) throw new Error("GST_BACKFILL_LOOKUP_FAILED");
+    qaDocs.push(...((data ?? []) as JsonRecord[]));
+    if ((data ?? []).length < 1000) break;
+  }
+  const qaPool = qaDocs.filter((q) => !claimedGrnIds.has(text(q.grn_id)));
+  if (qaPool.length === 0) return { candidates: [], skipped };
+
+  const grnIds = [...new Set(qaPool.map((q) => text(q.grn_id)))];
+  const grns = await fetchInChunks<JsonRecord>(grnIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+    .select("id, grn_number, status, received_qty, grn_rate, confirmed_rate, stock_ledger_id").in("id", chunk).order("id", { ascending: true }));
+  const grnById = new Map(grns.map((g) => [text(g.id), g]));
+  const grnLedgerRows = await fetchInChunks<JsonRecord>(
+    grns.map((g) => text(g.stock_ledger_id)).filter(Boolean),
+    (chunk) => serviceRoleClient.schema("erp_inventory").from("stock_ledger").select("id, direction, quantity").in("id", chunk).order("id", { ascending: true }),
+  );
+  const grnLedgerById = new Map(grnLedgerRows.map((row) => [text(row.id), row]));
+  const landed = await fetchInChunks<JsonRecord>(grnIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("landed_cost")
+    .select("id, grn_id, total_cost").in("grn_id", chunk).order("id", { ascending: true }));
+  const landedGrnIds = new Set(landed.filter((row) => Number(row.total_cost ?? 0) > 0).map((row) => text(row.grn_id)));
+
+  const qaIds = qaPool.map((q) => text(q.id));
+  const stockDocs = await fetchInChunks<JsonRecord>(qaIds, (chunk) => serviceRoleClient.schema("erp_inventory").from("stock_document")
+    .select("id, reference_document_id").eq("reference_document_type", "QA").in("reference_document_id", chunk).order("id", { ascending: true }));
+  const qaByStockDoc = new Map(stockDocs.map((d) => [text(d.id), text(d.reference_document_id)]));
+  const qaById = new Map(qaPool.map((q) => [text(q.id), q]));
+  const legs = await fetchInChunks<JsonRecord>([...qaByStockDoc.keys()], (chunk) => serviceRoleClient.schema("erp_inventory").from("stock_ledger")
+    .select("id, stock_document_id, direction, quantity, value, valuation_rate").eq("direction", "IN").in("stock_document_id", chunk).order("id", { ascending: true }));
+  const markers = await fetchInChunks<JsonRecord>(legs.map((l) => text(l.id)), (chunk) => serviceRoleClient.schema("erp_inventory").from("valuation_correction_log")
+    .select("id, target_ledger_id").in("reason", [QA_RATE_REASON, RESYNC_REASON]).in("target_ledger_id", chunk).order("id", { ascending: true }));
+  const doneLedgerIds = new Set(markers.map((row) => text(row.target_ledger_id)));
+
+  const scoped = new Set<string>();
+  const candidates: Candidate[] = [];
+  for (const leg of legs) {
+    if (doneLedgerIds.has(text(leg.id))) continue;
+    const qa = qaById.get(qaByStockDoc.get(text(leg.stock_document_id)) ?? "");
+    const grn = qa ? grnById.get(text(qa.grn_id)) : null;
+    if (!qa || !grn || text(grn.status) !== "POSTED") continue;
+    const grnLedger = grnLedgerById.get(text(grn.stock_ledger_id));
+    const grnQty = Number(grnLedger?.quantity ?? 0);
+    const received = Number(grn.received_qty ?? 0);
+    const commercial = Number(grn.confirmed_rate ?? grn.grn_rate ?? 0);
+    if (!grnLedger || text(grnLedger.direction) !== "IN" || !(grnQty > 0) || !(received > 0) || !(commercial > 0)) continue;
+    if (landedGrnIds.has(text(grn.id))) { skipped.push({ grn_number: grn.grn_number, reason: "has AC01 landed cost - re-save it in AC01" }); continue; }
+    const target = commercial / (grnQty / received);
+    const quantity = Number(leg.quantity ?? 0);
+    const oldRate = Number(leg.valuation_rate ?? 0);
+    if (!(quantity > 0) || Math.abs(oldRate - target) <= QA_RATE_TOLERANCE * Math.max(target, 0.01)) continue;
+    const companyId = text(qa.company_id);
+    if (!scoped.has(companyId)) { await assertCompanyScope(ctx, companyId); scoped.add(companyId); }
+    candidates.push({
+      kind: "QA_RATE",
+      grn_id: text(grn.id),
+      grn_number: text(grn.grn_number),
+      company_id: companyId,
+      material_id: text(qa.material_id),
+      ledger_id: text(leg.id),
+      target_grn_rate: Number(grn.grn_rate ?? 0),
+      old_grn_rate: Number(grn.grn_rate ?? 0),
+      quantity_base: quantity,
+      old_leg_rate: oldRate,
+      new_leg_rate: target,
+    });
+  }
+  return { candidates, skipped };
+}
 
 async function findResyncCandidates(ctx: Ctx, materialId: string, alreadyInclusive: Set<string>): Promise<{ candidates: Candidate[]; skipped: JsonRecord[] }> {
   const skipped: JsonRecord[] = [];
@@ -247,7 +337,7 @@ async function applyMaterial(ctx: Ctx, materialId: string, reason: string): Prom
   const results = await cascadeRecalculate(
     candidates.map((c) => ({ ledgerId: c.ledger_id, newRate: c.new_leg_rate })),
     ctx.auth_user_id,
-    candidates.some((c) => c.kind === "RESYNC") ? RESYNC_REASON : reason,
+    candidates.some((c) => c.kind === "RESYNC") ? RESYNC_REASON : candidates.some((c) => c.kind === "QA_RATE") ? QA_RATE_REASON : reason,
   );
   const okLedgers = new Set(results.filter((r) => r.ok).map((r) => r.ledgerId));
   const done = candidates.filter((c) => okLedgers.has(c.ledger_id));
