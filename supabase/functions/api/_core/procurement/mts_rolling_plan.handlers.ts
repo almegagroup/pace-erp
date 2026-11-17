@@ -357,7 +357,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
             min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, excess_split: stB?.excess_split ?? null,
             level_status: statusOf(stB, !b), reserve_after: stB?.reserve ?? null, flag,
             prorata_a: proRata(lv, dayA), prorata_b: proRata(lv, dayB),
-            min_a_before: dayBefore(fam.days_a, lv.level_key, dayA), min_b_before: dayBefore(fam.days_b, lv.level_key, dayB),
+            // Owner 2026-11-17: the 'before landing' cover of a new order is on the SAME basis as section 2 (stock + recorded orders only, no suggested lot).
+            min_a_before: dayBefore(fam.days_a_pure, lv.level_key, dayA), min_b_before: dayBefore(fam.days_b_pure, lv.level_key, dayB),
             alternatives: buy ? altText(alternativesFor(buy, dayA ?? dayB)) : "",
           });
         }

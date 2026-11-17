@@ -332,3 +332,12 @@ test("a stand-alone item already below Min today says so and names the shipment 
   assert.ok(cells.some((l) => l.includes("BELOW MIN TODAY (19 d < Min 25 d), until the shipment on the road lands")), "the stand-alone item says it is below Min today");
   await wb.xlsx.writeBuffer();
 });
+
+test("section 3 says which basis its Min / Max use (same as section 2 before landing)", async () => {
+  const base = company("a", "Almeha Coatings");
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], level_sections: [], level_today: [], excess_after: [], projection_total: [] }] }], asOf: "2026-11-16" });
+  const cells = [];
+  wb.getWorksheet("RM RDP").eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
+  assert.ok(cells.some((l) => l.includes("Before landing = stock + recorded orders only (the same basis as section 2)")), "section 3 names its basis");
+  await wb.xlsx.writeBuffer();
+});
