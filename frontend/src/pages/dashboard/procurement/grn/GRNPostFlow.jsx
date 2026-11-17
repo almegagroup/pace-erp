@@ -17,6 +17,14 @@ function statusBadge(status) {
   return <span className="inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold bg-amber-100 text-amber-800">PENDING</span>;
 }
 
+// FG keeps its SKU code in material_name; document_name is the readable name, so lead with that.
+function materialLabel(row) {
+  const name = row?.material_name || "";
+  const doc = row?.document_name || "";
+  if (doc && name && doc !== name) return `${name} — ${doc}`;
+  return doc || name || "—";
+}
+
 function vendorDisplay(row) {
   if (!row?.vendor_name) return "—";
   return `${row.vendor_code || ""} — ${row.vendor_name}`.replace(/^( — )/, "");
@@ -144,7 +152,7 @@ function GELinesScreen({ geData, onSelectLine, onBack, successNotice }) {
                 render: (row) => (
                   <span>
                     {row.external_sku && <span className="font-medium text-slate-900">{row.external_sku} — </span>}
-                    <span className={row.external_sku ? "text-slate-700" : "font-medium text-slate-900"}>{row.material_name || "—"}</span>
+                    <span className={row.external_sku ? "text-slate-700" : "font-medium text-slate-900"}>{materialLabel(row)}</span>
                   </span>
                 ),
               },
@@ -459,7 +467,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
   return (
     <ErpScreenScaffold
       eyebrow={`Post GRN → ${geHeader.ge_number} → Line ${geLine.line_number}`}
-      title={geLine.material_name || `Line ${geLine.line_number}`}
+      title={materialLabel(geLine) !== "—" ? materialLabel(geLine) : `Line ${geLine.line_number}`}
       notices={error ? [{ key: "grn-form-err", tone: "error", message: error }] : []}
       actions={[
         { key: "cancel", label: "Cancel", tone: "neutral", onClick: onCancel },
@@ -687,6 +695,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
             <div className="grid grid-cols-2 gap-3 mb-4 md:grid-cols-3">
               {[
                 ["PACE code", geLine.pace_code ?? "—"],
+                ["Document name", geLine.document_name ?? "—"],
                 ["Material name", geLine.material_name ?? "—"],
                 ["External code", geLine.external_sku ?? "—"],
                 ["Base UOM", geLine.base_uom_code ?? "—"],

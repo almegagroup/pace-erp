@@ -474,7 +474,7 @@ export async function getGELinesForGRNHandler(
     const [matResp, poLineResp, existingGrnResp] = await Promise.all([
       matIds.length > 0
         ? serviceRoleClient.schema("erp_master").from("material_master")
-            .select("id, pace_code, material_name, material_type, external_sku, base_uom_code, qa_required_on_inward, batch_tracking_required, expiry_tracking_enabled, hsn_code")
+            .select("id, pace_code, material_name, document_name, material_type, external_sku, base_uom_code, qa_required_on_inward, batch_tracking_required, expiry_tracking_enabled, hsn_code")
             .in("id", matIds)
         : { data: [], error: null },
       poLineIds.length > 0
@@ -510,7 +510,8 @@ export async function getGELinesForGRNHandler(
     const stoLineIds = [...new Set(linesList.map((l) => String(l.sto_line_id ?? "")).filter(Boolean))];
     const stoLineResp = stoLineIds.length > 0
       ? await serviceRoleClient.schema("erp_procurement").from("stock_transfer_order_line")
-          .select("id, sto_id").in("id", stoLineIds)
+          .select("id, sto_id, transfer_price, conversion_cost_per_unit")
+          .in("id", stoLineIds)
       : { data: [] };
     const stoIds = [...new Set((stoLineResp.data ?? []).map((sl: JsonRecord) => String(sl.sto_id ?? "")).filter(Boolean))];
     const stoResp = stoIds.length > 0
@@ -518,6 +519,13 @@ export async function getGELinesForGRNHandler(
           .select("id, sto_number, delivery_type, crcp_enabled, sending_company_id, receiving_company_id").in("id", stoIds)
       : { data: [] };
     const stoLineMap = new Map<string, JsonRecord>((stoLineResp.data ?? []).map((sl: JsonRecord) => [String(sl.id), sl]));
+    // An STO receipt has no vendor: the sending company is the supplier, so the GRN form shows it in the Vendor slot.
+    const stoSenderIds = [...new Set((stoResp.data ?? []).map((st: JsonRecord) => String(st.sending_company_id ?? "")).filter(Boolean))];
+    const stoSenderResp = stoSenderIds.length > 0
+      ? await serviceRoleClient.schema("erp_master").from("companies")
+          .select("id, company_code, company_name, gst_number, state_name, full_address, pin_code").in("id", stoSenderIds)
+      : { data: [] };
+    const stoSenderMap = new Map<string, JsonRecord>((stoSenderResp.data ?? []).map((c: JsonRecord) => [String(c.id), c]));
     const stoMap = new Map<string, JsonRecord>((stoResp.data ?? []).map((s: JsonRecord) => [String(s.id), s]));
 
     // Fetch CSN data for pre-filling (1 CSN per GE line)
@@ -660,6 +668,11 @@ export async function getGELinesForGRNHandler(
       const vendor = po ? vendorMap.get(String(po.vendor_id)) : null;
       const stoLine = l.sto_line_id ? stoLineMap.get(String(l.sto_line_id)) : null;
       const sto = stoLine ? stoMap.get(String(stoLine.sto_id)) : null;
+      const stoSender = !po && sto ? stoSenderMap.get(String(sto.sending_company_id)) ?? null : null;
+      // Same figure the post handler uses: transfer price + the conversion cost fixed at FG STO create.
+      const stoRate = stoLine && parseNullableNumber(stoLine.transfer_price) !== null
+        ? Number(((parseNullableNumber(stoLine.transfer_price) ?? 0) + (parseNullableNumber(stoLine.conversion_cost_per_unit) ?? 0)).toFixed(6))
+        : null;
       const deliveryType = toTrimmedString(po?.delivery_type ?? sto?.delivery_type) || "STANDARD";
       const crcpEnabled = Boolean(po?.crcp_enabled ?? sto?.crcp_enabled);
       const shipToOptionIds: string[] = crcpEnabled
@@ -690,6 +703,8 @@ export async function getGELinesForGRNHandler(
       return {
         ...l,
         material_name: mat?.material_name ?? null,
+        pace_code: (mat as JsonRecord | undefined)?.pace_code ?? null,
+        document_name: (mat as JsonRecord | undefined)?.document_name ?? null,
         material_type: (mat as JsonRecord | undefined)?.material_type ?? null,
         external_sku: mat?.external_sku ?? null,
         base_uom_code: baseUomCode,
@@ -702,18 +717,18 @@ export async function getGELinesForGRNHandler(
         hsn_code: mat?.hsn_code ?? null,
         po_number: po?.po_number ?? null,
         sto_number: sto?.sto_number ?? null,
-        po_rate: poLine?.unit_rate ?? null,
+        po_rate: poLine?.unit_rate ?? stoRate,
         po_gst_terms: po?.gst_terms ?? null,
         vendor_id: po?.vendor_id ?? null,
         // A Gate Entry may legitimately contain lines from several vendors.
         // Carry the selected PO line's vendor details with that line so the
         // GRN form never falls back to the GE's first line vendor.
-        vendor_code: vendor?.vendor_code ?? null,
-        vendor_name: vendor?.vendor_name ?? null,
-        vendor_gst: vendor?.gst_number ?? null,
+        vendor_code: vendor?.vendor_code ?? stoSender?.company_code ?? null,
+        vendor_name: vendor?.vendor_name ?? stoSender?.company_name ?? null,
+        vendor_gst: vendor?.gst_number ?? stoSender?.gst_number ?? null,
         vendor_address: [vendor?.reg_address_line1, vendor?.reg_address_city, vendor?.reg_address_state, vendor?.reg_address_pin]
-          .filter(Boolean).join(", ") || null,
-        vendor_type: po?.vendor_type ?? "DOMESTIC",
+          .filter(Boolean).join(", ") || [stoSender?.full_address, stoSender?.pin_code].filter(Boolean).join(" - ") || null,
+        vendor_type: po?.vendor_type ?? (stoSender ? "STO (Inter-company)" : "DOMESTIC"),
         // §3.7/§3.2.7 -- drives GRNPostFlow's tab-hiding (Bulk, invoice not
         // yet known) and the mandatory Ship-To dropdown (any CRCP GRN).
         delivery_type: deliveryType,
@@ -750,11 +765,11 @@ export async function getGELinesForGRNHandler(
       gate_entry: {
         ...gateEntry,
         vendor_id: firstVendor?.id ?? null,
-        vendor_code: firstVendor?.vendor_code ?? null,
-        vendor_name: firstVendor?.vendor_name ?? null,
-        vendor_type: firstPo?.vendor_type ?? null,
-        vendor_gst: firstVendor?.gst_number ?? null,
-        vendor_address: [firstVendor?.reg_address_line1, firstVendor?.reg_address_city, firstVendor?.reg_address_state, firstVendor?.reg_address_pin].filter(Boolean).join(", ") || null,
+        vendor_code: firstVendor?.vendor_code ?? resolvedLines[0]?.vendor_code ?? null,
+        vendor_name: firstVendor?.vendor_name ?? resolvedLines[0]?.vendor_name ?? null,
+        vendor_type: firstPo?.vendor_type ?? resolvedLines[0]?.vendor_type ?? null,
+        vendor_gst: firstVendor?.gst_number ?? resolvedLines[0]?.vendor_gst ?? null,
+        vendor_address: [firstVendor?.reg_address_line1, firstVendor?.reg_address_city, firstVendor?.reg_address_state, firstVendor?.reg_address_pin].filter(Boolean).join(", ") || resolvedLines[0]?.vendor_address || null,
       },
       lines: resolvedLines,
     }, ctx.request_id, req);
