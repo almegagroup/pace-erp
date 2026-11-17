@@ -233,7 +233,7 @@ test("Group tabs: MHEC and RDP families sit on their own tabs; the lean block is
   assert.ok(cells.some((t) => t.startsWith("On time") && t.includes("2026-11-25")), "an order on its engine date");
   assert.ok(cells.some((t) => t.includes("Port 2026-11-23 (ATA, due)") && t.includes("ETD 2026-10-19 (ATD)") && !t.includes("(ATD, due)")), "a port date still ahead of today says due; a past ETD does not");
   assert.ok(cells.some((t) => t.includes("Port 2026-10-10 (ATA)") && !t.includes("2026-10-10 (ATA, due)")), "a past actual date is plain");
-  assert.ok(cells.some((t) => t.startsWith("Suggestions only")), "section 3 says its lots are suggestions, not counted above");
+  assert.ok(cells.some((t) => t.startsWith("ONE plan for the whole sheet")), "section 3 states the one-plan rule");
   assert.equal(new Set(cells.filter((t) => t.includes("NEW lot not counted"))).size, 1, "only the recorded-date view had a lot (merged cells repeat their value)");
   assert.ok(cells.some((t) => t === "1,250") && cells.some((t) => t.includes("Pro-rata 1,250/day")) && cells.some((t) => t.includes("Pro-rata 1,300/day")), "pro-rata today and on both landing dates");
   assert.ok(!cells.some((t) => t === "Passes on to next level (KG)" || t.includes("% of lot")), "no per-lot level-takes percentage");
@@ -338,6 +338,6 @@ test("section 3 says which basis its Min / Max use (same as section 2 before lan
   const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], level_sections: [], level_today: [], excess_after: [], projection_total: [] }] }], asOf: "2026-11-16" });
   const cells = [];
   wb.getWorksheet("RM RDP").eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
-  assert.ok(cells.some((l) => l.includes("Before landing = stock + recorded orders only (the same basis as section 2)")), "section 3 names its basis");
+  assert.ok(cells.some((l) => l.includes("ONE plan for the whole sheet")), "section 3 names its basis");
   await wb.xlsx.writeBuffer();
 });

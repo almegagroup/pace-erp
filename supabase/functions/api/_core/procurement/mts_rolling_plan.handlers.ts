@@ -74,7 +74,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       serviceRoleClient.schema("erp_master").from("companies").select("company_code, company_name").eq("id", companyId).maybeSingle(),
     ]);
     const plan = await computePlanning({ companyId, ...parsed.params!, extraMonths: ROLLING_EXTRA_MONTHS, manualLots: userLots, scheduleChecks: true });
-    const { req: reqData, projection, projectionPure, projectionShown, assembly, calendar, vendorOptions, selections } = plan._internal;
+    const { req: reqData, projection, projectionAdvice, projectionPure, projectionShown, assembly, calendar, vendorOptions, selections } = plan._internal;
     const mattersForGaps = (m: string) => {
       const rowsOf = projection.rows.filter((r) => r.material_id === m);
       return memberMattersForGaps({
@@ -242,6 +242,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     type Row = Record<string, unknown>;
     const altText = (list: Array<{ route: string; material: string; vendor: string; etd: string; port: string | null; plant: string; moq: number | null }>) => list.map((x) => `${x.route === "IMPORT" ? "IMPORT" : "LOCAL"} · ${x.material} · ${x.vendor}: ETD ${x.etd}${x.port ? ` · Port ${x.port}` : ""} · Plant ${x.plant}`).join("\n");
     const cmpDay = (a: string | null, b: string | null) => String(a ?? "9999").localeCompare(String(b ?? "9999"));
+    // Owner 2026-11-17: the advice run's lots that fall INSIDE the recorded orders of the family being built (urgent suggestions, never counted).
+    let urgentLots: Array<{ day: string; material_id: string; qty_base: number }> = [];
     const buildSections = (memberIds: string[], fu: { base_per_unit: number } | null, legs: (m: string, vendorId: string | null | undefined, date: string | null) => { port_eta: string | null; import_etd: string | null }, events: Array<{ member: string; reference: string; kind: string; date_source?: string; csn_id?: string; reschedule_key?: string; qty: number }>, wfv: { levels?: Array<{ label: string; target_days: number | null; max_days: number | null; critical_days: number | null; reserve_now: number; cover_days_now: number | null }>; events?: Array<{ day: string; kind: string; level: string; qty: number; by_material?: Array<{ material: string; qty: number }> }>; matrix?: Array<{ day: string; levels: Array<{ level: string; by_material: Array<{ material: string; qty: number }> }>; pool: Array<{ material: string; qty: number }>; closing: Array<{ material: string; qty: number }> }> }) => {
       const waterfallLevels = wfv.levels ?? [];
       const fam = (plan.schedule_checks ?? []).find((f) => f.member_ids.some((m) => memberIds.includes(m)));
@@ -320,7 +322,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           // Owner 2026-11-12: an existing order's Min / Max count only today's stock and the existing orders (no suggested lot); a suggested lot that lands before it is mentioned, not counted.
           const stA = stateAt(fam.days_a_pure, lv.level_key, a.recorded);
           const stB = stateAt(fam.days_b_pure, lv.level_key, a.advised);
-          const lotsBefore = (lots: typeof fam.lots_a, date: string | null) => (date ? lots.filter((l) => l.day >= calendar.asOf && l.day <= date && lv.members.includes(l.material_id)).map((l) => ({ day: l.day, material: nameOf(l.material_id), qty: q(l.qty_base) })) : []);
+          const lotsBefore = (lots: ReadonlyArray<{ day: string; material_id: string; qty_base: number }>, date: string | null) => (date ? lots.filter((l) => l.day >= calendar.asOf && l.day <= date && lv.members.includes(l.material_id)).map((l) => ({ day: l.day, material: nameOf(l.material_id), qty: q(l.qty_base) })) : []);
           const toLevel = allocOf(fam.alloc_b, a.source_key, lv.level_kind, lv.level_id);
           rows.push({
             kind: "Existing order", ref: `${a.reference}${ev?.csn_id ? "" : ""}`, material: nameOf(a.material_id), supplier: supplierOf(a.reference, ev?.csn_id) ?? "—", status: ev ? (arrivalStatus(ev.kind as never, ev.date_source as never) as string) : "",
@@ -330,7 +332,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
             arr_note: arr?.shared_note ?? "", rec: recOf(ev?.csn_id),
             prorata_a: proRata(lv, a.recorded ?? null), prorata_b: proRata(lv, a.advised ?? null),
             min_a_before: dayBefore(fam.days_a_pure, lv.level_key, a.recorded ?? null), min_b_before: dayBefore(fam.days_b_pure, lv.level_key, a.advised ?? null),
-            new_lots_a: lotsBefore(fam.lots_a, a.recorded ?? null), new_lots_b: lotsBefore(fam.lots_b, a.advised ?? null),
+            new_lots_a: lotsBefore(urgentLots, a.recorded ?? null), new_lots_b: lotsBefore(urgentLots, a.advised ?? null),
           });
         }
         for (const ref of lotRefs) {
@@ -419,7 +421,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const poolOf = (days: typeof fam.days_a, dt: string) => { const d = days.find((x) => x.day === dt); return d ? { total: q(d.pool_qty), by: d.pool_by.filter((p) => p.qty > 0.5).map((p) => ({ material: nameOf(p.material_id), qty: q(p.qty) })) } : null; };
       const landsOf = (view: "A" | "B", dt: string) => [
         ...fam.arrivals.filter((a) => a.qty_base > 0 && (view === "A" ? a.recorded : a.advised) === dt).map((a) => `+ ${nameOf(a.material_id)} ${fmt(q(a.qty_base))} (${poNumberOfReference(a.reference) ?? a.reference})`),
-        ...(view === "A" ? fam.lots_a : fam.lots_b).filter((l) => l.day === dt).map((l) => `+ NEW ${nameOf(l.material_id)} ${fmt(q(l.qty_base))} (suggested, not counted)`),
+        ...(view === "A" ? fam.lots_a : fam.lots_b).filter((l) => l.day === dt).map((l) => `+ NEW ${nameOf(l.material_id)} ${fmt(q(l.qty_base))} (engine lot, counted in projection)`),
       ];
       const poolDiary = [...new Set([...fam.days_a.map((d) => d.day), ...fam.days_b.map((d) => d.day)])].sort().map((dt) => ({
         // Owner 2026-11-12: the excess pool counts today's stock and the existing orders only; a suggested lot is listed in 'lands' but never counted.
@@ -459,7 +461,13 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         ...userLots.filter((l) => memberSet.has(l.material_id)).map((l) => l.plant_eta),
       ].reduce((max, d) => (d > max ? d : max), "");
       const suggestedByDay = new Map<string, number>();
-      for (const r of memberRows) if (r.planned_lot_qty_base > 0.000001 && r.day <= recordedEnd) suggestedByDay.set(r.day, (suggestedByDay.get(r.day) ?? 0) + r.planned_lot_qty_base);
+      // The advice run may place a lot INSIDE the recorded orders (e.g. 'order today for the 22nd'); that is the urgent suggestion, never counted here.
+      urgentLots = [];
+      for (const r of projectionAdvice.rows) {
+        if (!memberSet.has(r.material_id) || !(r.planned_lot_qty_base > 0.000001) || r.day > recordedEnd) continue;
+        suggestedByDay.set(r.day, (suggestedByDay.get(r.day) ?? 0) + r.planned_lot_qty_base);
+        urgentLots.push({ day: r.day, material_id: r.material_id, qty_base: r.planned_lot_qty_base });
+      }
       const newLotByDay = new Map<string, number>();
       for (const r of pureRows) if (r.planned_lot_qty_base > 0.000001) newLotByDay.set(r.day, (newLotByDay.get(r.day) ?? 0) + r.planned_lot_qty_base);
       const fu = familyUnit(memberIds);

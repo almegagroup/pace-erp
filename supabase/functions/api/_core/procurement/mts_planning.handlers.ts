@@ -617,14 +617,17 @@ async function computePlanningOnce(p: PlanningParams) {
     ),
   };
   const plannerStarted = Date.now();
-  const projection = planFamily(familyInput);
+  const projectionAdvice = planFamily(familyInput);
   // What-if / reschedule runs on one family reuse the method chosen here instead of choosing again.
-  const refillPicks: Record<string, RefillMethod> = Object.fromEntries((projection.refill_choices ?? []).map((c) => [c.key, c.method]));
+  const refillPicks: Record<string, RefillMethod> = Object.fromEntries((projectionAdvice.refill_choices ?? []).map((c) => [c.key, c.method]));
   // Owner 2026-11-12: the same plan WITHOUT the engine's suggested lots (only today's stock and the existing orders). The day tables of the report
   // are built from this one, so a suggestion never changes an Opening / Closing / Min / Excess number; the suggested lots are listed beside it.
   const projectionPure = planFamily({ ...familyInput, plan_buys: false, refill_method: "FIRST", refill_picks: refillPicks });
   // Owner 2026-11-16: the day tables show the recorded orders, then the engine's own lots counted once the recorded orders end.
   const projectionShown = planFamily({ ...familyInput, lots_after_recorded: true, refill_method: "FIRST", refill_picks: refillPicks });
+  // Owner 2026-11-17: ONE calculation for the report. The Excel (scheduleChecks) reads every number from the plan that counts no engine lot
+  // inside the recorded orders and counts the engine's lots after the last one; the advice run stays for the Action tab and the urgent list.
+  const projection = p.scheduleChecks ? projectionShown : projectionAdvice;
   const plannerMs = Date.now() - plannerStarted;
   const groupAssignments = (() => {
     type AssignmentReason = "SINGLE_SELECTED" | "CHEAPEST_SELECTED" | "NONE_SELECTED";
@@ -865,11 +868,12 @@ async function computePlanningOnce(p: PlanningParams) {
         }
       }
       const movedArrivals = input.confirmed_arrivals.map((a) => (moves.has(a.source_key) ? { ...a, eta_to_plant: moves.get(a.source_key)! } : a));
-      const resB = planFamily({ ...input, plan_buys: true, trace: false, level_days: true, confirmed_arrivals: movedArrivals });
-      const resA = planFamily({ ...input, plan_buys: true, trace: false, level_days: true });
+      const resB = planFamily({ ...input, plan_buys: true, lots_after_recorded: true, trace: false, level_days: true, confirmed_arrivals: movedArrivals });
+      const resA = planFamily({ ...input, plan_buys: true, lots_after_recorded: true, trace: false, level_days: true });
       // Suggested lots are advice, not a decision (owner 2026-11-12): the Min / Max shown beside an existing order must not count them.
-      const resBPure = planFamily({ ...input, plan_buys: false, trace: false, level_days: true, confirmed_arrivals: movedArrivals });
-      const resAPure = planFamily({ ...input, plan_buys: false, trace: false, level_days: true });
+      // Inside the recorded orders no lot is counted, so these runs ARE the 'recorded only' view there (and count the engine's lots after it).
+      const resBPure = resB;
+      const resAPure = resA;
       const lotsA = lotsOf(resA);
       const lotsB = lotsOf(resB);
       const keep = new Set<string>([input.as_of, ...input.confirmed_arrivals.map((a) => String(a.eta_to_plant)), ...movedArrivals.map((a) => String(a.eta_to_plant)), ...lotsA.map((l) => l.day), ...lotsB.map((l) => l.day)]);
@@ -1293,7 +1297,7 @@ async function computePlanningOnce(p: PlanningParams) {
   };
   console.log(JSON.stringify({ event: "MTS_TIMING", step: "planning_done", reuse, planner_ms: plannerMs, total_ms: Date.now() - planningStarted }));
   // Internal pieces for the P1 item plan (never serialised by the Planning endpoint).
-  const internal = { req, assembly, projection, projectionPure, projectionShown, calendar, vendorOptions, vendorTerms, orderUnitFor, familyInputFor, selections: selections.map };
+  const internal = { req, assembly, projection, projectionAdvice, projectionPure, projectionShown, calendar, vendorOptions, vendorTerms, orderUnitFor, familyInputFor, selections: selections.map };
   Object.defineProperty(payload, "_internal", { value: internal, enumerable: false });
   return payload as typeof payload & { readonly _internal: typeof internal };
 }

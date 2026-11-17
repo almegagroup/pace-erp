@@ -379,7 +379,7 @@ function writeLeanFamily(sheet, b, company) {
 
   // ── 3. new orders the engine adds
   title("3. NEW ORDERS THE ENGINE ADDS — dates, Min / Max on each date, and the other route", { size: 12, fillArgb: L_BLUE });
-  title("Suggestions only — you decide. Before landing = stock + recorded orders only (the same basis as section 2). After landing = that plus this new order and the earlier new orders. Section 2 never counts a new order.", { bold: false, italic: true });
+  title("ONE plan for the whole sheet: no new order is counted inside the recorded orders (an urgent suggestion there is listed beside the day table, never counted); the new orders below start after the last recorded order and ARE counted in this plan and in every table. Before landing = stock + recorded orders + earlier new orders.", { bold: false, italic: true });
   rs([["New order"], ["Qty · vendor"], ["Date (recorded-date view)", 2], ["Date (engine-date view)"], ["Pro-rata · Min / Max in the RECORDED-date view", 2], ["Pro-rata · Min / Max in the ENGINE-date view", 2], ["Alternate route", 3]], { bold: true, fillArgb: L_GREY });
   const projections = (b.projection_total ?? []);
   if (!projections.length) rs([["The engine adds no new order for this family.", LEAN_COLS]]);

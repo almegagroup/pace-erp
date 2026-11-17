@@ -1121,3 +1121,24 @@ Deno.test("arrival optimizer: an unshipped order is never advised to land today 
   const aware = optimizeFamilyArrival({ ...input, unshipped_keys: new Set(["A|M|1|UNSHIPPED"]) }, "A|M|1|UNSHIPPED");
   assert(aware !== null && aware.best.eta > addDays(AS_OF, 6), `the unshipped order is judged after the shipment lands, got ${aware?.best.eta}`);
 });
+
+Deno.test("one calculation: up to the last recorded order the plan equals the 'recorded only' run, after it the engine's lots are counted (owner 2026-11-17)", () => {
+  const input = rdpFamily();
+  const withOrder: FamilyPlannerInput = {
+    ...input,
+    confirmed_arrivals: [
+      { material_id: "DA", eta_to_plant: "2026-11-12", qty_base: 20000, source_key: "A|DA|0|PO 1/1 · CSN 1 (TRN)" },
+      { material_id: "RP", eta_to_plant: "2026-11-25", qty_base: 25000, source_key: "A|RP|0|PO 2/1 · CSN 2 (ORD)" },
+    ],
+  };
+  const recordedOnly = planFamily({ ...withOrder, plan_buys: false, refill_method: "FIRST" });
+  const unified = planFamily({ ...withOrder, lots_after_recorded: true, refill_method: "FIRST" });
+  const lastRecorded = "2026-11-25";
+  const closingOf = (r: ReturnType<typeof planFamily>, day: string) => r.rows.filter((x) => x.day === day).reduce((s, x) => s + x.closing_qty_base, 0);
+  for (const day of ["2026-10-22", "2026-11-01", "2026-11-12", "2026-11-20", lastRecorded]) {
+    assert(Math.abs(closingOf(recordedOnly, day) - closingOf(unified, day)) < 1e-6, `closing on ${day} differs: ${closingOf(recordedOnly, day)} vs ${closingOf(unified, day)}`);
+  }
+  const lotDays = unified.rows.filter((x) => x.planned_lot_qty_base > 0).map((x) => x.day);
+  assert(lotDays.every((d) => d > lastRecorded), `no lot inside the recorded orders: ${lotDays.join(",")}`);
+  assert(recordedOnly.rows.every((x) => x.planned_lot_qty_base === 0), "the recorded-only run counts no lot at all");
+});
