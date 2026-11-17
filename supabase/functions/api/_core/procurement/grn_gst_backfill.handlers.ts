@@ -185,8 +185,18 @@ async function findQaRateCandidates(ctx: Ctx, materialId: string, claimedGrnIds:
   const legs = await fetchInChunks<JsonRecord>([...qaByStockDoc.keys()], (chunk) => serviceRoleClient.schema("erp_inventory").from("stock_ledger")
     .select("id, stock_document_id, direction, quantity, value, valuation_rate").eq("direction", "IN").in("stock_document_id", chunk).order("id", { ascending: true }));
   const markers = await fetchInChunks<JsonRecord>(legs.map((l) => text(l.id)), (chunk) => serviceRoleClient.schema("erp_inventory").from("valuation_correction_log")
-    .select("id, target_ledger_id").in("reason", [QA_RATE_REASON, RESYNC_REASON]).in("target_ledger_id", chunk).order("id", { ascending: true }));
+    .select("id, target_ledger_id").in("target_ledger_id", chunk).order("id", { ascending: true }));
+  // ANY earlier correction aimed at a leg counts (the 15 Oct "Historical QA MT-to-KG" run used its own reason text).
+  // The ledger keeps the wrong original rate forever (append-only), so the leg still LOOKS wrong although the stock value was
+  // fixed; only a log row says it was handled.
   const doneLedgerIds = new Set(markers.map((row) => text(row.target_ledger_id)));
+  const legBucketKey = (leg: JsonRecord) => {
+    const qa = qaById.get(qaByStockDoc.get(text(leg.stock_document_id)) ?? "");
+    return `${text(qa?.company_id)}|${text(qa?.material_id)}`;
+  };
+  // A correction replays the whole bucket from the immutable ledger, so a bucket that already had some legs corrected would
+  // lose those corrections if only the remaining legs were passed in. Such buckets are not offered here.
+  const partlyDoneBuckets = new Set(legs.filter((leg) => doneLedgerIds.has(text(leg.id))).map(legBucketKey));
 
   const scoped = new Set<string>();
   const candidates: Candidate[] = [];
@@ -205,6 +215,10 @@ async function findQaRateCandidates(ctx: Ctx, materialId: string, claimedGrnIds:
     const quantity = Number(leg.quantity ?? 0);
     const oldRate = Number(leg.valuation_rate ?? 0);
     if (!(quantity > 0) || Math.abs(oldRate - target) <= QA_RATE_TOLERANCE * Math.max(target, 0.01)) continue;
+    if (partlyDoneBuckets.has(legBucketKey(leg))) {
+      skipped.push({ grn_number: grn.grn_number, reason: "Inward QA leg in a bucket that was already partly corrected - needs the leg-rate memory fix first" });
+      continue;
+    }
     const companyId = text(qa.company_id);
     if (!scoped.has(companyId)) { await assertCompanyScope(ctx, companyId); scoped.add(companyId); }
     candidates.push({
