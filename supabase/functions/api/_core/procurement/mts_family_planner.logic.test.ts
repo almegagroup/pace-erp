@@ -1101,3 +1101,23 @@ Deno.test("family planner: no engine lot lands inside the recorded orders; lots 
   assert(lotDays(shown).every((d) => d > "2026-11-20"), `no lot on/before the last recorded arrival, got ${lotDays(shown).join(",")}`);
   assert(lotDays(counted).length >= lotDays(shown).length, "the advice run is unchanged");
 });
+
+Deno.test("arrival optimizer: an unshipped order is never advised to land today for a gap that a shipment on the road closes (owner 2026-11-17)", () => {
+  const days = daysTo("2027-03-31");
+  const input: FamilyPlannerInput = {
+    as_of: AS_OF, horizon_end: "2027-03-31",
+    // 27 days of stock against a 30-day Min: below Min from today until the shipment on the road lands on day 6.
+    opening_qty_by_material: { M: 2700 },
+    own_demand: days.map((d) => ({ material_id: "M", required_by: d, qty_base: 100 })),
+    group_demand: [],
+    confirmed_arrivals: [
+      { material_id: "M", eta_to_plant: addDays(AS_OF, 6), qty_base: 2500, source_key: "A|M|0|SHIPPED" },
+      { material_id: "M", eta_to_plant: addDays(AS_OF, 9), qty_base: 2500, source_key: "A|M|1|UNSHIPPED" },
+    ],
+    policies: [policy("M", 30, 15, [{ vendor: "V", lead: 5, cost: 1 }])],
+  };
+  const unaware = optimizeFamilyArrival(input, "A|M|1|UNSHIPPED");
+  assert(unaware !== null && unaware.best.eta === AS_OF, `without the shipped/unshipped split the gap pulls it to today: ${unaware?.best.eta}`);
+  const aware = optimizeFamilyArrival({ ...input, unshipped_keys: new Set(["A|M|1|UNSHIPPED"]) }, "A|M|1|UNSHIPPED");
+  assert(aware !== null && aware.best.eta > addDays(AS_OF, 6), `the unshipped order is judged after the shipment lands, got ${aware?.best.eta}`);
+});

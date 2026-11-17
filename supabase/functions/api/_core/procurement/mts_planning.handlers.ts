@@ -663,6 +663,7 @@ async function computePlanningOnce(p: PlanningParams) {
     return {
       ...familyInput,
       refill_picks: refillPicks,
+      unshipped_keys: movableSourceKeys,
       opening_qty_by_material: pick(familyInput.opening_qty_by_material),
       opening_receipts: (familyInput.opening_receipts ?? []).filter((r) => members.has(r.material_id)),
       own_demand: familyInput.own_demand.filter((d) => members.has(d.material_id)),

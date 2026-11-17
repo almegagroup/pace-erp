@@ -114,6 +114,8 @@ export type FamilyPlannerInput = {
   selections?: ReadonlyMap<string, ReadonlySet<string>>;
   /** Materials displayed in the monthly selector. New engine lots for these are fail-closed unless selected. */
   selection_controlled_members?: ReadonlySet<string>;
+  /** Source keys of the not-yet-shipped pieces (the rest are on the road). Only the arrival optimizer reads this. */
+  unshipped_keys?: ReadonlySet<string>;
   /** Planning off: only simulate (arrival optimizer). */
   plan_buys?: boolean;
   /**
@@ -2047,8 +2049,16 @@ export function optimizeFamilyArrival(input: FamilyPlannerInput, pieceKey: strin
     ...without.group_unmet.filter((u) => inPlan(u.day) && !earlyRisk.has(`UNMET|${u.group_id}|${u.day}`)).map((u) => ({ day: u.day, level: { level_kind: "GROUP" as const, level_id: u.group_id } })),
     ...without.level_risk.filter((x) => inPlan(x.day) && (!onlyCritical || isCritical(x)) && !earlyRisk.has(`${x.level_kind}|${x.level_id}|${x.day}`)).map((x) => ({ day: x.day, level: { level_kind: x.level_kind, level_id: x.level_id } })),
   ].sort((a, b) => a.day.localeCompare(b.day));
-  const prevented = preventedFor(protect === "CRITICAL");
-  const preventedCritical = preventedFor(true);
+  // Owner 2026-11-17: an order that has not shipped cannot land before the shipments already on the road. Days a level is below Min
+  // up to the last such landing (before this order's own recorded date) are not this order's to fix, so the advised date is judged
+  // on the days AFTER that landing - never "land today" because of a gap an in-transit order closes anyway.
+  const onTheRoad = input.unshipped_keys
+    ? input.confirmed_arrivals.filter((a) => a.source_key !== pieceKey && !input.unshipped_keys!.has(a.source_key) && a.qty_base > EPSILON
+      && a.eta_to_plant && a.eta_to_plant >= input.as_of && a.eta_to_plant <= currentEta).map((a) => String(a.eta_to_plant))
+    : [];
+  const floorDay = onTheRoad.reduce((max, d) => (d > max ? d : max), input.as_of);
+  const prevented = preventedFor(protect === "CRITICAL").filter((x) => x.day > floorDay);
+  const preventedCritical = preventedFor(true).filter((x) => x.day > floorDay);
   let criticalLatest: string | null = null;
   if (preventedCritical.length > 0) {
     criticalLatest = addDays(preventedCritical[0].day, -1);
