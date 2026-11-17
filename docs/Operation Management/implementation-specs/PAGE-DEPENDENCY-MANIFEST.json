@@ -9621,5 +9621,27 @@
         "skipAcl": false
       }
     ]
+  },
+  {
+    "page": "frontend/src/pages/dashboard/production/MtsHoldTrailPage.jsx",
+    "dependencyCount": 2,
+    "deps": [
+      {
+        "fn": "getMtsHoldTrail",
+        "method": "GET",
+        "path": "/api/production/mts-hold-trail",
+        "resourceCode": "PROD_MTS_HOLD_TRAIL",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "listMaterials",
+        "method": "GET",
+        "path": "/api/om/materials",
+        "resourceCode": "OM_MATERIAL_LIST",
+        "action": "VIEW",
+        "skipAcl": false
+      }
+    ]
   }
 ]
