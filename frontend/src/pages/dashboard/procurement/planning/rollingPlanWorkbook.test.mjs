@@ -341,3 +341,13 @@ test("section 3 says which basis its Min / Max use (same as section 2 before lan
   assert.ok(cells.some((l) => l.includes("ONE plan for the whole sheet")), "section 3 names its basis");
   await wb.xlsx.writeBuffer();
 });
+
+test("a failed self-check is printed in red on the block (family and stand-alone layouts)", async () => {
+  const base = company("a", "Almeha Coatings");
+  const issues = ["2026-11-23: Closing 9000 does not equal Opening + landed + new order - use (6794.48)"];
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], self_check: issues, level_sections: [], level_today: [], excess_after: [] }, { ...base.blocks[0], title: "SOLO", is_family: false, members: ["SOLO"], self_check: issues }] }], asOf: "2026-11-16" });
+  const cells = [];
+  wb.eachSheet((ws) => ws.eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? "")))));
+  assert.ok(cells.filter((l) => l.startsWith("SELF-CHECK FAILED (1): 2026-11-23: Closing 9000")).length >= 2, "both layouts print the failed check");
+  await wb.xlsx.writeBuffer();
+});

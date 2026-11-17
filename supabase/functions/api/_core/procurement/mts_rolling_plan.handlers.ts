@@ -8,6 +8,7 @@
  * every block is derived from that run, so the file shows exactly what the screens show.
  * Read-only: never creates a PO, CSN, transfer or stock posting.
  */
+import { selfCheckBlock } from "./mts_report_selfcheck.logic.ts";
 import { actionText, bestDateText, bestDateWhy, ifAbsentText, togetherText } from "./mts_best_date_text.logic.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
@@ -636,6 +637,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           return out;
         }),
         rows, prediction,
+        // Owner 2026-11-17: the sheet proves itself on every download (printed in red on the block when a check fails).
+        self_check: selfCheckBlock(rows as never, recordedEnd || null),
       });
     }
 

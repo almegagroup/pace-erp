@@ -291,6 +291,7 @@ function writeLeanFamily(sheet, b, company) {
   const alarm = Boolean(b.first_shortage_day || (b.gaps ?? []).length);
   const facts = [`Unit ${u || "—"}`, b.first_shortage_day ? `RUNS OUT ${b.first_shortage_day}${(b.qa_stock ?? []).length ? ` (but ${qty(b.qa_stock.reduce((sum, x) => sum + x.qty, 0))} ${u} is still in QA — see the QA row)` : ""}` : "", (b.gaps ?? []).length ? `ENGINE CANNOT PLAN — ${b.gaps.join("; ")}` : ""].filter(Boolean).join(" · ");
   title(facts, { bold: alarm, color: alarm ? RED : null });
+  if ((b.self_check ?? []).length) title(`SELF-CHECK FAILED (${b.self_check.length}): ${b.self_check.slice(0, 3).join(" · ")}`, { bold: true, color: RED });
   if (b.refill_method) title(`Refill method used for this family: ${b.refill_method}${b.refill_method_why ? ` — ${b.refill_method_why}` : ""}`, { bold: false, italic: true });
   title("How to read: a family is split into levels (narrow level first). Every level keeps its own reserve and its daily use is taken from that reserve. Stock that no level needs yet stays in the shared EXCESS POOL. Recorded = dates in the PO / CSN (CSN Tracker: ATD / ATA when they exist, else ETD / ETA). Engine = the dates the engine advises.", { bold: false, italic: true });
   sheet.addRow([]);
@@ -454,6 +455,11 @@ function writeBlocks(sheet, companies, kind, { filter = () => true, sections = f
       stockRow.getCell(1).font = { italic: true };
     }
     if (b.first_shortage_day || (b.gaps ?? []).length) factRow.getCell(1).font = { bold: true, color: { argb: RED } };
+    // Owner 2026-11-17: the sheet proves itself; a failed check is printed in red on the block.
+    if ((b.self_check ?? []).length) {
+      const failed = sheet.addRow([`SELF-CHECK FAILED (${b.self_check.length}): ${b.self_check.slice(0, 3).join(" · ")}`]);
+      failed.getCell(1).font = { bold: true, color: { argb: RED } };
+    }
     // Owner 2026-11-17: a stand-alone item already below its Min today says so (same wording as a family level) and names the shipment on the road.
     if (!b.is_family) {
       const first = (b.rows ?? [])[0];
