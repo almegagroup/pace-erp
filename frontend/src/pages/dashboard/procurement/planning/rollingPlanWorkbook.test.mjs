@@ -293,3 +293,18 @@ test("a CSN is never named without its PO: section 2 Order column and the held-C
   assert.ok(cells.includes("ASCP2627-0300/1") && cells.includes("3000000999"), "held CSN table lists the PO next to the CSN");
   await wb.xlsx.writeBuffer();
 });
+
+test("section 2: readable shipment status, 'not shipped' vs 'in transit', and ordered by the recorded plant date", async () => {
+  const base = company("a", "Almeha Coatings");
+  const mk = (ref, status, rec, eng) => ({ kind: "Existing order", ref, material: "Gabrosa", supplier: "DAIREN", status, lot_qty: 25000, existing_eta: rec, engine_eta: eng, min_a: 40, max_a: 80, min_b: 40, max_b: 80 });
+  const sections = [{ label: "Exclusive — Gabrosa", kind: "OWN", members: ["Gabrosa"], target_days: 30, max_days: 60, critical_days: 20,
+    rows: [mk("PO P1/1 · CSN 3000000454 (ORD)", "ORDERED", "2026-11-25", "2026-11-16"), mk("PO P2/1 · CSN 3000000352 (TRN)", "IN_TRANSIT", "2026-11-22", "2026-11-22")] }];
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], level_sections: sections, level_today: [], excess_after: [] }] }], asOf: "2026-11-16" });
+  const cells = [];
+  wb.getWorksheet("RM RDP").eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
+  const orders = cells.filter((l) => l.includes("CSN 3000000"));
+  assert.ok(orders[0].includes("CSN 3000000352 (in transit)") && orders[0].includes("In transit"), "the in-transit order is first and says so");
+  assert.ok(orders[1].includes("CSN 3000000454 (not shipped)") && orders[1].includes("Ordered (not shipped)"), "the not-shipped order says so");
+  assert.ok(!cells.some((l) => /· (ORDERED|IN_TRANSIT)$/m.test(l)), "no raw status code");
+  await wb.xlsx.writeBuffer();
+});

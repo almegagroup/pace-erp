@@ -289,7 +289,7 @@ function writeLeanFamily(sheet, b, company) {
   const proTxt = (v) => (v === null || v === undefined ? "—" : qty(v));
   const dTxt = (v) => (v === null || v === undefined ? "—" : `${v} d`);
   const mxTxt = (v) => (v === null || v === undefined ? "beyond plan" : `${v} d`);
-  const refName = (ref) => String(ref).replace(" (ORD)", "").replace(" (TRN)", " (in transit)"); // PO and CSN both (owner 2026-11-17)
+  const refName = (ref) => String(ref).replace(" (ORD)", " (not shipped)").replace(" (TRN)", " (in transit)"); // PO and CSN both (owner 2026-11-17)
 
   // ── 1. current status
   title("1. CURRENT STATUS — what each level holds today and where its daily use comes from", { size: 12, fillArgb: L_BLUE });
@@ -351,12 +351,12 @@ function writeLeanFamily(sheet, b, company) {
   title("Min / Max = the level's cover at the END of the landing day, shown as the evening before → that evening. It counts EVERYTHING that has landed in that view by then (every other CSN / PO and every engine lot dated up to that day) and what the level claimed from the pool, not this order alone. Min = days its reserve lasts; Max = the same if it also took every spare kg, capped at its Max days.", { bold: false, italic: true });
   rs([["Order"], ["Qty"], ["Recorded date (CSN Tracker)", 2], ["Engine date"], ["Pro-rata · Min / Max if it lands on the RECORDED date", 2], ["Pro-rata · Min / Max if it lands on the ENGINE date", 2], ["Why this date / if it is late", 3]], { bold: true, fillArgb: L_GREY });
   const existing = [...perLevel.entries()].filter(([k]) => k.startsWith("E|")).map(([, v]) => v)
-    .sort((x, y) => String(x.row.engine_eta ?? x.row.existing_eta ?? "").localeCompare(String(y.row.engine_eta ?? y.row.existing_eta ?? "")));
+    .sort((x, y) => String(x.row.existing_eta ?? x.row.engine_eta ?? "").localeCompare(String(y.row.existing_eta ?? y.row.engine_eta ?? "")) || String(x.row.engine_eta ?? "").localeCompare(String(y.row.engine_eta ?? ""))); // recorded plant date first (the CSN Tracker's own order), engine date breaks ties
   if (!existing.length) rs([["No order is on the way for this family.", LEAN_COLS]]);
   for (const { row: r, levels } of existing) {
     const en = r.engine_eta ?? "";
     const engineText = !en ? "Not needed" : r.etd ? `ETD ${day(r.etd)}\nPort ${day(r.port) || "—"}\nPlant ${day(en)}` : day(en);
-    const out = rs([[`${r.material}\n${refName(r.ref)}\n${r.supplier ?? ""} · ${r.status ?? ""}`], [qty(r.lot_qty)], [recordedText(r.rec, r.existing_eta, todayIso), 2], [engineText],
+    const out = rs([[`${r.material}\n${refName(r.ref)}\n${r.supplier ?? ""} · ${STATUS_LABEL[r.status] ?? r.status ?? ""}`], [qty(r.lot_qty)], [recordedText(r.rec, r.existing_eta, todayIso), 2], [engineText],
       [minMaxText(levels, "A"), 2], [minMaxText(levels, "B"), 2], [[whyText(r, levels), r.action, r.absent, r.arr_note].filter(Boolean).join("\n"), 3]]);
     if (en && r.existing_eta && en !== r.existing_eta) fill(out.getCell(5), L_AMBER);
     // Below its Min on that date = amber, so the breach is seen without reading the numbers.

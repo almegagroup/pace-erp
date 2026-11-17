@@ -191,7 +191,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const o = key ? optimumByKey.get(key) : null;
       const a = key ? arrivalByKey.get(key) : null;
       if (!o || !a) return { etd: "", port: "", plant: "", why: "", absent: "", action: "" };
-      const absent = ifAbsentText(a.if_absent ?? [], currentEta, overdueOf(currentEta));
+      const absent = ifAbsentText(a.if_absent ?? [], currentEta, overdueOf(currentEta), a.reference ?? null);
       if (o.not_needed_in_plan) return { etd: "", port: "", plant: "", why: bestText(key, currentEta, unit, uom), absent, action: actionText({ not_needed_in_plan: true, best_eta: o.best.eta, current_eta: currentEta, shift_days: o.shift_days }) };
       const w = key ? windowByKey.get(key) : null;
       const q = (n: number) => inUnit(unit, n) ?? 0;
