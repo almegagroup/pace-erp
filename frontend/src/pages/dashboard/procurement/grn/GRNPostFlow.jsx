@@ -25,6 +25,20 @@ function materialLabel(row) {
   return doc || name || "—";
 }
 
+const fmtQty = (value) => String(Number(Number(value).toFixed(4)));
+
+// Outer / Inner / Base units of a line raised in its base unit (FG STO): factor = base units per 1 of that unit.
+function unitRows(line) {
+  const base = line?.base_uom_code;
+  if (!base || line?.uom_code !== base) return [];
+  const alternates = line.uom_alternates ?? [];
+  if (alternates.length === 0) return [];
+  return [
+    ...alternates.map((alt, index) => ({ role: index === 0 ? "Outer" : "Inner", code: alt.uom_code, factor: alt.factor })),
+    { role: "Base", code: base, factor: 1 },
+  ];
+}
+
 function vendorDisplay(row) {
   if (!row?.vendor_name) return "—";
   return `${row.vendor_code || ""} — ${row.vendor_name}`.replace(/^( — )/, "");
@@ -516,6 +530,22 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
                 </p>
               </div>
             </div>
+            {unitRows(geLine).length > 0 && (
+              <table className="mb-4 w-full max-w-xl border border-slate-200 text-sm">
+                <thead className="bg-slate-50 text-[11px] uppercase text-slate-500">
+                  <tr><th className="px-3 py-1.5 text-left">Unit</th><th className="px-3 py-1.5 text-right">Invoice qty</th><th className="px-3 py-1.5 text-right">Received qty</th></tr>
+                </thead>
+                <tbody>
+                  {unitRows(geLine).map((unit) => (
+                    <tr key={unit.role} className="border-t border-slate-100">
+                      <td className="px-3 py-1.5">{unit.role} · {unit.code}</td>
+                      <td className="px-3 py-1.5 text-right">{fmtQty(Number(geLine.ge_qty ?? 0) / unit.factor)}</td>
+                      <td className="px-3 py-1.5 text-right">{fmtQty(receivedQtyNum / unit.factor)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
             <div className="grid gap-3 md:grid-cols-2">
               <ErpDenseFormRow label={<>Received qty <span className="text-red-500">*</span></>}>
                 <input
@@ -751,6 +781,11 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
               <p className="mt-1 text-base font-medium text-slate-900">
                 {geLine.po_rate != null ? `₹ ${Number(geLine.po_rate).toFixed(4)} / ${geLine.uom_code}` : "—"}
               </p>
+              {geLine.po_rate != null && unitRows(geLine).filter((unit) => unit.role !== "Base").map((unit) => (
+                <p key={unit.role} className="mt-0.5 text-sm text-slate-700">
+                  {unit.role}: ₹ {(Number(geLine.po_rate) * unit.factor).toFixed(4)} / {unit.code}
+                </p>
+              ))}
               {isPoGstInclusive && (
                 <p className="mt-1 text-xs text-slate-600">
                   {basicRate !== null

@@ -588,6 +588,24 @@ export async function getGELinesForGRNHandler(
       )
     );
 
+    // Every fixed alternate unit of each material (Outer / Inner pack -> Base), so the GRN form can show the
+    // quantity and rate in all units, not only the one the document was raised in.
+    const altUomResp = matIds.length > 0
+      ? await fetchInChunks<JsonRecord>(matIds, (idChunk) =>
+          serviceRoleClient.schema("erp_master").from("material_uom_conversion")
+            .select("material_id, from_uom_code, to_uom_code, conversion_factor, variable_conversion")
+            .in("material_id", idChunk).eq("active", true))
+      : [];
+    const altUomByMaterial = new Map<string, { uom_code: string; factor: number }[]>();
+    for (const c of altUomResp) {
+      const mat = matMap.get(String(c.material_id));
+      const factor = Number(c.conversion_factor);
+      if (!mat || c.variable_conversion || !(factor > 0) || String(c.to_uom_code) !== String(mat.base_uom_code)) continue;
+      const list = altUomByMaterial.get(String(c.material_id)) ?? [];
+      list.push({ uom_code: String(c.from_uom_code), factor });
+      altUomByMaterial.set(String(c.material_id), list);
+    }
+
     // §3.2.7 "GRN-level Ship To Leg capture" -- resolve each line's own
     // CRCP allow-list (issuing company + whichever companies the PO/STO
     // shares with), bulk-fetched once for the union of po_ids/sto_ids on
@@ -708,6 +726,8 @@ export async function getGELinesForGRNHandler(
         material_type: (mat as JsonRecord | undefined)?.material_type ?? null,
         external_sku: mat?.external_sku ?? null,
         base_uom_code: baseUomCode,
+        // Largest pack first (Outer, then Inner); the form adds the Base unit itself.
+        uom_alternates: (altUomByMaterial.get(String(l.material_id)) ?? []).sort((a, b) => b.factor - a.factor),
         // FG STO receipts skip Inward QA (see the GRN post handler), so show no QA requirement for them.
         qa_required_on_inward: stoLine && toUpperTrimmedString((mat as JsonRecord | undefined)?.material_type) === "FG"
           ? false
