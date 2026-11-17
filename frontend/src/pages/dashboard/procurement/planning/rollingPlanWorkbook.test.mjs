@@ -308,3 +308,15 @@ test("section 2: readable shipment status, 'not shipped' vs 'in transit', and or
   assert.ok(!cells.some((l) => /· (ORDERED|IN_TRANSIT)$/m.test(l)), "no raw status code");
   await wb.xlsx.writeBuffer();
 });
+
+test("a level already below Min today says so and names the shipment on the road", async () => {
+  const base = company("a", "Almeha Coatings");
+  const sections = [{ label: "RDP — RDP", kind: "GROUP", members: ["RP-4099"], target_days: 30, max_days: 65, critical_days: 15, today_cover: 27, today_cover_until: "2026-12-12",
+    rows: [{ kind: "Existing order", ref: "PO P2/1 · CSN 3000000352 (TRN)", material: "RP-4099", supplier: "X", status: "IN_TRANSIT", lot_qty: 25000, existing_eta: "2026-11-22", engine_eta: "2026-11-22" }] }];
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], level_sections: sections, level_today: [], excess_after: [] }] }], asOf: "2026-11-16" });
+  const cells = [];
+  wb.getWorksheet("RM RDP").eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
+  assert.ok(cells.some((l) => l.includes("BELOW MIN TODAY (27 d < Min 30 d), until the shipment on the road lands")), "the level says it is below Min today");
+  assert.ok(cells.some((l) => l.includes("An order that has not shipped cannot fix these days.")), "and why no order date is chased");
+  await wb.xlsx.writeBuffer();
+});

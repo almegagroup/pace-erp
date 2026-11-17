@@ -218,6 +218,17 @@ const matLines = (list) => {
 };
 /** "If CSN 3000000239 does not come → land by 2026-11-30" instead of the full paragraph (the full wording stays in the folded rows). */
 /** The CSN Tracker's own legs: ATD (BL date) when shipped else ETD; ATA at port when arrived else ETA; ETA to plant. */
+/**
+ * Owner 2026-11-17: a level already below its Min today says so, and names the shipment on the road that lifts it: an order that has not
+ * shipped cannot fix those days, so no advised date is chased for them.
+ */
+const belowMinToday = (sct) => {
+  const cover = sct.today_cover;
+  if (cover === null || cover === undefined || sct.target_days === null || sct.target_days === undefined || Number(cover) >= Number(sct.target_days)) return "";
+  const road = (sct.rows ?? []).filter((r) => r.kind === "Existing order" && (r.status === "IN_TRANSIT" || r.status === "AT_GATE") && r.existing_eta)
+    .map((r) => String(r.existing_eta).slice(0, 10)).sort()[0];
+  return `\nBELOW MIN TODAY (${Math.floor(Number(cover))} d < Min ${days(sct.target_days) ?? sct.target_days} d)${road ? `, until the shipment on the road lands ${day(road)}` : ""}. An order that has not shipped cannot fix these days.`;
+};
 const recordedText = (rec, fallbackPlant, today = null) => {
   const due = (d) => Boolean(today && d && String(d).slice(0, 10) > today);
   const tag = (actual, d, name) => (actual ? ` (${name}${due(d) ? ", due" : ""})` : "");
@@ -299,7 +310,7 @@ function writeLeanFamily(sheet, b, company) {
     const maxCover = sct.today_beyond_plan ? `Max cover: beyond the plan${b.plan_end ? ` (past ${day(b.plan_end)})` : ""}` : `Max cover: ${daysUntil(sct.today_max_cover, sct.today_max_until)}`;
     const todayRow = (sct.rows ?? []).find((r) => r.kind === "Stock today");
     rs([[`${sct.label}\n(${sct.members.join(" + ")})`], [`Min ${days(sct.target_days) ?? "—"} d · Max ${days(sct.max_days) ?? "—"} d · Critical ${days(sct.critical_days) ?? "—"} d`], [proTxt(todayRow?.prorata_b)], [matLines(today?.opening), 2], [matLines(today?.reserve), 2],
-      [`Stock lasts: ${daysUntil(sct.today_cover, sct.today_cover_until)}\n${maxCover}`, 2], [matLines(today?.left), 3]]);
+      [`Stock lasts: ${daysUntil(sct.today_cover, sct.today_cover_until)}\n${maxCover}${belowMinToday(sct)}`, 2], [matLines(today?.left), 3]]);
   });
   rs([["EXCESS POOL today\n(no level needs it yet)"], [matLines(b.excess_after), 2], ["", 9]], { bold: true, fillArgb: L_GREEN });
   if ((b.qa_stock ?? []).length) {
