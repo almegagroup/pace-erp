@@ -31,7 +31,7 @@ import { familyClosure } from "./mts_item_plan.logic.ts";
 import { loadGroupCoveragePolicyVersions } from "./mts_group_policy.handlers.ts";
 import { bulkOnlyGroupIds, loadBulkMaterialIds } from "./mts_bulk_materials.ts";
 import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, type RefillMethod, familyMoveCost, optimizeFamilyArrival, optimizeFamilyTogether, planFamily } from "./mts_family_planner.logic.ts";
-import { assemblePlanningInput, familyArrivalEta, priceUnitCode, familyArrivalRisk, isFamilyAllocatableArrival, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, overdueUnshippedEta, familyArrivalEta, priceUnitCode, familyArrivalRisk, isFamilyAllocatableArrival, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
 import { planningShareKey } from "./mts_planning_share.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
@@ -571,6 +571,15 @@ async function computePlanningOnce(p: PlanningParams) {
     transferIncoming.set(arrival.material_id, { qty: (seen?.qty ?? 0) + arrival.qty_base, label: seen ? `${seen.label}, ${when}` : `ETA ${when}` });
   }
   const familyArrivalCandidates = assembly.input.confirmed_arrivals.filter((arrival) => !transferFed.has(arrival.material_id));
+  // Owner 2026-11-17: a not-yet-shipped order whose ETA passed is dated today + its shortest route time, never counted as today's stock.
+  const movableSourceKeys = new Set(req.output.rows.flatMap((r) => r.inbound_events.map((event, index) => (event.reschedule_key ? `A|${r.material_id}|${index}|${event.reference}` : null)).filter((k): k is string => k !== null)));
+  const shortestRouteDays = new Map(req.output.rows.map((r) => {
+    const days = (r.lead_time?.configured_routes ?? []).map((route) => route.route_days).filter((d): d is number => typeof d === "number" && Number.isFinite(d) && d > 0);
+    return [r.material_id, days.length ? Math.min(...days) : null] as const;
+  }));
+  const isOverdueUnshipped = (arrival: { source_key: string; eta_to_plant: string | null }) => movableSourceKeys.has(arrival.source_key)
+    && !isFamilyAllocatableArrival("", arrival.eta_to_plant, assembly.input.as_of);
+  const unshippedEtaOf = (arrival: { material_id: string }) => overdueUnshippedEta(assembly.input.as_of, shortestRouteDays.get(arrival.material_id) ?? null);
   const familyInput: FamilyPlannerInput = {
     // Owner 2026-11-07 (§49): the planner chooses 1st refill / 2nd refill / on-arrival per family.
     refill_method: "AUTO",
@@ -586,12 +595,12 @@ async function computePlanningOnce(p: PlanningParams) {
     confirmed_arrivals: familyArrivalCandidates.map((arrival) => ({
       source_key: arrival.source_key,
       material_id: arrival.material_id,
-      eta_to_plant: familyArrivalEta(arrival.eta_to_plant, assembly.input.as_of),
+      eta_to_plant: isOverdueUnshipped(arrival) ? unshippedEtaOf(arrival) : familyArrivalEta(arrival.eta_to_plant, assembly.input.as_of),
       qty_base: arrival.qty_base,
     })),
     arrival_risks: familyArrivalCandidates
       .filter((arrival) => !isFamilyAllocatableArrival(arrival.lifecycle_kind, arrival.eta_to_plant, assembly.input.as_of))
-      .map((arrival) => familyArrivalRisk(arrival, assembly.input.as_of)),
+      .map((arrival) => familyArrivalRisk(arrival, assembly.input.as_of, isOverdueUnshipped(arrival) ? unshippedEtaOf(arrival) : null)),
     policies: assembly.input.policies,
     manual_lots: p.manualLots ?? [],
     // The Store "keep" quantity is read at the end of each period (owner 2026-10-28).
@@ -751,7 +760,6 @@ async function computePlanningOnce(p: PlanningParams) {
     }
     return out;
   })();
-  const movableSourceKeys = new Set(req.output.rows.flatMap((r) => r.inbound_events.map((event, index) => (event.reschedule_key ? `A|${r.material_id}|${index}|${event.reference}` : null)).filter((k): k is string => k !== null)));
   // Owner 2026-10-29: each not-yet-shipped order is first judged alone (every other order as planned). Moving them all at once can leave a level below Critical,
   // so the family's orders are then moved together to their advised dates and the latest-moving order is pulled back to its current date until no extra
   // level-day falls below Critical: the advised dates shown are jointly safe.

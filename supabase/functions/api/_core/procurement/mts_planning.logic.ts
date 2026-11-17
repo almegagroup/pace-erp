@@ -63,18 +63,30 @@ export function familyArrivalEta(etaToPlant: string | null, asOf: string): strin
   return etaToPlant !== null && ISO_DAY.test(etaToPlant) && etaToPlant >= asOf ? etaToPlant : asOf;
 }
 
+/**
+ * Owner 2026-11-17: an order that has NOT shipped and whose ETA passed (or is missing) is not stock and cannot land today: if it
+ * shipped today it would land after its own transit time. Counted from today + the shortest known route time (today when none is
+ * known). A piece already on the road keeps the old rule (counted today, it is physically moving).
+ */
+export function overdueUnshippedEta(asOf: string, shortestRouteDays: number | null): string {
+  const days = shortestRouteDays !== null && Number.isFinite(shortestRouteDays) && shortestRouteDays > 0 ? Math.floor(shortestRouteDays) : 0;
+  return new Date(Date.parse(`${asOf}T00:00:00Z`) + days * 86_400_000).toISOString().slice(0, 10);
+}
+
 /** True when the piece keeps its own ETA (no assumption, no flag). */
 export function isFamilyAllocatableArrival(_lifecycleKind: string, etaToPlant: string | null, asOf: string): boolean {
   return etaToPlant !== null && ISO_DAY.test(etaToPlant) && etaToPlant >= asOf;
 }
 
 /** Flag for a piece whose ETA had to be assumed (CC date); it is still counted as Family stock. */
-export function familyArrivalRisk(arrival: OptimizerConfirmedArrival, asOf: string): OptimizerArrivalFlag {
+export function familyArrivalRisk(arrival: OptimizerConfirmedArrival, asOf: string, unshippedEta: string | null = null): OptimizerArrivalFlag {
   const missing = arrival.eta_to_plant === null || !ISO_DAY.test(arrival.eta_to_plant);
   return {
     source_key: arrival.source_key, material_id: arrival.material_id, eta_to_plant: arrival.eta_to_plant,
-    assumed_eta: asOf, reason: missing ? "ETA_MISSING" : "ETA_PASSED",
-    message: missing
+    assumed_eta: unshippedEta ?? asOf, reason: missing ? "ETA_MISSING" : "ETA_PASSED",
+    message: unshippedEta
+      ? `${missing ? "No plant ETA" : `Plant ETA ${arrival.eta_to_plant} has passed`} and the order has not shipped: it is NOT stock. Counted from ${unshippedEta} (today + its transit time), the earliest it could land if it shipped today. Ask the vendor and update the CSN Tracker.`
+      : missing
       ? `No plant ETA — assumed to arrive today (${asOf}) so it is not bought again. Set ETA to plant in CSN Tracker or the PO.`
       : `Plant ETA ${arrival.eta_to_plant} has passed without receipt — assumed to arrive today (${asOf}) so it is not bought again. Update the CSN Tracker ETA.`,
   };
