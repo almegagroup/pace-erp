@@ -196,21 +196,12 @@ function bestColumns(r) {
 // Group tabs (owner 2026-11-04): one lean block per family — orders at a glance, the pool diary, level by level, and the day-by-day table folded.
 // Every fact appears once; the long engine wording and the day-by-day table are folded (click [+] at the left edge), nothing is dropped.
 // ─────────────────────────────────────────────────────────────────────────────
-const L_BLUE = "FFDCE6F1";
-const L_GREY = "FFF2F2F2";
-const L_AMBER = "FFFFF2CC";
-const L_GREEN = "FFE2EFDA";
-const L_DGREY = "FFD9D9D9";
-const LEAN_WIDTHS = [22, 40, 14, 18, 16, 14, 14, 20, 22, 28, 18, 60];
-const LEAN_COLS = LEAN_WIDTHS.length;
-function fill(cell, argb) { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb } }; }
 // Whole numbers from 100 up; below that up to 3 decimals, so a family kept in MT never shows 0.167 MT/day as "0".
 const qty = (n) => {
   if (n === null || n === undefined || !Number.isFinite(Number(n))) return "—";
   const v = Number(n);
   return Math.abs(v) >= 100 ? Math.round(v).toLocaleString("en-US") : Number(v.toFixed(3)).toLocaleString("en-US", { maximumFractionDigits: 3 });
 };
-const estLines = (text, width) => (text === null || text === undefined ? 1 : String(text).split("\n").reduce((sum, l) => sum + Math.max(1, Math.ceil(l.length / Math.max(1, width * 1.05))), 0));
 const matLines = (list) => {
   const items = (list ?? []).filter((x) => x.qty > 0.5);
   return items.length ? `${items.map((x) => `${x.material}: ${qty(x.qty)}`).join("\n")}\nTotal: ${qty(items.reduce((sum, x) => sum + x.qty, 0))}` : "—";
@@ -237,141 +228,30 @@ const recordedText = (rec, fallbackPlant, today = null) => {
 };
 /** The plan's as-of day (for "order-by already passed"): the first row of the family's day table. */
 
-function writeLeanFamily(sheet, b, company) {
-  const row = (vals, { bold = false, fillArgb = null, color = null, spans = {} } = {}) => {
-    const r = sheet.addRow(vals);
-    let maxLines = 1;
-    let col = 1;
-    while (col <= vals.length) {
-      const end = spans[col] ?? col;
-      const cell = r.getCell(col);
-      cell.alignment = { vertical: "top", wrapText: true };
-      cell.border = BORDER;
-      if (bold || color) cell.font = { bold, color: color ? { argb: color } : undefined };
-      if (fillArgb) for (let c = col; c <= end; c += 1) fill(r.getCell(c), fillArgb);
-      for (let c = col + 1; c <= end; c += 1) r.getCell(c).border = BORDER;
-      if (end > col) sheet.mergeCells(r.number, col, r.number, end);
-      const width = LEAN_WIDTHS.slice(col - 1, end).reduce((sum, w) => sum + w, 0);
-      maxLines = Math.max(maxLines, estLines(vals[col - 1], width));
-      col = end + 1;
-    }
-    if (maxLines > 1) r.height = 15 * maxLines;
-    return r;
-  };
-  const title = (text, { size = 11, fillArgb = null, bold = true, italic = false, color = null } = {}) => {
-    const r = sheet.addRow([text]);
-    const cell = r.getCell(1);
-    cell.font = { bold, italic, size, color: color ? { argb: color } : undefined };
-    cell.alignment = { vertical: "top", wrapText: true };
-    if (fillArgb) for (let c = 1; c <= LEAN_COLS; c += 1) fill(r.getCell(c), fillArgb);
-    sheet.mergeCells(r.number, 1, r.number, LEAN_COLS);
-    const lines = estLines(text, LEAN_WIDTHS.reduce((a, w) => a + w, 0));
-    if (lines > 1) r.height = 15 * lines;
-    return r;
-  };
+// Family tabs (owner 2026-11-18): the same day table and Prediction as the Stand-alone tabs and the old rolling-plan file (the engine's own Opening /
+// Pro-rata / Closing / Max Days / Min Days per date), preceded by ONE small table: what each level holds today.
+function writeFamilyToday(sheet, b) {
   const u = b.uom ?? "";
-  const todayIso = String(company?.calendar?.as_of ?? "").slice(0, 10) || null;
-  const wd = (v) => (v === null || v === undefined || !Number.isFinite(Number(v)) ? "—" : String(Math.floor(Number(v) + 1e-9)));
-  const policyOf = (sct) => `Min ${days(sct.target_days) ?? "—"} · Max ${days(sct.max_days) ?? "—"} · Critical ${days(sct.critical_days) ?? "—"}`;
-  const refName = (ref) => String(ref).replace(" (ORD)", " (not shipped)").replace(" (TRN)", " (in transit)"); // PO and CSN both (owner 2026-11-17)
-  const span = (list, opts = {}) => {
-    const vals = []; const spans = {};
-    let col = 1;
-    for (const [text, n = 1] of list) {
-      vals[col - 1] = text;
-      for (let k = 1; k < n; k += 1) vals[col - 1 + k] = "";
-      if (n > 1) spans[col] = col + n - 1;
-      col += n;
-    }
-    while (vals.length < LEAN_COLS) vals.push("");
-    return row(vals, { ...opts, spans });
-  };
-
-  // ── header: family, what runs out, self-check (owner 2026-11-18: nothing else — no "how to read", no refill method)
-  title(`${companyLabel(company)} — ${b.title} (family: ${b.members.join(", ")})`, { size: 13, fillArgb: TITLE_FILL });
-  const alarm = Boolean(b.first_shortage_day || (b.gaps ?? []).length);
-  const facts = [`Unit ${u || "—"}`, b.first_shortage_day ? `RUNS OUT ${b.first_shortage_day}${(b.qa_stock ?? []).length ? ` (but ${qty(b.qa_stock.reduce((sum, x) => sum + x.qty, 0))} ${u} is still in QA)` : ""}` : "", (b.gaps ?? []).length ? `ENGINE CANNOT PLAN — ${b.gaps.join("; ")}` : ""].filter(Boolean).join(" · ");
-  title(facts, { bold: alarm, color: alarm ? RED : null });
-  if ((b.self_check ?? []).length) title(`SELF-CHECK FAILED (${b.self_check.length}): ${b.self_check.slice(0, 3).join(" · ")}`, { bold: true, color: RED });
-  sheet.addRow([]);
-
   const sections = b.level_sections ?? [];
-
-  // ── 1. TODAY — what each level holds
-  title("1. TODAY — what each level holds", { size: 12, fillArgb: L_BLUE });
-  span([["Level (narrow first)", 2], ["Min · Max · Critical (days)", 2], ["Held by this level"], [`Use / day today (${u})`], ["Cover today (days, follows the monthly plan)"], ["Note", 5]], { bold: true, fillArgb: L_GREY });
+  if (!sections.length && !(b.qa_stock ?? []).length && !(b.excess_after ?? []).length) return;
+  const cap = sheet.addRow(["Today — what each level holds"]);
+  cap.getCell(1).font = { bold: true };
+  styleHeader(sheet.addRow(["Level (narrow first)", "Min · Max · Critical (days)", "Held by this level", `Use / day today (${u})`, "Cover today (days, follows the monthly plan)", "Note"]));
   for (const sct of sections) {
     const todayRow = (sct.rows ?? []).find((r) => r.kind === "Stock today");
     const low = sct.today_cover !== null && sct.today_cover !== undefined && sct.target_days !== null && sct.target_days !== undefined && Number(sct.today_cover) < Number(sct.target_days);
-    const out = span([[`${sct.label}\n${(sct.members ?? []).join(" + ")}`, 2], [policyOf(sct), 2], [qty(sct.reserve_now ?? todayRow?.lot_qty)], [qty(todayRow?.prorata_b)], [wd(sct.today_cover)], [low ? belowMinToday(sct).trim() : "", 4]]);
-    if (low) { out.getCell(7).font = { bold: true, color: { argb: RED } }; out.getCell(8).font = { color: { argb: RED } }; }
+    const row = sheet.addRow([`${sct.label}\n${(sct.members ?? []).join(" + ")}`, `Min ${days(sct.target_days) ?? "—"} · Max ${days(sct.max_days) ?? "—"} · Critical ${days(sct.critical_days) ?? "—"}`,
+      qty(sct.reserve_now ?? todayRow?.lot_qty), qty(todayRow?.prorata_b), days(sct.today_cover) ?? "—", low ? belowMinToday(sct).trim() : ""]);
+    row.eachCell((cell) => { cell.border = BORDER; cell.alignment = { vertical: "top", wrapText: true }; });
+    if (low) { row.getCell(5).font = { bold: true, color: { argb: RED } }; row.getCell(6).font = { color: { argb: RED } }; }
   }
-  span([["EXCESS POOL\n(no level needs it yet)", 2], [matLines(b.excess_after), 2], ["", 8]], { bold: true, fillArgb: L_GREEN });
+  const pool = sheet.addRow(["EXCESS POOL (no level needs it yet)", "", matLines(b.excess_after)]);
+  pool.eachCell((cell) => { cell.border = BORDER; cell.alignment = { vertical: "top", wrapText: true }; cell.font = { bold: true }; });
   if ((b.qa_stock ?? []).length) {
     const qaTotal = b.qa_stock.reduce((sum, x) => sum + x.qty, 0);
-    span([["IN QA today\n(not counted)", 2], [matLines(b.qa_stock), 2], [b.qa_extra_days !== null && b.qa_extra_days !== undefined ? `If all ${qty(qaTotal)} ${u} passes QA, the family's cover grows by about ${wd(b.qa_extra_days)} d.${b.first_shortage_day ? ` The shortage from ${b.first_shortage_day} may be a QA delay, not a missing order: chase QA before ordering.` : ""}` : "Cover effect not shown: no planned use.", 8]], { fillArgb: L_AMBER });
+    const qa = sheet.addRow(["IN QA today (not counted)", "", matLines(b.qa_stock), "", "", b.qa_extra_days !== null && b.qa_extra_days !== undefined ? `If all ${qty(qaTotal)} ${u} passes QA, the family's cover grows by about ${days(b.qa_extra_days)} d.${b.first_shortage_day ? ` The shortage from ${b.first_shortage_day} may be a QA delay, not a missing order: chase QA before ordering.` : ""}` : "Cover effect not shown: no planned use."]);
+    qa.eachCell((cell) => { cell.border = BORDER; cell.alignment = { vertical: "top", wrapText: true }; });
   }
-  sheet.addRow([]);
-
-  // One plain, short reason per order and level (owner 2026-11-18: no "if it is late" wording).
-  const whyText = (r, sct) => {
-    const rec = r.existing_eta ? day(r.existing_eta) : null;
-    const eng = r.engine_eta ? day(r.engine_eta) : null;
-    const target = days(sct.target_days);
-    if (!eng) return "Not needed: this level stays above its Min without it.";
-    if (!rec) return `Must land by ${eng}.`;
-    if (eng === rec) return `On time. Cover after it lands: ${wd(r.min_a)} d (Min ${target ?? "—"}).`;
-    if (eng < rec) return `Must land by ${eng}: if it lands on ${rec}, the cover just before it is ${wd(r.min_a_before)} d, below Min ${target ?? "—"}.`;
-    return `Can wait until ${eng}: cover is then ${wd(r.min_b)} d (Min ${target ?? "—"}).`;
-  };
-  // Where the stock outlasts the plan the engine gives no day count: show the days up to the plan's last day of use and what is spare after it.
-  const coverTxt = (value, beyond) => (value !== null && value !== undefined ? wd(value) : beyond ? `${beyond.days} d to plan end, ${qty(beyond.left)} ${u} spare` : "—");
-  const coverPair = (before, after, bx, ax) => `${coverTxt(before, bx)} → ${coverTxt(after, ax)}`;
-  const belowMin = (value, sct) => value !== null && value !== undefined && sct.target_days !== null && sct.target_days !== undefined && Number(value) < Number(sct.target_days);
-  const engineText = (r) => {
-    const en = r.engine_eta ?? "";
-    if (!en) return "Not needed";
-    return r.etd ? `ETD ${day(r.etd)}\nPort ${day(r.port) || "—"}\nPlant ${day(en)}` : day(en);
-  };
-
-  // ── 2. LEVEL BY LEVEL — every order on its Tracker date with the Suggested date beside it
-  title("2. LEVEL BY LEVEL — every order on its Tracker date (CSN Tracker: ATD / ATA when they exist, else ETD / ETA), the Suggested date beside it", { size: 12, fillArgb: L_BLUE });
-  for (const sct of sections) {
-    title(`${sct.label} — ${policyOf(sct)} · ${(sct.members ?? []).join(" + ")}`, { size: 11, fillArgb: L_GREY });
-    row(["Tracker date", "Order", "Lot qty", "Share of this lot the level will use over time", "Went into reserve that day (Tracker date)", "Cover before (d)", "Cover after (d)", "Excess after (this level's items)", "Suggested date", "Suggested: cover before → after (d)", "Suggested: excess after", "Why this date"], { bold: true, fillArgb: L_GREY });
-    const today = (sct.rows ?? []).find((r) => r.kind === "Stock today");
-    if (today) row([day(todayIso), `Today's stock\n${(sct.members ?? []).join(" + ")}`, qty(today.lot_qty), qty(sct.reserve_now ?? today.to_level), "", "", coverTxt(today.min_a, today.min_a_x), qty(today.excess), "", "", "", ""]);
-    const existing = (sct.rows ?? []).filter((r) => r.kind === "Existing order")
-      .sort((x, y) => String(x.existing_eta ?? x.engine_eta ?? "").localeCompare(String(y.existing_eta ?? y.engine_eta ?? "")) || String(x.engine_eta ?? "").localeCompare(String(y.engine_eta ?? "")));
-    for (const r of existing) {
-      const out = row([recordedText(r.rec, r.existing_eta, todayIso), `${r.material}\n${refName(r.ref)}\n${r.supplier ?? ""} · ${STATUS_LABEL[r.status] ?? r.status ?? ""}`, qty(r.lot_qty), qty(r.to_level), qty(r.into_reserve),
-        coverTxt(r.min_a_before, r.min_a_before_x), coverTxt(r.min_a, r.min_a_x), qty(r.excess_a), engineText(r), coverPair(r.min_b_before, r.min_b, r.min_b_before_x, r.min_b_x), qty(r.excess), [whyText(r, sct), r.action, r.arr_note].filter(Boolean).join("\n")]);
-      if (r.engine_eta && r.existing_eta && r.engine_eta !== r.existing_eta) fill(out.getCell(9), L_AMBER);
-      if (belowMin(r.min_a_before, sct)) out.getCell(6).font = { bold: true, color: { argb: RED } };
-      if (belowMin(r.min_b_before, sct)) out.getCell(10).font = { bold: true, color: { argb: RED } };
-    }
-    const projections = (sct.rows ?? []).filter((r) => r.kind === "Projection")
-      .sort((x, y) => String(x.existing_eta ?? x.engine_eta ?? "").localeCompare(String(y.existing_eta ?? y.engine_eta ?? "")));
-    for (const r of projections) {
-      const out = row([r.existing_eta ? day(r.existing_eta) : "—", `NEW (engine)\n${r.material}\nOrder by ${day(r.po_by) || "—"} · ${r.supplier ?? "—"}`, qty(r.lot_qty), qty(r.to_level), qty(r.into_reserve),
-        coverTxt(r.min_a_before, r.min_a_before_x), coverTxt(r.min_a, r.min_a_x), qty(r.excess_a), engineText(r), coverPair(r.min_b_before, r.min_b, r.min_b_before_x, r.min_b_x), qty(r.excess), [r.why, r.action].filter(Boolean).join("\n")], { fillArgb: L_AMBER });
-      if (belowMin(r.min_a_before, sct)) out.getCell(6).font = { bold: true, color: { argb: RED } };
-      if (belowMin(r.min_b_before, sct)) out.getCell(10).font = { bold: true, color: { argb: RED } };
-    }
-    sheet.addRow([]);
-  }
-
-  // ── 3. NEW ORDERS THE ENGINE ADDS — after the last recorded order, with the other route
-  title("3. NEW ORDERS THE ENGINE ADDS — after the last order in the CSN Tracker, with the other route", { size: 12, fillArgb: L_BLUE });
-  span([["New order", 2], ["Qty · vendor · split over levels", 2], ["Route used (ETD → Port → Plant)", 3], ["Tracker date"], ["Suggested date"], ["Other route (can it still connect?)", 2]], { bold: true, fillArgb: L_GREY });
-  const projectionRows = b.projection_total ?? [];
-  if (!projectionRows.length) span([["The engine adds no new order for this family.", LEAN_COLS]]);
-  for (const p of projectionRows) {
-    const route = p.etd ? `ETD ${day(p.etd)} → Port ${day(p.port) || "—"} → Plant ${day(p.engine_eta ?? p.recorded_eta)}` : `Plant ${day(p.engine_eta ?? p.recorded_eta) || "—"}`;
-    const split = (p.parts ?? []).map((x) => `${x.level}: ${qty(x.qty)}`).join("\n");
-    span([[`${p.material}\nOrder by ${day(p.po_by) || "—"}`, 2], [[`${qty(p.qty)} ${u}`.trim(), p.supplier ?? "—", split].filter(Boolean).join("\n"), 2], [route, 3], [p.recorded_eta ? day(p.recorded_eta) : "—"], [p.engine_eta ? day(p.engine_eta) : "Not needed"], [p.alternatives || "—", 2]], { fillArgb: !p.engine_eta ? L_DGREY : null });
-  }
-  sheet.addRow([]);
   sheet.addRow([]);
 }
 
@@ -390,19 +270,13 @@ function writeBlocks(sheet, companies, kind, { filter = () => true, sections = f
   const list = companies.flatMap((c) => (c.blocks ?? []).filter((b) => b.kind === kind && filter(b)).map((b) => ({ ...b, company: c })))
     .sort((a, b) => a.title.localeCompare(b.title) || companyLabel(a.company).localeCompare(companyLabel(b.company)));
   if (list.length === 0) { sheet.addRow([emptyText ?? `No ${kind} item with use, arrival or order in the horizon.`]); return; }
-  if (sections) {
-    sheet.properties.outlineProperties = { summaryBelow: false };
-    for (const b of list) writeLeanFamily(sheet, b, b.company);
-    widths(sheet, LEAN_WIDTHS);
-    return;
-  }
   for (const b of list) {
     const title = sheet.addRow([`${companyLabel(b.company)} — ${b.title}${b.is_family ? ` (family: ${b.members.join(", ")})` : ""}`]);
     title.getCell(1).font = { bold: true };
     title.getCell(1).fill = { type: "pattern", pattern: "solid", fgColor: { argb: TITLE_FILL } };
     // A family has one Target / Critical per member: show each, not just the first member's pair.
     const policyFacts = b.is_family && (b.members_policy ?? []).length ? `Target / Critical — ${b.members_policy.join(" · ")}` : null;
-    const facts = [`Unit ${b.uom ?? "—"}`, ...(policyFacts ? [policyFacts] : [`Target ${b.target_days ?? "—"} d`, `Critical ${b.critical_days ?? "—"} d`]), b.first_shortage_day ? `RUNS OUT ${b.first_shortage_day}` : "",
+    const facts = [`Unit ${b.uom ?? "—"}`, ...(policyFacts ? [policyFacts] : [`Target ${b.target_days ?? "—"} d`, `Critical ${b.critical_days ?? "—"} d`]), b.first_shortage_day ? `RUNS OUT ${b.first_shortage_day}${(b.qa_stock ?? []).length ? ` (but ${qty(b.qa_stock.reduce((sum, x) => sum + x.qty, 0))} ${b.uom ?? ""} is still in QA)` : ""}` : "",
       (b.gaps ?? []).length ? `ENGINE CANNOT PLAN — ${b.gaps.join("; ")}` : ""].filter(Boolean).join(" · ");
     const factRow = sheet.addRow([facts]);
     if (b.is_family && (b.members_stock ?? []).length) {
@@ -428,6 +302,7 @@ function writeBlocks(sheet, companies, kind, { filter = () => true, sections = f
       const tn = sheet.addRow([b.together_note]);
       tn.getCell(1).font = { italic: true, bold: true };
     }
+    if (sections) writeFamilyToday(sheet, b);
     styleHeader(sheet.addRow(BLOCK_HEAD));
     for (const r of b.rows) {
       const row = sheet.addRow([
