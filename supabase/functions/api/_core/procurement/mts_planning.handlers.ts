@@ -12,6 +12,7 @@ import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.t
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse } from "../response.ts";
 import { normalizePlanMonth } from "./mts_customer_plan.logic.ts";
+import { reportKeepDays } from "./mts_level_cover.logic.ts";
 import { buildCalendar, isIsoDate, isTransferFed, monthEnd, moqInBase, orderUnitOf, preferredVendorOrderUom, type PolicyOverride, toMaterialBase } from "./mts_requirement.logic.ts";
 import {
   cachedLoad,
@@ -876,7 +877,10 @@ async function computePlanningOnce(p: PlanningParams) {
       const resAPure = resA;
       const lotsA = lotsOf(resA);
       const lotsB = lotsOf(resB);
-      const keep = new Set<string>([input.as_of, ...input.confirmed_arrivals.map((a) => String(a.eta_to_plant)), ...movedArrivals.map((a) => String(a.eta_to_plant)), ...lotsA.map((l) => l.day), ...lotsB.map((l) => l.day)]);
+      const landingDays = [...input.confirmed_arrivals.map((a) => String(a.eta_to_plant)), ...movedArrivals.map((a) => String(a.eta_to_plant)), ...lotsA.map((l) => l.day), ...lotsB.map((l) => l.day)];
+      // Owner 2026-11-18: the report shows each level's cover just BEFORE a landing and just AFTER it, so keep both days exactly. A day in between
+      // is never estimated: the waterfall tops a level up from the pool on days nothing lands, so an estimate would be wrong.
+      const keep = reportKeepDays(input.as_of, landingDays);
       out.push({
         member_ids: members,
         arrivals: input.confirmed_arrivals.map((a) => ({

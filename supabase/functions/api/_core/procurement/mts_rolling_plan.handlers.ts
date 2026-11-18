@@ -21,7 +21,7 @@ import { groupCoveredBy, isTransferFed } from "./mts_requirement.logic.ts";
 import { loadBulkMaterialIds } from "./mts_bulk_materials.ts";
 import { memberMattersForGaps } from "./mts_planning.logic.ts";
 import { fail, handleError, type ReqHandlerContext, requireRequirementViewAccess, todayInIndia } from "./mts_requirement.handlers.ts";
-import { addDaysToIso, carryCover, daysBetweenIso, levelRecordUpTo } from "./mts_level_cover.logic.ts";
+import { addDaysToIso, daysBetweenIso } from "./mts_level_cover.logic.ts";
 import { buildWaterfallView } from "./mts_waterfall_view.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -296,28 +296,18 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         for (const [k, v] of levelUse) if (k.startsWith(prefix)) { const d = k.slice(prefix.length); if (d > fromExclusive && d <= toInclusive) sum += v; }
         return q(sum);
       };
+      // Owner 2026-11-18: exact records only. The planner keeps the day before and the day of every landing, so nothing is estimated
+      // (a carried-forward guess ignored the pool top-ups of quiet days and showed false zeros).
       const stateNear = (days: typeof fam.days_a, key: string, date: string | null) => {
-        if (!date) return null;
-        const exact = stateAt(days, key, date);
-        let base = exact;
-        let gap = 0;
-        let reserveAtDate = exact?.reserve ?? null;
-        if (!exact) {
-          const hit = levelRecordUpTo(days, key, date);
-          const rec = hit ? stateAt(days, key, hit.record.day) : null;
-          if (!hit || !rec) return null;
-          base = rec;
-          gap = hit.gap;
-          reserveAtDate = rec.reserve === null || rec.reserve === undefined ? null : Math.max(0, rec.reserve - useBetween(key, hit.record.day, date));
-        }
-        if (!base) return null;
-        const minD = carryCover(base.minD, gap);
+        const base = stateAt(days, key, date);
+        if (!base || !date) return null;
+        const reserveAtDate: number | null = base.reserve ?? null;
         let coverBeyond: { days: number; left: number } | null = null;
-        if (minD === null && reserveAtDate !== null) {
+        if (base.minD === null && reserveAtDate !== null) {
           const lastUse = lastUseDayOf(key);
           if (lastUse && lastUse >= date) coverBeyond = { days: daysBetweenIso(date, lastUse), left: Math.max(0, reserveAtDate - useBetween(key, date, lastUse)) };
         }
-        return { ...base, cover: base.cover === null ? null : Math.max(0, base.cover - gap), minD, maxD: carryCover(base.maxD, gap), reserveAtDate, coverBeyond };
+        return { ...base, reserveAtDate, coverBeyond };
       };
       // The state on the evening BEFORE the landing day. A lot that lands on the as-of day itself has no earlier record: its "before" is today's own state.
       const stateBefore = (days: typeof fam.days_a, key: string, date: string | null) => {

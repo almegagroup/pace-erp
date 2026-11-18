@@ -31,3 +31,10 @@ export function carryCover(cover: number | null | undefined, gap: number): numbe
   if (cover === null || cover === undefined) return null;
   return Math.max(0, cover - Math.max(0, gap));
 }
+
+/** Days of the level records the report needs: today, every landing day, and the day before each (its "before"). */
+export function reportKeepDays(asOf: string, landingDays: readonly string[]): Set<string> {
+  const keep = new Set<string>([asOf]);
+  for (const d of landingDays) { keep.add(d); keep.add(addDaysToIso(d, -1)); }
+  return keep;
+}

@@ -1,5 +1,5 @@
 import { assertEquals } from "jsr:@std/assert@1";
-import { addDaysToIso, carryCover, levelRecordUpTo } from "./mts_level_cover.logic.ts";
+import { addDaysToIso, carryCover, levelRecordUpTo, reportKeepDays } from "./mts_level_cover.logic.ts";
 
 const days = [
   { day: "2026-11-18", levels: [{ level_key: "A" }, { level_key: "B" }] },
@@ -29,4 +29,9 @@ Deno.test("cover is carried over quiet days, never below zero, null stays null",
   assertEquals(carryCover(3, 7), 0);
   assertEquals(carryCover(null, 7), null);
   assertEquals(addDaysToIso("2026-11-22", -1), "2026-11-21");
+});
+
+Deno.test("report keeps today, every landing day and the day before it (so 'before' is exact, never estimated)", () => {
+  const keep = reportKeepDays("2026-11-18", ["2026-12-13", "2026-12-19"]);
+  assertEquals([...keep].sort(), ["2026-11-18", "2026-12-12", "2026-12-13", "2026-12-18", "2026-12-19"]);
 });
