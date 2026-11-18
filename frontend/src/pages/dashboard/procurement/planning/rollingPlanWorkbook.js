@@ -358,6 +358,7 @@ function writeBlocks(sheet, companies, kind, { filter = () => true, sections = f
       const cap = sheet.addRow([suggestedLots ? "Prediction — the next new orders if the orders move to their Suggested dates" : "Prediction"]);
       cap.getCell(1).font = { bold: true, italic: true };
       const head = [...PRED_HEAD];
+      if (suggestedLots) head.push("Family worst Min (Suggested date)");
       if (suggestedLots) { head[5] = "Level Min → Max (Suggested date)"; head[6] = "Excess by level (Suggested)"; }
       styleHeader(sheet.addRow(head));
       const shown = suggestedLots ?? b.prediction;
@@ -365,28 +366,30 @@ function writeBlocks(sheet, companies, kind, { filter = () => true, sections = f
         let cells;
         if (suggestedLots) {
           const same = (b.prediction ?? []).find((y) => y.material === x.material && day(y.date) === day(x.recorded_eta));
+          let worst = null;
           const minMax = []; const excess = [];
           for (const sct of b.level_sections ?? []) {
             for (const r of (sct.rows ?? []).filter((q) => q.kind === "Projection" && q.material === x.material && String(q.engine_eta ?? "").slice(0, 10) === String(x.engine_eta).slice(0, 10))) {
               minMax.push(`${sct.label}: ${levelDays(r.min_b_before, r.min_b_before_x, b.uom ?? "")} → ${levelDays(r.max_b, r.max_b_x, b.uom ?? "")}${belowMinNote(r.min_b_before, sct)}`);
               excess.push(`${sct.label}: ${qty(r.excess)}`);
+              if (r.min_b_before !== null && r.min_b_before !== undefined && (worst === null || Number(r.min_b_before) < worst.value)) worst = { value: Number(r.min_b_before), label: sct.label };
             }
           }
           cells = ["Suggested", day(x.etd), day(x.port), day(x.engine_eta), num(x.qty), [...new Set(minMax)].join("\n") || "—", [...new Set(excess)].join("\n") || "—", x.material, x.supplier ?? "", day(x.po_by),
-            same?.uom ?? b.uom ?? "", same ? days(same.trigger_cover_days) : "", same ? days(same.trigger_min_days) : "", same ? triggeredBy(same) : "", same ? [minGapText(same.min_gap), minDipText(same.min_dip)].filter(Boolean).join("\n") : "", "", "", "", x.alternatives || "—"];
+            same?.uom ?? b.uom ?? "", same ? days(same.trigger_cover_days) : "", same ? days(same.trigger_min_days) : "", same ? triggeredBy(same) : "", same ? [minGapText(same.min_gap), minDipText(same.min_dip)].filter(Boolean).join("\n") : "", "", "", "", x.alternatives || "—", worst ? `${Math.floor(worst.value + 1e-9)} d (${worst.label})` : "—"];
         } else {
           cells = [x.source === "YOU" ? "Planner" : "Suggested", day(x.import_etd), day(x.port_eta), day(x.date), num(x.qty), coverCell(x.max_days, x.max_days_est, 0, b.plan_end), coverCell(x.min_days, x.min_days_est, 0, b.plan_end), x.material, x.supplier ?? "", day(x.po_by),
             x.uom ?? "", days(x.trigger_cover_days), days(x.trigger_min_days), triggeredBy(x), [minGapText(x.min_gap), minDipText(x.min_dip)].filter(Boolean).join("\n"), "", "", "", alternativesText(x.alternatives)];
         }
         const row = sheet.addRow(cells);
         row.eachCell((cell, i) => { cell.border = BORDER; if (i === 5 || (!suggestedLots && (i === 6 || i === 7))) cell.numFmt = NUM; });
-        for (const c of suggestedLots ? [6, 7, 14, 15, 19] : [14, 15, 19]) row.getCell(c).alignment = { wrapText: true, vertical: "top" };
+        for (const c of suggestedLots ? [6, 7, 14, 15, 19, 20] : [14, 15, 19]) row.getCell(c).alignment = { wrapText: true, vertical: "top" };
       }
     }
     sheet.addRow([]);
     sheet.addRow([]);
   }
-  widths(sheet, sections ? [16, 26, 24, 18, 13, 13, 38, 13, 13, 13, 42, 42, 13, 9, 10, 10, 10, 10, 14, 14, 56, 34] : [16, 26, 24, 18, 13, 13, 38, 13, 13, 13, 42, 42, 13, 9, 10, 10, 10, 10, 14, 14, 44, 40]);
+  widths(sheet, sections ? [16, 26, 24, 18, 13, 13, 38, 13, 13, 13, 42, 42, 13, 9, 10, 10, 10, 10, 14, 26, 56, 34] : [16, 26, 24, 18, 13, 13, 38, 13, 13, 13, 42, 42, 13, 9, 10, 10, 10, 10, 14, 14, 44, 40]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

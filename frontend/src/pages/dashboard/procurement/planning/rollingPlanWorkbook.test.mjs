@@ -315,6 +315,7 @@ test("family tabs: the stock / CSN table has two level columns (Tracker | Sugges
   assert.ok(cells.includes("Level Min → Max (Suggested date)") && cells.includes("Excess by level (Suggested)"), "its Max / Min columns carry each level's Min → Max, never blank");
   assert.ok(cells.includes("2026-12-27") && !cells.includes("2027-02-01"), "only the lot that exists on the Suggested dates, at its Suggested date");
   assert.ok(cells.some((c) => c.includes("Exclusive — VAE A: 19 → 40 d to plan end + 1,500 KG spare")), "beyond the plan: days to plan end and the spare");
+  assert.ok(cells.includes("Family worst Min (Suggested date)") && cells.includes("19 d (Exclusive — VAE A)"), "the lowest level Min is one plain number");
   assert.ok(cells.some((c) => c.includes("LOCAL · VAE A")), "other route");
   assert.ok(!cells.some((c) => c.startsWith("Projection — the next new orders")), "no second projection table");
   await wb.xlsx.writeBuffer();
