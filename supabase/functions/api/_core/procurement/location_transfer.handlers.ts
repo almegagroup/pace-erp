@@ -1181,6 +1181,8 @@ export async function postLocationTransferHandler(
       ]),
     );
 
+    const machineAllottedTotals = await fetchMachineAllottedTotals(companyId, [...mtsLocationIds]);
+
     // DEPENDENT: each line draws down the shared unassignedLeft balance, so order matters
     for (const entry of postingLines) {
       const line = lineMap.get(entry.request_line_id);
@@ -1207,6 +1209,17 @@ export async function postLocationTransferHandler(
       });
       if (entry.quantity > availability.availableQty + EPSILON) {
         throw new Error("LTR_REQUEST_QTY_EXCEEDS_AVAILABLE");
+      }
+      // Found live 2026-11-18 (CMP003 S002): a P311 out of stock that was already
+      // allotted to a machine never reduced that machine's bucket, so Process PO
+      // Page 4 later saw phantom stock. Stock sitting in a machine bucket must be
+      // released to Unassigned first (IN11 Release), then it can be transferred.
+      const sourceLocationForBucket = toTrimmedString(line.source_storage_location_id);
+      if (mtsLocationIds.has(sourceLocationForBucket)) {
+        const allotted = machineAllottedTotals.get(`${sourceLocationForBucket}::${toTrimmedString(line.material_id)}`) ?? 0;
+        if (entry.quantity > availability.availableQty - allotted + EPSILON) {
+          throw new Error("LTR_POST_MACHINE_ALLOTTED");
+        }
       }
 
       const outLineRef = `${entry.request_line_id}::OUT`;
@@ -1330,7 +1343,7 @@ export async function postLocationTransferHandler(
     const code =
       message === "LTR_SCOPE_VIOLATION"
         ? "LTR_SCOPE_VIOLATION"
-        : message === "LTR_REQUEST_QTY_EXCEEDS_AVAILABLE" || message === "LTR_POST_QTY_EXCEEDS_OPEN"
+        : message === "LTR_REQUEST_QTY_EXCEEDS_AVAILABLE" || message === "LTR_POST_QTY_EXCEEDS_OPEN" || message === "LTR_POST_MACHINE_ALLOTTED"
           ? message
           : message === "LTR_POST_DOCUMENT_FAILED" || message === "LTR_POST_MACHINE_LOG_FAILED"
             ? message
@@ -1338,12 +1351,17 @@ export async function postLocationTransferHandler(
     const status =
       code === "LTR_SCOPE_VIOLATION"
         ? 403
-        : code === "LTR_REQUEST_QTY_EXCEEDS_AVAILABLE" || code === "LTR_POST_QTY_EXCEEDS_OPEN"
+        : code === "LTR_REQUEST_QTY_EXCEEDS_AVAILABLE" || code === "LTR_POST_QTY_EXCEEDS_OPEN" || code === "LTR_POST_MACHINE_ALLOTTED"
           ? 409
           : code === "LTR_POST_DOCUMENT_FAILED" || code === "LTR_POST_MACHINE_LOG_FAILED"
             ? 500
             : 400;
-    return ltrErrorResponse(req, ctx, code, status, message);
+    return ltrErrorResponse(
+      req, ctx, code, status,
+      code === "LTR_POST_MACHINE_ALLOTTED"
+        ? "This stock is allotted to a machine. Release it to Unassigned first, then transfer it."
+        : message,
+    );
   }
 }
 
@@ -1462,6 +1480,38 @@ async function fetchUnassignedBuckets(companyId: string, storageLocationIds: str
     }
   }
   return [...totals.values()].filter((row) => row.qty > EPSILON);
+}
+
+// Stock currently allotted to a specific machine (machine_id NOT NULL), summed
+// per (storage_location, material). Positive balances only.
+async function fetchMachineAllottedTotals(companyId: string, storageLocationIds: string[]): Promise<Map<string, number>> {
+  const totals = new Map<string, number>();
+  if (storageLocationIds.length === 0) return totals;
+  let data: JsonRecord[];
+  try {
+    data = await fetchAllRows<JsonRecord>((from, to) => serviceRoleClient
+      .schema("erp_production")
+      .from("machine_stock_log")
+      .select("storage_location_id, material_id, machine_id, qty, direction")
+      .eq("company_id", companyId)
+      .not("machine_id", "is", null)
+      .in("storage_location_id", storageLocationIds)
+      .range(from, to));
+  } catch {
+    throw new Error("LTR_POST_MACHINE_LOG_FAILED");
+  }
+  const perMachine = new Map<string, number>();
+  for (const row of data) {
+    const key = `${toTrimmedString(row.storage_location_id)}::${toTrimmedString(row.material_id)}::${toTrimmedString(row.machine_id)}`;
+    const sign = toUpperTrimmedString(row.direction) === "OUT" ? -1 : 1;
+    perMachine.set(key, (perMachine.get(key) ?? 0) + Number(parseNullableNumber(row.qty) ?? 0) * sign);
+  }
+  for (const [key, qty] of perMachine) {
+    if (qty <= EPSILON) continue;
+    const [loc, mat] = key.split("::");
+    totals.set(`${loc}::${mat}`, Number(((totals.get(`${loc}::${mat}`) ?? 0) + qty).toFixed(6)));
+  }
+  return totals;
 }
 
 function normalizeDistributions(rawDistributions: unknown): DistributionInput[] {
