@@ -127,12 +127,27 @@ export default function SettlementInvoicePage() {
   );
   const receivingCostCenterOptions = sendingCostCenterQuery; // Receiver's own CC list resolved once a row is checked -- see note below.
 
-  const runningTotal = useMemo(
-    () => pendingRows.filter((row) => checkedGrnIds.has(row.grn_id)).reduce((sum, row) => sum + Number(row.grn_qty || 0), 0),
+  // The Settlement Invoice is raised in the receipts' OWN UoM (e.g. MT): the database matches
+  // Invoice Quantity to sum(received_qty) and the printed invoice is received_qty x rate. The
+  // grid's "GRN Qty" column is the BASE UoM (e.g. KG), so summing that here made the page demand
+  // KG while the database demanded MT (and "Rate per UOM" had no UoM at all).
+  const checkedRows = useMemo(
+    () => pendingRows.filter((row) => checkedGrnIds.has(row.grn_id)),
     [pendingRows, checkedGrnIds],
+  );
+  const settlementUoms = useMemo(
+    () => [...new Set(checkedRows.map((row) => String(row.txn_uom_code ?? row.base_uom_code ?? "").trim()).filter(Boolean))],
+    [checkedRows],
+  );
+  const mixedUom = settlementUoms.length > 1;
+  const settlementUom = settlementUoms.length === 1 ? settlementUoms[0] : "";
+  const runningTotal = useMemo(
+    () => checkedRows.reduce((sum, row) => sum + Number(row.grn_qty_txn ?? row.grn_qty ?? 0), 0),
+    [checkedRows],
   );
   const invoiceQtyNumber = Number(header.invoice_quantity);
   const quantityMatches = checkedGrnIds.size > 0
+    && !mixedUom
     && Number.isFinite(invoiceQtyNumber)
     && Math.round(runningTotal * 1e6) === Math.round(invoiceQtyNumber * 1e6);
   const canCreate = quantityMatches
@@ -295,15 +310,15 @@ export default function SettlementInvoicePage() {
                 <input type="date" value={header.posting_date} onChange={(event) => setHeader((current) => ({ ...current, posting_date: event.target.value }))} className="h-[26px] border border-slate-300 px-2 text-[11px]" />
               </label>
               <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-                Invoice Quantity
+                {`Invoice Quantity${settlementUom ? ` (${settlementUom})` : ""}`}
                 <input type="number" value={header.invoice_quantity} onChange={(event) => setHeader((current) => ({ ...current, invoice_quantity: event.target.value }))} className="h-[26px] border border-slate-300 px-2 text-[11px]" />
               </label>
               <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-                Running Total (checked rows)
-                <input readOnly value={formatQty(runningTotal)} className={`h-[26px] border px-2 text-[11px] ${quantityMatches ? "border-emerald-400 bg-emerald-50" : "border-rose-300 bg-rose-50"}`} />
+                {`Running Total (checked rows${settlementUom ? `, ${settlementUom}` : ""})`}
+                <input readOnly value={mixedUom ? `Mixed UoM: ${settlementUoms.join(" / ")}` : formatQty(runningTotal)} className={`h-[26px] border px-2 text-[11px] ${quantityMatches ? "border-emerald-400 bg-emerald-50" : "border-rose-300 bg-rose-50"}`} />
               </label>
               <label className="grid gap-1 text-[11px] font-medium text-slate-600">
-                Rate per UOM
+                {settlementUom ? `Rate per ${settlementUom}` : "Rate per UOM"}
                 <input type="number" value={header.rate_per_uom} onChange={(event) => setHeader((current) => ({ ...current, rate_per_uom: event.target.value }))} className="h-[26px] border border-slate-300 px-2 text-[11px]" />
               </label>
               <label className="grid gap-1 text-[11px] font-medium text-slate-600">
@@ -418,8 +433,9 @@ export default function SettlementInvoicePage() {
                 <div className="grid grid-cols-2 gap-2 border border-slate-200 p-3 text-sm md:grid-cols-4">
                   <div>Settlement No.<strong className="block">{settledLookupQuery.data.invoice.settlement_number}</strong></div>
                   <div>Status<strong className="block">{settledLookupQuery.data.invoice.status}</strong></div>
-                  <div>Invoice Qty<strong className="block">{formatQty(settledLookupQuery.data.invoice.invoice_quantity)}</strong></div>
-                  <div>Rate per UOM<strong className="block">{settledLookupQuery.data.invoice.rate_per_uom}</strong></div>
+                  {/* Both figures are in the covered receipts' own UoM (e.g. MT), not the base-UoM grid quantity. */}
+                  <div>{`Invoice Qty${settledLookupQuery.data.covered_grns?.[0]?.txn_uom_code ? ` (${settledLookupQuery.data.covered_grns[0].txn_uom_code})` : ""}`}<strong className="block">{formatQty(settledLookupQuery.data.invoice.invoice_quantity)}</strong></div>
+                  <div>{settledLookupQuery.data.covered_grns?.[0]?.txn_uom_code ? `Rate per ${settledLookupQuery.data.covered_grns[0].txn_uom_code}` : "Rate per UOM"}<strong className="block">{settledLookupQuery.data.invoice.rate_per_uom}</strong></div>
                 </div>
                 <ErpDenseGrid
                   columns={settledColumns}
