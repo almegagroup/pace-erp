@@ -2073,6 +2073,7 @@ export async function listGrnInvoiceMappingCandidatesHandler(
         vendor_name: vendor ? `${vendor.vendor_code} — ${vendor.vendor_name}` : null,
         material_name: material ? `${material.pace_code} — ${material.material_name}` : null,
         received_qty: g.received_qty,
+        uom_code: g.uom_code ?? null,
         po_number: po?.po_number ?? null,
         sto_number: sto?.sto_number ?? null,
         vehicle_number: gateEntry?.vehicle_number ?? null,
@@ -2191,6 +2192,10 @@ export async function mapGrnInvoiceHandler(
       serviceRoleClient.schema("erp_procurement").from("goods_receipt").select("*").in("id", idChunk));
     if (grns.length !== grnIds.length) {
       return procurementErrorResponse(req, ctx, "GRN_MAPPING_GRN_NOT_FOUND", 404, "One or more selected GRNs were not found.");
+    }
+    for (const grn of grns) {
+      const rateUnitError = invoiceRateUnitError(grn, invoiceRate);
+      if (rateUnitError) return procurementErrorResponse(req, ctx, "GRN_INVOICE_RATE_UOM_MISMATCH", 400, rateUnitError);
     }
     const selectedGrnQty = grns.reduce((total, grn) => total + Number(grn.received_qty ?? 0), 0);
     // This is a hard business gate, not merely the UI cross-check: callers
@@ -2411,6 +2416,19 @@ function splitProportionally(totalValue: number, slices: { quantity: number }[],
   return shares;
 }
 
+// Found live 2026-11-19 (CMP003 Fine Sand, GRN UoM MT / base KG): the vendor invoice quotes the rate per KG (3.2),
+// but invoice_rate/confirmed_rate are per the GRN's own UoM (per MT, e.g. 3200). Typing 3.2 was then divided by
+// per_pack_qty again (AC01 landed cost, stock revaluation) -> 1000x too low. A rate that is within 5x of the
+// per-BASE-unit PO rate while the GRN UoM is a pack of > 1 base units is that mistake; reject it with the fix.
+function invoiceRateUnitError(grn: JsonRecord, rate: number): string | null {
+  const perPackQty = grn.per_pack_qty != null ? Number(grn.per_pack_qty) : 0;
+  const poRate = grn.po_rate != null ? Number(grn.po_rate) : 0;
+  if (!(perPackQty > 1) || !(poRate > 0) || !(rate > 0)) return null;
+  if (rate > (poRate / perPackQty) * 5) return null;
+  const uom = toTrimmedString(grn.uom_code) || "pack UoM";
+  return `Rate ${rate} looks like a per-base-unit rate. Enter the rate per ${uom} (the PO rate is ${poRate} per ${uom}).`;
+}
+
 export async function splitGrnHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -2462,6 +2480,10 @@ export async function splitGrnHandler(
       .select("*").eq("id", grnId).single();
     if (grnError || !grn) {
       return procurementErrorResponse(req, ctx, "GRN_NOT_FOUND", 404, "GRN not found.");
+    }
+    for (const slice of slices) {
+      const rateUnitError = invoiceRateUnitError(grn as JsonRecord, slice.invoiceRate);
+      if (rateUnitError) return procurementErrorResponse(req, ctx, "GRN_INVOICE_RATE_UOM_MISMATCH", 400, rateUnitError);
     }
     if (toUpperTrimmedString(grn.status) !== "POSTED") {
       return procurementErrorResponse(req, ctx, "GRN_NOT_POSTED", 400, "Only POSTED GRNs can be split.");
