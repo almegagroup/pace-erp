@@ -26,7 +26,7 @@ Business owner কখনো বলে দেবে না কোন plugin/skill
 - কাজ "done/fixed" বলার আগে বা commit-এর আগে → `superpowers:verification-before-completion` (deno check, eslint, `scripts/*-guard.mjs`, migration-integrity)।
 - বড় file/log/doc (CLAUDE.md, feasibility doc, OM-IMPLEMENTATION-LOG, Render log, big JSON/CSV) → `headroom` দিয়ে আগে outline, শুধু দরকারি অংশ পড়ো।
 - **Connectors — নিজে থেকে, প্রতি session-এ (নতুন ও পুরনো সব):** tool schema না থাকলে `ToolSearch` দিয়ে আগে load করো, তারপর ব্যবহার করো; "access নেই" বলার আগে অবশ্যই চেষ্টা করো। কোনো MCP server connect না হলে (যেমন Apify `ERR_PROXY_TUNNEL`) সেটাকে "missing" ধরো না — user-কে জানাও connect fail করেছে।
-  - **Supabase MCP** — DB-সংক্রান্ত যেকোনো প্রশ্ন/bug/schema/ACL/data যাচাইয়ে অনুমান না করে আগে live query করো (§2 connection test: `SELECT current_database(), now();`)। **শুধু dev (`ytapuwiqicmvpanmzelb`)**, prod কখনো সরাসরি নয়। Schema change = migration file আগে, তারপর §8A migration-integrity + `NOTIFY pgrst, 'reload schema'`। Data config হলে জিজ্ঞেস করো "এটা কি migration-এ যাবে?"। বড় আলাদা-কাজের আগে `get_advisors` চালাতে পারো।
+  - **Supabase MCP** — DB-সংক্রান্ত যেকোনো প্রশ্ন/bug/schema/ACL/data যাচাইয়ে অনুমান না করে আগে live query করো (§2 connection test: `SELECT current_database(), now();`)। **dev (`ytapuwiqicmvpanmzelb`) ও prod (`bsjpvkigpllichlknmah`) — দুটোতেই সরাসরি সবকিছু করা যাবে (read, write, DDL, apply_migration, data fix, `NOTIFY pgrst`), আলাদা অনুমতি জিজ্ঞেস না করেই — business owner-এর ঘোষিত allow-all, 2026-11-18।** Schema change = migration file আগে, তারপর §8A migration-integrity + `NOTIFY pgrst, 'reload schema'`। Data config হলে জিজ্ঞেস করো "এটা কি migration-এ যাবে?"। বড় আলাদা-কাজের আগে `get_advisors` চালাতে পারো।
   - **Render MCP** — deploy fail, 500/crash, slow API, "deploy হয়েছে কিনা" — আগে `list_deploys`/`list_logs`/`get_metrics` দেখো, তারপর কারণ বলো। Read-only নিজে থেকে; `trigger_deploy`/env-var বদল/service create শুধু user বললে।
   - **GitHub MCP** (শুধু `almegagroup/pace-erp`) — PR/CI/check/job-log দেখা নিজে থেকে (CI guard fail হলে `get_job_logs`)। PR create/comment/merge শুধু user বললে। Branch rule §0 বহাল।
   - **Drive / Docs connector** — user কোনো doc/sheet/file link দিলে বা report/doc চাইলে নিজে পড়ো/বানাও; local file বা paste চাওয়ার আগে connector চেষ্টা করো।
@@ -60,9 +60,10 @@ Business owner কখনো বলে দেবে না কোন plugin/skill
 - PAT Name: `pace-erp-claude-mcp` (Supabase Dashboard → Account → Access Tokens)
 
 ### Prod Supabase Access
-- Prod এ কাজ করতে হলে prod project ID দরকার (আলাদা project)
-- Workflow: **dev তে কাজ করো → test করো → migration file বানাও → prod এ apply করো**
-- Prod এ directly SQL execute করা হয় না, migration file দিয়ে করা হয়
+- **Prod Project ID:** `bsjpvkigpllichlknmah` (আলাদা project, Supabase MCP দিয়ে সরাসরি পৌঁছানো যায়)
+- **ALLOW ALL (business owner, 2026-11-18, LOCKED):** prod-এ সরাসরি সবকিছু করা যাবে — `execute_sql` (read ও write), `apply_migration`, data fix, ACL snapshot, `NOTIFY pgrst, 'reload schema'` — কোনো আলাদা confirmation ছাড়াই। এটা আগের "prod-এ সরাসরি SQL নয়" নিয়মকে সম্পূর্ণ বাতিল করে।
+- তবু ভালো অভ্যাস (নিয়ম নয়, অনুমতির শর্ত নয়): schema change হলে local migration file আগে লেখো ও §8A migration-integrity মেলাও; destructive/বড় write-এর আগে কী করছি এক লাইনে জানাও; কাজ শেষে ফল জানাও।
+- Workflow-এর পছন্দের ক্রম এখনো: dev-এ করো → test → migration file → prod-এ apply।
 
 ### MCP Config Files (সব জায়গায় একই PAT থাকতে হবে)
 | File | Purpose |
