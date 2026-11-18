@@ -9,7 +9,7 @@
  * Read-only: never creates a PO, CSN, transfer or stock posting.
  */
 import { selfCheckBlock } from "./mts_report_selfcheck.logic.ts";
-import { actionText, bestDateText, bestDateWhy, ifAbsentText, togetherText } from "./mts_best_date_text.logic.ts";
+import { actionText, bestDateText, bestDateWhy, togetherText } from "./mts_best_date_text.logic.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
@@ -192,7 +192,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const o = key ? optimumByKey.get(key) : null;
       const a = key ? arrivalByKey.get(key) : null;
       if (!o || !a) return { etd: "", port: "", plant: "", why: "", absent: "", action: "" };
-      const absent = ifAbsentText(a.if_absent ?? [], currentEta, overdueOf(currentEta), a.reference ?? null);
+      // Owner 2026-11-17: no 'if another order does not come' text anywhere in the report.
+      const absent = "";
       if (o.not_needed_in_plan) return { etd: "", port: "", plant: "", why: bestText(key, currentEta, unit, uom), absent, action: actionText({ not_needed_in_plan: true, best_eta: o.best.eta, current_eta: currentEta, shift_days: o.shift_days }) };
       const w = key ? windowByKey.get(key) : null;
       const q = (n: number) => inUnit(unit, n) ?? 0;

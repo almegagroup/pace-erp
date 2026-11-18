@@ -1218,14 +1218,9 @@ async function computePlanningOnce(p: PlanningParams) {
         const bestPortEta = best && inlandDays !== null ? new Date(Date.parse(`${best.best.eta}T00:00:00Z`) - inlandDays * 86_400_000).toISOString().slice(0, 10) : null;
         const bestEtd = best && routeDaysEff !== null && routeDaysEff >= 0 ? new Date(Date.parse(`${best.best.eta}T00:00:00Z`) - routeDaysEff * 86_400_000).toISOString().slice(0, 10) : null;
         const ownKey = keyOf.get(event)!;
-        const ifAbsent = best ? [...new Set([movableInFamily.filter((a) => a.source_key !== ownKey && String(a.eta_to_plant) < String(currentEta)).slice(-1)[0], movableInFamily.filter((a) => a.source_key !== ownKey && String(a.eta_to_plant) >= String(currentEta))[0]].filter(Boolean))].map((other) => {
-          const alt = optimizeFamilyArrival({ ...input, confirmed_arrivals: input.confirmed_arrivals.filter((a) => a.source_key !== other!.source_key) }, ownKey);
-          return {
-            reference: refOfKey(other!.source_key), other_eta: String(other!.eta_to_plant),
-            best_eta: alt && !alt.not_needed_in_plan ? alt.best.eta : null, shift_days: alt?.shift_days ?? 0, not_needed_in_plan: alt?.not_needed_in_plan ?? false,
-            binding_day: alt?.binding?.day ?? null,
-          };
-        }) : [];
+        // Owner 2026-11-17: the report never says what happens 'if another order does not come' - an order that was placed is placed to arrive,
+        // so each order is judged on its recorded date and its engine date only. (Also saves one optimizer run per neighbour order.)
+        const ifAbsent: Array<{ reference: string; other_eta: string; best_eta: string | null; shift_days: number; not_needed_in_plan: boolean; binding_day: string | null }> = [];
         const together = jointFam ? jointFam.together : null;
         // Owner 2026-10-30: against Target (Min): how many more days the level sits below its Min, and how low its cover goes, at the advised date.
         const critEta = best && !best.not_needed_in_plan ? best.critical_latest_eta : null;
