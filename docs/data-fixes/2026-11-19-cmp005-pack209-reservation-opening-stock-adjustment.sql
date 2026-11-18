@@ -1,0 +1,31 @@
+-- EXECUTED on PROD 2026-11-19 through guarded direct MCP operational-data transactions.
+-- R-04 classification: operational business-data correction, NOT a migration.
+-- Do NOT rerun. Exact scope guards and before-image archive rows prevent a repeat.
+--
+-- CMP005 / MTS / pack-209 follow-up
+-- SKU: 54298253209, material_id c6bb1a80-db97-4f45-a010-3cd3c3db46f7
+-- Location: F002, unrestricted
+--
+-- 1) Reservation alignment
+--    RESV00026626 (DO 9100004446) and RESV00026661 (DO 9100004552) retained
+--    their pre-correction 800 KG requirement while their linked allocation and
+--    DO line were each already 40 KG. Both reservations were guardedly changed
+--    to required/balance 40 KG; issued quantity remains 0 and status OPEN.
+--    Their before-images are in
+--    erp_history.cmp005_pack209_ctn_as_pkt_correction_20261118.
+--
+-- 2) Opening-stock adjustment
+--    The SKU had 0 KG CMP005 stock: the original 180 KG opening balance at
+--    INR 10/KG was fully consumed by prior P601 issues. The owner authorised
+--    an extra 2 CTN (= 80 KG) at the original opening rate and date.
+--
+--    An append-only opening-stock line was added to existing posted OS
+--    6000000034 (cut-off 2026-09-27): line 5, 2 CTN / 80 KG, INR 10/KG,
+--    P561, linked to new material document 00001561/2026-27.
+--
+--    The P561 is an IN ledger item dated 2026-09-27 with value INR 800. The
+--    previous stock ledger rows were never updated/deleted and no ledger guard
+--    or trigger was disabled. CMP005/F002 final stock_snapshot = ledger =
+--    80 KG, INR 800, valuation rate INR 10/KG. One snapshot before-image is
+--    archived under source table
+--    erp_inventory.stock_snapshot_opening_adjustment_20261119.

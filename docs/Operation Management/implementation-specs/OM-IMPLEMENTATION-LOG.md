@@ -6957,6 +6957,8 @@ Open / blocked: Google Sheets not reachable (legacy formulas UNRESOLVED for Pror
 
 **Verification:** all 13 invoice headers reconcile to their complete line sets; all 13 DO net weights reconcile. CMP005's affected unrestricted stock snapshot and its ledger balance both equal `6,120 KG` after the correction.
 
+**2026-11-19 follow-up:** two dependent reservations (`RESV00026626`, `RESV00026661`) had retained the pre-correction `800 KG` requirement even though each linked DO and allocation was `40 KG`; they were guardedly aligned to `40 KG`. Separate from that data-shape correction, the owner authorised a real CMP005 opening-stock increase for SKU `54298253209`: `2 CTN = 80 KG` at the original `₹10/KG` and `2026-09-27` cut-off date. New OS `6000000034` line 5 links to append-only P561 Material Document `00001561/2026-27`; stock snapshot and ledger both reconcile to `80 KG` / `₹800`. No existing stock ledger row or guard was altered.
+
 ---
 
 ### 2026-10-28 — PO22 Order-UoM stock/display parity (Codex) — IMPLEMENTED ON AGENT BRANCH
