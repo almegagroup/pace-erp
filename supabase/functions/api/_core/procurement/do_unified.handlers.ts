@@ -3407,8 +3407,8 @@ export async function postPgiInvoiceGroupsHandler(req: Request, ctx: Procurement
       } else if (backfillPhase === "PHASE_1") {
         resolvedPostingDate = tallyInvoiceDate;
       // Business-authorised, time-boxed recovery: Dependent Depot and FG STO
-      // PGI may retain their historical Tally date through 15 Nov 2026
-      // (allows_backlog_tally_date is only true inside that window). From 16 Nov
+      // PGI may retain their historical Tally date through 30 Nov 2026
+      // (allows_backlog_tally_date is only true inside that window). From 1 Dec
       // the Phase-3 rule resumes for both.
       // FG STO and Dependent Depot (business owner, 2026-11-03): within that
       // window the stock PGI itself is posted ON the Tally Invoice Date (which

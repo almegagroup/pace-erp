@@ -148,8 +148,8 @@ function isValidDeferredDispatchDate(lrDate: string, dispatchDate: string): bool
   if (!isIsoDate(lrDate) || !isIsoDate(dispatchDate)) return false;
   const today = todayIsoInKolkata();
   if (dispatchDate < lrDate || dispatchDate > today) return false;
-  // The common backlog window stays open through 15 November inclusive. On
-  // 16 November the existing Today-2 validation resumes automatically.
+  // The common backlog window stays open through 30 November inclusive. On
+  // 1 December the existing Today-2 validation resumes automatically.
   if (!isDispatchBacklogGracePeriodOpen(today)) {
     const floor = new Date(`${today}T00:00:00Z`);
     floor.setUTCDate(floor.getUTCDate() - 2);
