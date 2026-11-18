@@ -62,6 +62,7 @@ import {
   suggestSafetyDays,
   type ConfiguredLeadTime,
   consumptionFromConsBucket,
+  sameDayStockTypeShift,
   type GroupMember,
   type InboundEvent,
   isIsoDate,
@@ -76,6 +77,7 @@ import {
   type PolicyOverride,
   effectivePlanAt,
   partitionPoLineInbound,
+  effectiveOpenQty,
   rToRTransferRoute,
   type PlanLineVersion,
   type PoLineInboundInput,
@@ -504,6 +506,15 @@ async function loadStockAndConsumption(companyId: string, cmStart: string, asOf:
     }), STOCK_HISTORY_MATERIAL_CHUNK);
   const stock: StockRow[] = [];
   const consumption = new Map<string, number>();
+  // Owner 2026-11-16: a QA decision posted today already made that stock usable (same physical stock, new type).
+  const todayLegs = materialIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient
+    .schema("erp_inventory").from("stock_ledger")
+    .select("material_id, storage_location_id, stock_type_code, direction, quantity, movement_type_code")
+    .eq("company_id", companyId).eq("posting_date", asOf).in("movement_type_code", ["P321", "P322"]).in("material_id", chunk));
+  stock.push(...sameDayStockTypeShift(todayLegs.map((row) => ({
+    material_id: text(row.material_id), storage_location_id: text(row.storage_location_id), stock_type_code: text(row.stock_type_code),
+    direction: text(row.direction), qty: Number(row.quantity ?? 0),
+  }))));
   for (const row of rows) {
     const materialId = text(row.material_id);
     const closing = Number(row.closing ?? 0);
@@ -570,7 +581,7 @@ const STO_CLOSED_STATUSES = new Set(["CLOSED", "CANCELLED"]);
 async function loadSubCsnTransfers(companyId: string, materials: Map<string, MaterialInfo>, universe: Set<string>): Promise<SubCsnTransfers> {
   const result: SubCsnTransfers = { committedByPoLine: new Map(), committedStockByMaterial: new Map(), events: [], warnings: [] };
   const subs = await fetchAllPages(() => serviceRoleClient.schema("erp_procurement").from("consignment_note")
-    .select("id, csn_number, status, company_id, consignee_company_id, vendor_id, material_id, po_id, po_line_id, dispatch_qty, total_received_qty, po_uom_code, eta_to_plant_calculated, sto_id, sto_line_id")
+    .select("id, csn_number, status, mother_csn_id, company_id, consignee_company_id, vendor_id, material_id, po_id, po_line_id, dispatch_qty, total_received_qty, po_uom_code, eta_to_plant_calculated, sto_id, sto_line_id")
     .not("mother_csn_id", "is", null).in("status", OPEN_CSN_STATUSES)
     .or(`company_id.eq.${companyId},consignee_company_id.eq.${companyId},vendor_id.eq.${companyId}`).order("id"), "MTS_REQ_SUB_CSN_LOAD_FAILED");
   const relevant = subs.filter((s) => universe.has(text(s.material_id)));
@@ -580,17 +591,20 @@ async function loadSubCsnTransfers(companyId: string, materials: Map<string, Mat
   const siblingRows = motherIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(motherIds, (chunk) => serviceRoleClient.schema("erp_procurement")
     .from("consignment_note").select("id, csn_number, mother_csn_id, consignee_company_id, dispatch_qty, po_uom_code").in("mother_csn_id", chunk));
   const mothers = motherIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(motherIds, (chunk) => serviceRoleClient.schema("erp_procurement")
-    .from("consignment_note").select("id, csn_number").in("id", chunk));
+    .from("consignment_note").select("id, csn_number, status").in("id", chunk));
   const companyIds = unique(siblingRows.map((s) => text(s.consignee_company_id)).filter(Boolean));
   const companyRows = companyIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(companyIds, (chunk) => serviceRoleClient.schema("erp_master")
     .from("companies").select("id, company_code").in("id", chunk));
   const companyCode = new Map(companyRows.map((c) => [text(c.id), text(c.company_code)]));
   const motherNumber = new Map(mothers.map((m) => [text(m.id), text(m.csn_number)]));
+  // Owner 2026-11-16: the Mother CSN is the vessel — when it is in transit every Sub-CSN share is in transit, whatever the child row's own status says.
+  const motherInTransit = new Set(mothers.filter((m) => text(m.status) === "TRN").map((m) => text(m.id)));
   const sharedNoteOf = (sub: JsonRecord): string | undefined => {
     const others = siblingRows.filter((s) => text(s.mother_csn_id) === text(sub.mother_csn_id) && text(s.id) !== text(sub.id));
     if (others.length === 0) return undefined;
     const list = others.map((s) => `${companyCode.get(text(s.consignee_company_id)) || "another company"} ${new Intl.NumberFormat("en-IN").format(Number(s.dispatch_qty ?? 0))} ${text(s.po_uom_code)}`.trim()).join(", ");
-    return `Mother CSN ${motherNumber.get(text(sub.mother_csn_id)) || "?"} also feeds ${list}`;
+    const poNo = poNumberById.get(text(sub.po_id));
+    return `Mother CSN ${motherNumber.get(text(sub.mother_csn_id)) || "?"}${poNo ? ` (PO ${poNo})` : ""} also feeds ${list}`;
   };
   const stoIds = unique(relevant.map((s) => text(s.sto_id)).filter(Boolean));
   const stoLineIds = unique(relevant.map((s) => text(s.sto_line_id)).filter(Boolean));
@@ -654,7 +668,8 @@ async function loadSubCsnTransfers(companyId: string, materials: Map<string, Mat
     if (receiver === companyId && sender !== companyId) {
       result.events.push({ material_id: materialId, qty: qtyBase, date, kind: "SUB_CSN_PLANNED", date_source: date ? "SUB_CSN_ETA" : "NONE", reference: `${ref} (planned transfer from another company)`,
         // Owner 2026-10-30: the user (not the system) distributes the shipment; each receiving company's plan judges its own share like any lot.
-        csn_id: text(sub.id), reschedule_key: `SUB_CSN|${text(sub.id)}`, ...(sharedNoteOf(sub) ? { shared_note: sharedNoteOf(sub) } : {}) });
+        csn_id: text(sub.id), reschedule_key: `SUB_CSN|${text(sub.id)}`, ...(sharedNoteOf(sub) ? { shared_note: sharedNoteOf(sub) } : {}),
+        ...(motherInTransit.has(text(sub.mother_csn_id)) || text(sub.status) === "TRN" ? { mother_in_transit: true } : {}) });
     } else if (sender === companyId && receiver !== companyId) {
       const key = text(sub.po_line_id) || `stock:${text(sub.id)}`;
       const entry = committedPerLine.get(key) ?? { materialId, qty: 0 };
@@ -701,7 +716,7 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
   const poById = new Map(pos.map((p) => [text(p.id), p]));
   const lines = pos.length === 0 ? [] : (await fetchInChunks<JsonRecord>(pos.map((p) => text(p.id)), (chunk) => serviceRoleClient
     .schema("erp_procurement").from("purchase_order_line")
-    .select("id, po_id, line_number, material_id, ordered_qty, ordered_qty_base_uom, po_uom_code, open_qty, line_status")
+    .select("id, po_id, line_number, material_id, ordered_qty, ordered_qty_base_uom, po_uom_code, open_qty, knocked_off_qty, line_status")
     .in("po_id", chunk).in("line_status", OPEN_PO_LINE_STATUSES)))
     .filter((line) => universe.has(text(line.material_id)));
   const lineIds = lines.map((l) => text(l.id));
@@ -772,7 +787,8 @@ async function loadInbound(companyId: string, asOf: string, materials: Map<strin
       po_line_id: text(line.id),
       po_number: text(po.po_number),
       line_number: Number(line.line_number ?? 0),
-      open_qty: Number(line.open_qty ?? 0),
+      // Owner 2026-11-16: a knocked-off remainder is not an expected arrival (the CSN Tracker only adds to knocked_off_qty, open_qty stays).
+      open_qty: effectiveOpenQty(Number(line.open_qty ?? 0), Number(line.knocked_off_qty ?? 0)),
       base_per_po_unit: ratio,
       expected_delivery_date: text(po.expected_delivery_date) || null,
       delivery_type: text(po.delivery_type) || null,

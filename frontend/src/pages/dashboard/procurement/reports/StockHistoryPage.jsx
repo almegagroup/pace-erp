@@ -407,8 +407,34 @@ export default function StockHistoryPage() {
 
   const searchDisabled = !companyId || !dateFrom || !dateTo || dateSpanTooWide(dateFrom, dateTo) || dateRangeInvalid(dateFrom, dateTo);
 
+  // Search across every visible column. A material's Total row is the sum of ALL its rows, so it is shown only when
+  // every one of that material's rows is shown -- a Total over a partly hidden set would be a wrong number.
+  const [allColumnSearch, setAllColumnSearch] = useState("");
+  const searchView = useMemo(() => {
+    const needle = allColumnSearch.trim().toLowerCase();
+    const detailRows = rows.filter((row) => !row.is_total);
+    if (!needle) return { rows, shown: detailRows.length, total: detailRows.length, hiddenTotals: 0 };
+    const cellText = (column, row) => (typeof column.copyValue === "function" ? String(column.copyValue(row) ?? "") : String(row?.[column.key] ?? ""));
+    const matching = new Set(
+      detailRows.filter((row) => gridColumns.some((column) => cellText(column, row).toLowerCase().includes(needle))).map((row) => row.row_key),
+    );
+    const detailByMaterial = new Map();
+    for (const row of detailRows) detailByMaterial.set(row.material_id, [...(detailByMaterial.get(row.material_id) ?? []), row]);
+    let hiddenTotals = 0;
+    const visible = rows.filter((row) => {
+      if (!row.is_total) return matching.has(row.row_key);
+      const group = detailByMaterial.get(row.material_id) ?? [];
+      const shownInGroup = group.filter((member) => matching.has(member.row_key)).length;
+      if (shownInGroup > 0 && shownInGroup < group.length) hiddenTotals += 1;
+      return group.length > 0 && shownInGroup === group.length;
+    });
+    return { rows: visible, shown: matching.size, total: detailRows.length, hiddenTotals };
+  }, [rows, gridColumns, allColumnSearch]);
+  const displayedRows = searchView.rows;
+
   const handleSearch = useCallback(async () => {
     setError("");
+    setAllColumnSearch("");
     if (!companyId) {
       setError("Select a company first.");
       return;
@@ -482,7 +508,8 @@ export default function StockHistoryPage() {
         fileName: `stock_history_${dateFrom || "from"}_${dateTo || "to"}.xlsx`,
         sheetName: "Stock History",
         columns: gridColumns,
-        rows,
+        // Exports what the grid shows (search included), like the other reports.
+        rows: displayedRows,
         getCellValue: (row, column) =>
           typeof column.excelValue === "function" ? column.excelValue(row)
             : typeof column.copyValue === "function" ? column.copyValue(row) : (row?.[column.key] ?? ""),
@@ -653,9 +680,29 @@ export default function StockHistoryPage() {
                 <div className="mb-2 text-xs text-slate-500">
                   Click and drag (or Shift+Click / Shift+Arrow) to select a range, then Ctrl+C to copy — same as Excel.
                 </div>
+                <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
+                  <label className="min-w-[260px] flex-1 text-xs font-semibold uppercase tracking-[0.1em] text-slate-600">
+                    Search all columns
+                    <input
+                      type="search"
+                      value={allColumnSearch}
+                      onChange={(event) => setAllColumnSearch(event.target.value)}
+                      placeholder="Material, code, SLoc, status, quantity..."
+                      className="mt-1 h-9 w-full rounded border border-slate-300 bg-white px-3 text-sm font-normal normal-case tracking-normal text-slate-900 outline-none transition focus:border-sky-500 focus:ring-2 focus:ring-sky-100"
+                    />
+                  </label>
+                  <span className="pb-2 text-sm text-slate-500">
+                    {loading ? "Loading..." : `${searchView.shown} of ${searchView.total} rows`}
+                  </span>
+                </div>
+                {searchView.hiddenTotals > 0 ? (
+                  <p className="mb-2 text-xs text-amber-700">
+                    Total rows show only for materials where every row matches the search.
+                  </p>
+                ) : null}
                 <ErpDenseGrid
                   columns={gridColumns}
-                  rows={rows}
+                  rows={displayedRows}
                   rowKey={(row) => row.row_key}
                   virtualize
                   rangeSelect
@@ -666,7 +713,7 @@ export default function StockHistoryPage() {
                       ? { className: "bg-amber-100 font-semibold border-t-2 border-amber-300" }
                       : {}
                   }
-                  emptyMessage={loading ? "Executing..." : "No stock history matched the selected filters."}
+                  emptyMessage={loading ? "Executing..." : allColumnSearch.trim() ? "No row matches this search." : "No stock history matched the selected filters."}
                 />
               </>
             )}

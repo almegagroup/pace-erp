@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import * as workbookModule from "./rollingPlanWorkbook.js";
 import { buildPlanMatrix, buildRollingPlanWorkbook, companyLabel, sheetName } from "./rollingPlanWorkbook.js";
 
 const company = (id, name, extra = {}) => ({
@@ -24,14 +25,14 @@ const company = (id, name, extra = {}) => ({
 test("rolling plan workbook: every tab, both companies, PLAN totals per group", async () => {
   const wb = buildRollingPlanWorkbook({ companies: [company("a", "Almeha Coatings"), company("b", "Jayashree Industries")], asOf: "2026-10-21" });
   const names = wb.worksheets.map((s) => s.name);
-  assert.deepEqual(names, ["SUMMARY", "PLAN", "RM Stand-alone", "RM Group", "RM MHEC", "RM RDP", "PM Stand-alone", "PM Group", "Almeha Coatings RM_PM", "Jayashree Industries RM_PM", "BUY_PLAN", "STORE_INSTRUCTIONS", "STORE_EXCESS", "STORE_TRANSFERS", "STORE_DETAIL", "ARRIVALS", "WATERFALL_SUMMARY", "WATERFALL_LEVELS", "WATERFALL_FLOW", "WATERFALL_WHO_HOLDS"]);
+  assert.deepEqual(names, ["SUMMARY", "PLAN", "RM Stand-alone", "RM Group", "RM MHEC", "RM RDP", "PM Stand-alone", "PM Group", "Almeha Coatings RM_PM", "Jayashree Industries RM_PM", "STORE_INSTRUCTIONS"], "the locked tab list (owner 2026-11-18)");
   const buffer = await wb.xlsx.writeBuffer();
   assert.ok(buffer.byteLength > 5000, "valid xlsx written");
   const rm = wb.getWorksheet("RM RDP");
   const texts = [];
   rm.eachRow((row) => texts.push(String(row.getCell(1).value ?? "")));
   assert.ok(texts.includes("Almeha Coatings — RDP (family: VAE A, VAE B)") && texts.includes("Jayashree Industries — RDP (family: VAE A, VAE B)"), "one block per company");
-  assert.ok(texts.some((t) => t.startsWith("1. CURRENT STATUS")), "current status is the first section of the block");
+  assert.ok(texts.includes("Date"), "the day table of the old report is there");
   assert.ok(!texts.some((t) => t.includes("ALL ORDERS AT A GLANCE") || t.includes("POOL DIARY")), "glance and pool diary sections are gone");
 });
 
@@ -69,55 +70,24 @@ test("companyLabel: an internal UUID is never exported as a company name", () =>
   assert.equal(companyLabel({ company_id: "0d5b448b-2f00-4c73-a2a6-8537f49f971b", company_name: "0d5b448b-2f00-4c73-a2a6-8537f49f971b", company_code: "" }), "—");
 });
 
-test("EXPLAIN tabs: README, daily waterfall, draws and group dates; a group-covered alert stays amber with its remark", async () => {
-  const explain = {
-    daily: [
-      { material: "COMBIZELL", uom: "KG", role: "Group only", day: "2026-11-26", opening: 40000, arrival: 0, engine_lot: 0, use: 1250, group_draw: 1250, closing: 38750, cover_days: 30, target_days: 30, critical_days: 20, flag: "AT / BELOW TARGET" },
-      { material: "COMBIZELL", uom: "KG", role: "Group only", day: "2026-12-07", opening: 1000, arrival: 0, engine_lot: 0, use: 1250, group_draw: 1250, closing: -250, cover_days: 0, target_days: 30, critical_days: 20, flag: "STOCK-OUT" },
-    ],
-    draws: [{ day: "2026-11-26", material: "COMBIZELL", uom: "KG", destination: "MHEC", flow: "Group allocation", qty: 1250, closing: 38750, source: "Opening stock 6000000023", source_kind: "Counted opening stock" }],
-    groups: [{ group: "MHEC", members: "COMBIZELL, TS U2121", first_below_target_day: null, first_below_critical_day: null, first_shortage_day: null, unresolved_qty: 0, actions: "" }],
-  };
+test("a group-covered alert stays amber with its remark on the Summary attention list", async () => {
   const covered = { material: "COMBIZELL", type: "RM", uom: "KG", target_cov_days: 30, critical_cov_days: 20, current_stk_days: 60, next_month_cov: 40, current_req: 1, current_prorata: 1, req_nm: 1, prorata_nm: 1, current_stock: 1000, intransit_cm: 0, intransit_nm: 0, below_target: true, below_critical: true, first_shortage_day: "2026-12-07", first_below_critical_day: "2026-11-26", note: "Its own stock runs out, but group MHEC stays covered by: TS U2121 — no purchase needed for this item.", group_covered: true };
-  const wb = buildRollingPlanWorkbook({ companies: [company("a", "Almeha Coatings", { explain, requirement: [covered] })], asOf: "2026-10-27" });
-  const names = wb.worksheets.map((s) => s.name);
-  assert.deepEqual(names.slice(-4), ["EXPLAIN_README", "EXPLAIN_DAILY", "EXPLAIN_DRAWS", "EXPLAIN_GROUPS"]);
-  assert.deepEqual(names.slice(-8, -4), ["WATERFALL_SUMMARY", "WATERFALL_LEVELS", "WATERFALL_FLOW", "WATERFALL_WHO_HOLDS"]);
-  const dailySheet = wb.getWorksheet("EXPLAIN_DAILY");
-  assert.equal(dailySheet.rowCount, 3, "header + 2 daily rows");
-  assert.equal(dailySheet.getRow(3).getCell(15).value, "STOCK-OUT");
+  const wb = buildRollingPlanWorkbook({ companies: [company("a", "Almeha Coatings", { requirement: [covered] })], asOf: "2026-10-27" });
   const summary = wb.getWorksheet("SUMMARY");
   let remark = "";
-  summary.eachRow((row) => row.eachCell((cell) => { if (String(cell.value ?? "").startsWith("Its own stock runs out")) { remark = String(cell.value); assert.equal(cell.font?.color?.argb, "FFB45309", "group-covered alert is amber, not red"); } }));
+  summary.eachRow((row) => row.eachCell((cell) => { if (String(cell.value ?? "").startsWith("Its own stock runs out")) { remark = String(cell.value); assert.equal(cell.font?.color?.argb, "FFB45309", "group-covered alert stays amber"); } }));
   assert.ok(remark.includes("stays covered"), "the group-covered remark is on the Summary attention list");
   await wb.xlsx.writeBuffer();
 });
 
-test("WATERFALL tabs: one sentence per family, the levels, the flow and who holds what — the same blocks as 4A", async () => {
-  const waterfall = {
-    levels: [{ level_kind: "OWN", label: "Exclusive — Gabrosa", members: ["Gabrosa"], target_days: 30, critical_days: 20, max_days: 60, cover_days_now: 60, reserve_now: 6670, next_min_day: "2026-11-27" },
-      { level_kind: "GROUP", label: "MHEC", members: ["Gabrosa", "Combizell", "TS U2121"], target_days: 30, critical_days: 15, max_days: 60, cover_days_now: 60, reserve_now: 84390, next_min_day: "2026-11-27" }],
-    events: [
-      { day: "2026-11-12", kind: "RECEIPT", level_kind: "POOL", level: "Pool", material: "TS U2121", qty: 25000, wanted: 0, shortfall: 0, pool_before: 0, pool_after: 0, by_material: [], references: ["PO ASC/PO123 · CSN 3000000229"] },
-      { day: "2027-03-19", kind: "TOP_UP", level_kind: "GROUP", level: "MHEC", material: null, qty: 14655, wanted: 43559, shortfall: 28904, pool_before: 14655, pool_after: 0, by_material: [{ material: "Gabrosa", qty: 12294 }], references: [] },
-    ],
-    matrix: [{ day: "2026-10-28", levels: [{ level: "Exclusive — Gabrosa", by_material: [{ material: "Gabrosa", qty: 6670 }] }, { level: "MHEC", by_material: [{ material: "Gabrosa", qty: 100 }] }], pool: [{ material: "Gabrosa", qty: 230 }], closing: [{ material: "Gabrosa", qty: 7000 }] }],
-  };
-  const base = company("a", "Almeha Coatings");
-  const withWaterfall = { ...base, blocks: [{ ...base.blocks[0], title: "MHEC", waterfall }] };
-  const wb = buildRollingPlanWorkbook({ companies: [withWaterfall], asOf: "2026-10-28" });
-  assert.equal(wb.getWorksheet("WATERFALL_SUMMARY").rowCount, 2, "header + one family");
-  assert.match(String(wb.getWorksheet("WATERFALL_SUMMARY").getRow(2).getCell(4).value), /MHEC will be short about 28,904 KG from 2027-03-19/);
-  assert.equal(wb.getWorksheet("WATERFALL_LEVELS").rowCount, 3, "header + two levels");
-  assert.equal(wb.getWorksheet("WATERFALL_FLOW").rowCount, 3, "header + receipt + top-up");
-  const holds = wb.getWorksheet("WATERFALL_WHO_HOLDS");
-  const heldFor = [];
-  holds.eachRow((row, n) => { if (n > 1) heldFor.push(String(row.getCell(5).value)); });
-  assert.deepEqual(heldFor, ["Exclusive — Gabrosa", "MHEC", "Pool (excess)", "TOTAL STOCK"]);
-  await wb.xlsx.writeBuffer();
+test("removed tabs stay removed (owner 2026-11-18)", () => {
+  const wb = buildRollingPlanWorkbook({ companies: [company("a", "Almeha Coatings")], asOf: "2026-10-21" });
+  const names = wb.worksheets.map((x) => x.name);
+  for (const gone of ["BUY_PLAN", "STORE_EXCESS", "STORE_TRANSFERS", "STORE_DETAIL", "ARRIVALS", "WATERFALL_SUMMARY", "EXPLAIN_README", "EXPLAIN_DAILY", "EXPLAIN_DRAWS", "EXPLAIN_GROUPS"]) assert.ok(!names.includes(gone), `${gone} is gone`);
+  assert.equal(names.at(-1), "STORE_INSTRUCTIONS", "STORE_INSTRUCTIONS is the only store tab and the last one");
 });
 
-test("STORE tabs: items by period with the child groups of one parent on ONE row, and the R-store transfers", async () => {
+test("STORE_INSTRUCTIONS: items by period with the child groups of one parent on ONE row", async () => {
   const base = company("a", "Almeha Coatings");
   const store = [
     { period: "CM (rest)", mother_group: "PUTTY", child_group: "EXT PUTTY", product: "P1", source: "S1", line_type: "GROUP", group: "ACID", material: "Tartaric Acid", uom: "KG", demand_qty: 100, from_stock: 100, not_backed: 0 },
@@ -129,10 +99,6 @@ test("STORE tabs: items by period with the child groups of one parent on ONE row
   assert.equal(items.rowCount, 2, "header + ONE row for both child groups");
   assert.equal(items.getRow(2).getCell(8).value, 140, "Issue now");
   assert.equal(items.getRow(2).getCell(7).value, "EXT PUTTY; INT PUTTY", "child groups on one row");
-  const transfers = wb.getWorksheet("STORE_TRANSFERS");
-  assert.equal(transfers.rowCount, 3);
-  assert.deepEqual([transfers.getRow(2).getCell(5).value, transfers.getRow(2).getCell(6).value, transfers.getRow(2).getCell(7).value], ["R003", "R001", 600]);
-  assert.ok(wb.getWorksheet("STORE_DETAIL"), "the old product-wise rows stay as STORE_DETAIL");
   await wb.xlsx.writeBuffer();
 });
 
@@ -144,14 +110,14 @@ test("RM RDP family block: each level (Exclusive and groups) with its own Min / 
   const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], refill_method: "2nd refill", refill_method_why: "chosen by the system: test", level_sections: sections, level_today: [], excess_after: [{ material: "Gabrosa", qty: 4000 }], qa_stock: [{ material: "Gabrosa", uom: "KG", qty: 2500 }], qa_extra_days: 3 }] }], asOf: "2026-10-28" });
   const cells = [];
   wb.getWorksheet("RM RDP").eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
-  assert.ok(cells.some((l) => l.includes("Min 30 d · Max 60 d · Critical 20 d")), "the Exclusive level Min / Max / Critical");
-  assert.ok(cells.some((l) => l.includes("Min 30 d · Max 60 d · Critical 15 d")), "the group level Min / Max / Critical");
+  assert.ok(cells.some((l) => l.includes("Min 30 · Max 60 · Critical 20")), "the Exclusive level Min / Max / Critical");
+  assert.ok(cells.some((l) => l.includes("Min 30 · Max 60 · Critical 15")), "the group level Min / Max / Critical");
   assert.ok(cells.some((l) => l.includes("Gabrosa: 4,000")), "the excess pool today");
   assert.ok(cells.some((l) => l.includes("Gabrosa: 2,500")) && cells.some((l) => l.includes("cover grows by about 3 d")), "the QA stock and its effect on the cover");
-  assert.ok(cells.some((l) => l.startsWith("Refill method used for this family: 2nd refill — chosen by the system")), "the refill method is stated");
+  assert.ok(!cells.some((l) => l.includes("Refill method") || l.includes("How to read")), "no refill-method line and no how-to-read paragraph");
   await wb.xlsx.writeBuffer();
 });
-test("STORE tabs from the month-by-month plan: actual stock apart from unreceived pieces, and the excess left", async () => {
+test("STORE_INSTRUCTIONS from the month-by-month plan: actual stock apart from unreceived pieces", async () => {
   const base = company("a", "Almeha Coatings");
   const store_plan = {
     rows: [
@@ -172,9 +138,6 @@ test("STORE tabs from the month-by-month plan: actual stock apart from unreceive
   assert.match(String(items.getRow(3).getCell(12).value), /600 only after its CSN\/PO is received/);
   assert.match(String(items.getRow(3).getCell(12).value), /150 depends on a CSN\/PO whose ETA passed or is missing: do not issue/);
   assert.match(String(items.getRow(3).getCell(12).value), /50 depends on a lot nobody has ordered/);
-  const excess = wb.getWorksheet("STORE_EXCESS");
-  assert.equal(excess.rowCount, 2);
-  assert.equal(excess.getRow(2).getCell(5).value, 12000);
   await wb.xlsx.writeBuffer();
 });
 
@@ -194,52 +157,18 @@ test("STORE_INSTRUCTIONS: every company gets its rows, also when only another co
   await wb.xlsx.writeBuffer();
 });
 
-test("RM Stand-alone: the engine's ETD / port / plant dates and the reason are separate columns", () => {
+test("RM Stand-alone: the suggested ETD / port / plant dates and the reason are separate columns", () => {
   const base = company("a", "Almeha Coatings");
   const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], is_family: false }] }], asOf: "2026-10-21" });
   const rm = wb.getWorksheet("RM Stand-alone");
   let head = null; let arrival = null;
-  rm.eachRow((row) => { const v = row.values; if (v.includes("ETD (engine)")) head = v; if (v.includes("PO ACP/PO80/2026-27/1")) arrival = v; });
+  rm.eachRow((row) => { const v = row.values; if (v.includes("ETD (suggested)")) head = v; if (v.includes("PO ACP/PO80/2026-27/1")) arrival = v; });
   const at = (label) => head.indexOf(label);
-  assert.ok(at("ETD (engine)") > 0 && at("ETA to Port (engine)") > 0 && at("ETA to Plant (engine)") > 0 && at("Why this date — Min / Max by group") > 0);
-  assert.equal(arrival[at("ETD (engine)")], "2026-10-01");
-  assert.equal(arrival[at("ETA to Port (engine)")], "2026-10-26");
-  assert.equal(arrival[at("ETA to Plant (engine)")], "2026-10-30");
-  assert.equal(arrival[at("Why this date — Min / Max by group")], "Now 2026-11-06 is too late.");
-});
-
-test("Group tabs: MHEC and RDP families sit on their own tabs; the lean block is level by level, with today's cover days and the Max cover date", () => {
-  const base = company("a", "Almeha Coatings");
-  const rec = { etd: "2026-09-24", etd_actual: true, port: "2026-10-10", port_actual: true, plant: "2026-11-12", type: "IMPORT" };
-  const recDue = { etd: "2026-10-19", etd_actual: true, port: "2026-11-23", port_actual: true, plant: "2026-11-29", type: "IMPORT" };
-  const lot = { kind: "Existing order", ref: "PO ASC/PO123/2026-27/1 · CSN 3000000229 (TRN)", material: "TS U2121", supplier: "SHANDONG", status: "IN_TRANSIT", lot_qty: 25000, existing_eta: "2026-11-12", engine_eta: "2026-11-12", action: "", etd: "", port: "", plant: "2026-11-12", why: "Long reason. More words.", absent: "If PO X · CSN 3000000239 (ORD) (2026-12-24) does not come: this order must land at plant by 2026-11-30 (24 d before its recorded date)", to_level: 25000, pct: 1, min_a: 51, max_a: 60, min_b: 51, max_b: 60, excess: 100, excess_split: "TS U2121: 100 KG", level_status: "Above Min", rec };
-  const mhec = { ...base.blocks[0], title: "MHEC", members: ["Gabrosa", "TS U2121"], level_sections: [{ label: "MHEC", kind: "GROUP", members: ["Gabrosa", "TS U2121"], target_days: 30, max_days: 60, critical_days: 15, rows: [{ kind: "Stock today", min_a: 60, max_a: null, prorata_b: 1250 }, { ...lot, ref: "PO ASC/PO999/2026-27 · CSN 3000000555 (ORD)", existing_eta: "2026-11-29", engine_eta: "2026-11-21", min_a: 22, min_b: 31, prorata_a: 1, prorata_b: 1 }, { ...lot, ref: "PO ASC/PO888/2026-27 · CSN 3000000556 (ORD)", existing_eta: "2026-11-20", engine_eta: "2026-12-02", min_a: 50, min_b: 30, prorata_a: 1, prorata_b: 1 }, { ...lot, rec: recDue, ref: "PO ASC/PO777/2026-27 · CSN 3000000557 (ORD)", existing_eta: "2026-11-25", engine_eta: "2026-11-25", min_a: 40, min_b: 40, prorata_a: 1, prorata_b: 1 }, { ...lot, prorata_a: 1250, prorata_b: 1300, new_lots_a: [{ day: "2026-11-05", material: "Gabrosa", qty: 11000 }], new_lots_b: [] }] }],
-    level_today: [{ label: "MHEC", opening: [{ material: "TS U2121", qty: 26000 }], reserve: [{ material: "TS U2121", qty: 25000 }], left: [{ material: "TS U2121", qty: 1000 }] }], excess_after: [{ material: "TS U2121", qty: 1000 }],
-    pool_diary: [{ day: "2026-11-12", lands_a: ["+ TS U2121 25,000 (ASC/PO123/2026-27)"], pool_a: { total: 100, by: [{ material: "TS U2121", qty: 100 }] }, lands_b: [], pool_b: null, notes: [] }], projection_total: [], prediction: [] };
-  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [mhec] }], asOf: "2026-10-21" });
-  const names = wb.worksheets.map((x) => x.name);
-  assert.ok(names.includes("RM MHEC") && names.includes("RM RDP"));
-  const sheet = wb.getWorksheet("RM MHEC");
-  const cells = [];
-  sheet.eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
-  assert.ok(cells.some((t) => t.startsWith("1. CURRENT STATUS")), "current status first");
-  assert.ok(cells.some((t) => t.startsWith("2. ORDERS ON THE WAY")) && cells.some((t) => t.startsWith("3. NEW ORDERS")) && cells.some((t) => t.startsWith("4. EXCESS POOL OVER TIME")), "orders, new orders and the excess pool sections");
-  assert.ok(cells.some((t) => t.includes("ETD 2026-09-24 (ATD)")), "the recorded ATD");
-  assert.ok(cells.some((t) => t.includes("NEW lot not counted") && t.includes("2026-11-05") && t.includes("11,000") && t.includes("section 3")), "a suggested lot that lands before this order is mentioned, not counted");
-  const amber = []; sheet.eachRow((row) => row.eachCell((c) => { if (String(c.value ?? "").includes("Min 22 d") && c.fill?.fgColor?.argb === "FFFFF2CC") amber.push(c.address); }));
-  assert.ok(amber.length >= 1, "a level below its Min on that date is amber");
-  assert.ok(cells.some((t) => t.includes("If it lands 2026-11-29") && t.includes("Min 22 d") && t.includes("below 30 d") && t.includes("must land by 2026-11-21")), "a too-late order: what happens on the recorded date and the latest engine date");
-  assert.ok(cells.some((t) => t.includes("Can wait until 2026-12-02") && t.includes("Min 30 d")), "an order that can wait: until when, and the Min it then keeps");
-  assert.ok(cells.some((t) => t.startsWith("On time") && t.includes("2026-11-25")), "an order on its engine date");
-  assert.ok(cells.some((t) => t.includes("Port 2026-11-23 (ATA, due)") && t.includes("ETD 2026-10-19 (ATD)") && !t.includes("(ATD, due)")), "a port date still ahead of today says due; a past ETD does not");
-  assert.ok(cells.some((t) => t.includes("Port 2026-10-10 (ATA)") && !t.includes("2026-10-10 (ATA, due)")), "a past actual date is plain");
-  assert.ok(cells.some((t) => t.startsWith("Suggestions only")), "section 3 says its lots are suggestions, not counted above");
-  assert.equal(new Set(cells.filter((t) => t.includes("NEW lot not counted"))).size, 1, "only the recorded-date view had a lot (merged cells repeat their value)");
-  assert.ok(cells.some((t) => t === "1,250") && cells.some((t) => t.includes("Pro-rata 1,250/day")) && cells.some((t) => t.includes("Pro-rata 1,300/day")), "pro-rata today and on both landing dates");
-  assert.ok(!cells.some((t) => t === "Passes on to next level (KG)" || t.includes("% of lot")), "no per-lot level-takes percentage");
-  assert.ok(!cells.some((t) => t.includes("POOL DIARY") || t.includes("ALL ORDERS AT A GLANCE")), "glance and pool diary removed");
-  assert.ok(cells.some((t) => t.includes("Stock lasts:") && t.includes("Max cover:")), "today's cover days and the Max cover are shown for the level");
-  assert.equal(wb.getWorksheet("RM Group").rowCount, 1, "no other RM group family -> only the empty-text row");
+  assert.ok(at("ETD (suggested)") > 0 && at("ETA to Port (suggested)") > 0 && at("ETA to Plant (suggested)") > 0 && at("Why this date") > 0);
+  assert.equal(arrival[at("ETD (suggested)")], "2026-10-01");
+  assert.equal(arrival[at("ETA to Port (suggested)")], "2026-10-26");
+  assert.equal(arrival[at("ETA to Plant (suggested)")], "2026-10-30");
+  assert.equal(arrival[at("Why this date")], "Now 2026-11-06 is too late.");
 });
 
 test("Requirement sheet: an item used through a group shows the group and the group's demand, so a 0 own demand is not read as no need", () => {
@@ -255,4 +184,128 @@ test("Requirement sheet: an item used through a group shows the group and the gr
   assert.equal(r.getCell(at("Group demand (CM+NM)")).value, 301000);
   assert.equal(r.getCell(at("CURRENT_STOCK")).value, 40838, "the item's own stock stays visible");
   assert.equal(r.getCell(at("CURRENT STK DAYS")).value, "Via RDP", "a blank cover says why");
+});
+
+test("Day table (Stand-alone / folded): a suggested lot is listed on the day it lands, labelled not counted", () => {
+  const base = company("a", "Almeha Coatings");
+  const block = { ...base.blocks[0], title: "PULMIX 4033", is_family: false, members: ["PULMIX 4033"], uom: "KG", rows: [
+    { day: "2026-11-16", opening: 3477.52, arrivals: 0, dispatch: null, use: 168.84, closing: 3308.68, excess: 0, max_days: 22, min_stock: 3308.68, min_days: 22, references: [], qtys: [], suppliers: [], statuses: [], best_dates: [], suggested_lot: null },
+    { day: "2026-11-21", opening: 2633.32, arrivals: 0, dispatch: null, use: 168.84, closing: 2464.48, excess: 0, max_days: 14, min_stock: 2464.48, min_days: 14, references: [], qtys: [], suppliers: [], statuses: [], best_dates: [], suggested_lot: 4600 },
+  ] };
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [block] }], asOf: "2026-10-21" });
+  const cells = [];
+  wb.getWorksheet("RM Stand-alone").eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
+  assert.ok(cells.some((t) => t.includes("NEW lot (suggested, not counted)")), "the suggested lot is named on its day");
+  assert.ok(cells.some((t) => t.includes("4,600 KG")), "with its quantity");
+});
+
+test("QA stock + a shortage: the family title and the QA row say it may be a QA delay, not a missing order", async () => {
+  const base = company("a", "Almeha Coatings");
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], first_shortage_day: "2027-01-17", level_sections: [], level_today: [], excess_after: [], qa_stock: [{ material: "Gabrosa", uom: "KG", qty: 2500 }], qa_extra_days: 3 }] }], asOf: "2026-11-16" });
+  const cells = [];
+  wb.getWorksheet("RM RDP").eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
+  assert.ok(cells.some((l) => l.includes("RUNS OUT 2027-01-17 (but 2,500 KG is still in QA")), "the title names the QA stock");
+  assert.ok(cells.some((l) => l.includes("may be a QA delay, not a missing order")), "the QA row warns before ordering");
+  await wb.xlsx.writeBuffer();
+});
+
+test("a level already below Min today says so and names the shipment on the road", async () => {
+  const base = company("a", "Almeha Coatings");
+  const sections = [{ label: "RDP — RDP", kind: "GROUP", members: ["RP-4099"], target_days: 30, max_days: 65, critical_days: 15, today_cover: 27, today_cover_until: "2026-12-12",
+    rows: [{ kind: "Existing order", ref: "PO P2/1 · CSN 3000000352 (TRN)", material: "RP-4099", supplier: "X", status: "IN_TRANSIT", lot_qty: 25000, existing_eta: "2026-11-22", engine_eta: "2026-11-22" }] }];
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], level_sections: sections, level_today: [], excess_after: [] }] }], asOf: "2026-11-16" });
+  const cells = [];
+  wb.getWorksheet("RM RDP").eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
+  assert.ok(cells.some((l) => l.includes("BELOW MIN TODAY (27 d < Min 30 d), until the shipment on the road lands")), "the level says it is below Min today");
+  assert.ok(cells.some((l) => l.includes("An order that has not shipped cannot fix these days.")), "and why no order date is chased");
+  await wb.xlsx.writeBuffer();
+});
+
+test("a stand-alone item already below Min today says so and names the shipment on the road (not a family level)", async () => {
+  const base = company("a", "Almeha Coatings");
+  const solo = { ...base.blocks[0], title: "SILRES", is_family: false, members: ["SILRES"], target_days: 25, rows: [
+    { day: "2026-11-16", opening: 2000, arrivals: 0, dispatch: null, use: 100, closing: 1900, max_days: 19, min_stock: 1900, min_days: 19, references: [], qtys: [], suppliers: [], statuses: [], best_dates: [] },
+    { day: "2026-11-22", opening: 1300, arrivals: 2500, dispatch: null, use: 100, closing: 3700, max_days: 37, min_stock: 1200, min_days: 12, references: ["PO P1/1 · CSN 3000000352 (TRN)"], qtys: [2500], suppliers: ["X"], statuses: ["IN_TRANSIT"], best_dates: [""] }] };
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [solo] }], asOf: "2026-11-16" });
+  const cells = [];
+  wb.getWorksheet("RM Stand-alone").eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
+  assert.ok(cells.some((l) => l.includes("BELOW MIN TODAY (19 d < Min 25 d), until the shipment on the road lands")), "the stand-alone item says it is below Min today");
+  await wb.xlsx.writeBuffer();
+});
+
+test("a failed self-check is printed in red on the block (family and stand-alone layouts)", async () => {
+  const base = company("a", "Almeha Coatings");
+  const issues = ["2026-11-23: Closing 9000 does not equal Opening + landed + new order - use (6794.48)"];
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], self_check: issues, level_sections: [], level_today: [], excess_after: [] }, { ...base.blocks[0], title: "SOLO", is_family: false, members: ["SOLO"], self_check: issues }] }], asOf: "2026-11-16" });
+  const cells = [];
+  wb.eachSheet((ws) => ws.eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? "")))));
+  assert.ok(cells.filter((l) => l.startsWith("SELF-CHECK FAILED (1): 2026-11-23: Closing 9000")).length >= 2, "both layouts print the failed check");
+  await wb.xlsx.writeBuffer();
+});
+
+test("stand-alone tabs keep their layout but use Suggested wording and no 'if another order does not come' column", () => {
+  const base = company("a", "Almeha Coatings");
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], is_family: false }] }], asOf: "2026-10-21" });
+  const cells = [];
+  wb.getWorksheet("RM Stand-alone").eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
+  assert.ok(cells.includes("Tracker date: ETD / Port / Plant") && cells.includes("ETD (suggested)"));
+  assert.ok(!cells.includes("If another order does not come") && !cells.some((c) => c.includes("(engine)")), "old wording is gone");
+});
+
+test("the download page imports downloadRollingPlanWorkbook: it must stay exported (a missing export shows as 'h is not a function')", () => {
+  assert.equal(typeof workbookModule.downloadRollingPlanWorkbook, "function");
+});
+
+
+test("family tabs (owner 2026-11-18): Today per level, then the same day table + Prediction as the old report; no level-by-level derivation", async () => {
+  const base = company("a", "Almeha Coatings");
+  const sections = [{ label: "RDP — RDP", kind: "GROUP", members: ["VAE A", "VAE B"], target_days: 30, max_days: 60, critical_days: 15, today_cover: 22, reserve_now: 22377, rows: [{ kind: "Stock today", lot_qty: 23359, prorata_b: 982 }] }];
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], level_sections: sections, level_today: [], excess_after: [{ material: "VAE A", qty: 100 }] }] }], asOf: "2026-10-21" });
+  const cells = [];
+  wb.getWorksheet("RM RDP").eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
+  assert.ok(cells.includes("Today — what each level holds"), "Today table");
+  assert.ok(cells.some((c) => c.includes("Min 30 · Max 60 · Critical 15")), "the level's policy");
+  assert.ok(cells.some((c) => c.includes("BELOW MIN TODAY (22 d < Min 30 d)")), "below Min today is said once, in the Today table");
+  for (const h of ["Date", "Opening", "Closing", "Max Days", "Min Days", "PO / CSN", "Prediction", "Family Max Days", "Family Min Days"]) assert.ok(cells.includes(h), `old-report column ${h}`);
+  assert.ok(!cells.some((c) => /LEVEL BY LEVEL|NEW ORDERS THE ENGINE ADDS|Went into reserve|How to read|Refill method|If another order does not come/.test(c)), "none of the derived level-by-level wording");
+  await wb.xlsx.writeBuffer();
+});
+
+test("a CSN is never named without its PO in the day table, and the held-CSN table lists the PO next to the CSN", async () => {
+  const base = company("a", "Almeha Coatings");
+  const row = { day: "2026-11-18", opening: 100, arrivals: 25000, dispatch: null, use: 10, closing: 25090, max_days: 40, min_stock: 90, min_days: 9, references: ["PO ASCP2627-0192/1 · CSN 3000000370 (in transit)"], qtys: [25000], suppliers: ["DAIREN"], statuses: ["IN_TRANSIT"], best_dates: [] };
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, held_csns: [{ csn_number: "3000000999", po_number: "ASCP2627-0300/1", material: "VAE A", supplier: "DAIREN", qty: 25000, uom: "KG", previous_status: "TRN", reason: "x", held_at: "2026-10-31", eta: "2026-11-06" }],
+    blocks: [{ ...base.blocks[0], rows: [row] }] }], asOf: "2026-11-16" });
+  const cells = [];
+  wb.eachSheet((ws) => ws.eachRow((r) => r.eachCell((c) => cells.push(String(c.value ?? "")))));
+  assert.ok(cells.some((l) => l.includes("PO ASCP2627-0192/1 · CSN 3000000370")), "the day table names PO and CSN together");
+  assert.ok(cells.includes("ASCP2627-0300/1") && cells.includes("3000000999"), "held CSN table lists the PO next to the CSN");
+  await wb.xlsx.writeBuffer();
+});
+
+test("family tabs: the last two columns give each level's Min → Max (Tracker | Suggested) and its excess, on the stock / CSN rows and on the projection rows", async () => {
+  const base = company("a", "Almeha Coatings");
+  const rows = [
+    { day: "2026-10-21", opening: 1000, arrivals: 0, dispatch: null, use: 100, closing: 900, max_days: 9, min_stock: 900, min_days: 9, references: [], qtys: [], suppliers: [], statuses: [], best_dates: [] },
+    { day: "2026-11-06", opening: 500, arrivals: 24750, dispatch: null, use: 100, closing: 25150, max_days: 40, min_stock: 400, min_days: 4, references: ["PO ACP/PO80/2026-27/1 · CSN 3000000451"], qtys: [24750], suppliers: ["DAIREN"], statuses: ["ORDERED"], best_dates: [] },
+  ];
+  const sections = [
+    { label: "Exclusive — VAE A", kind: "OWN", members: ["VAE A"], target_days: 20, max_days: 35, critical_days: 10, today_cover: 22, rows: [
+      { kind: "Stock today", lot_qty: 900, prorata_b: 100, min_a: 22, excess: 0 },
+      { kind: "Existing order", existing_eta: "2026-11-06", engine_eta: "2026-11-04", min_a_before: 18, max_a: 35, min_b_before: 20, max_b: 35, excess_a: 0, excess: 2269 },
+      { kind: "Projection", material: "VAE A", existing_eta: "2026-12-27", engine_eta: "2026-12-27", min_a_before: 19, max_a: null, max_a_x: { days: 40, left: 1500 }, min_b_before: 19, max_b: 35, excess_a: 0, excess: 0 }] },
+    { label: "RDP — RDP", kind: "GROUP", members: ["VAE A", "VAE B"], target_days: 25, max_days: 45, critical_days: 12, today_cover: 24, rows: [
+      { kind: "Stock today", lot_qty: 2000, prorata_b: 200, min_a: 24, excess: 5 },
+      { kind: "Existing order", existing_eta: "2026-11-06", engine_eta: "2026-11-06", min_a_before: 26, max_a: 43, min_b_before: 28, max_b: 45, excess_a: 100, excess: 0 }] }];
+  const pred = [{ source: "ENGINE", import_etd: "2026-12-01", port_eta: "2026-12-15", date: "2026-12-27", qty: 24000, max_days: 35, min_days: 19, material: "VAE A", supplier: "CELANESE", po_by: "2026-10-12" }];
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], rows, prediction: pred, level_sections: sections, level_today: [], excess_after: [] }] }], asOf: "2026-10-21" });
+  const cells = [];
+  wb.getWorksheet("RM RDP").eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
+  assert.ok(cells.includes("Level Min → Max   (Tracker date | Suggested date)") && cells.includes("Excess by level   (Tracker | Suggested)"), "the two level columns");
+  const mm = cells.find((c) => c.includes("Exclusive — VAE A: 18 → 35  |  20 → 35")) ?? "";
+  assert.ok(mm.includes("RDP — RDP: 26 → 43  |  28 → 45"), "stock / CSN row: each level's Min → Max on both dates");
+  assert.ok(cells.some((c) => c.includes("Exclusive — VAE A: 0  |  2,269") && c.includes("RDP — RDP: 100  |  0")), "excess by level");
+  assert.ok(cells.some((c) => c.includes("Exclusive — VAE A: 19 → 40 d to plan end + 1,500 KG spare  |  19 → 35")), "projection row: beyond plan shows days to plan end and the spare, never blank");
+  assert.ok(cells.some((c) => c.includes("Exclusive — VAE A: 22 d cover today")), "today's row shows today's cover");
+  await wb.xlsx.writeBuffer();
 });

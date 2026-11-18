@@ -1,5 +1,5 @@
 import { classifyBulkMaterials } from "./mts_bulk_rule.ts";
-import { memberMattersForGaps, priceUnitCode, assemblePlanningInput, chooseVendor, familyArrivalEta, familyArrivalRisk, isFamilyAllocatableArrival, selectGroupMember, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { memberMattersForGaps, priceUnitCode, assemblePlanningInput, chooseVendor, familyArrivalEta, overdueUnshippedEta, familyArrivalRisk, isFamilyAllocatableArrival, selectGroupMember, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { buildCalendar, type GroupRequirementRow, type RequirementRow } from "./mts_requirement.logic.ts";
 import { projectDailyCoverage } from "./mts_optimizer_phase3d.logic.ts";
 
@@ -126,4 +126,15 @@ Deno.test("Bulk follows the PO type: own BULK PO = Bulk; own Standard-only = not
     otherBulk: new Set(["DOLOMITE_STD", "DOLOMITE_NO_PO", "SAND"]),
   });
   equal([...bulk].sort(), ["DOLOMITE_NO_PO", "SAND"], "DOLOMITE_STD has own Standard POs; DOLOMITE_NO_PO has none here");
+});
+
+Deno.test("overdue unshipped order (MAHACOL CMP005, owner 2026-11-17): counted from today + transit, never as today's stock", () => {
+  // CSN 3000000444: ordered, not shipped, ETA 2026-11-14 passed; the vendor's domestic transit is 10 days.
+  equal(overdueUnshippedEta("2026-11-17", 10), "2026-11-27", "today + 10 days");
+  equal(overdueUnshippedEta("2026-11-17", null), "2026-11-17", "no route known: today, but the flag still says it is not stock");
+  const flag = familyArrivalRisk({ source_key: "CSN-444", material_id: "M", eta_to_plant: "2026-11-14", qty_base: 25000, lifecycle_kind: "PO_REMAINDER" }, "2026-11-17", "2026-11-27");
+  equal(flag.assumed_eta, "2026-11-27", "the flag carries the counted date");
+  if (!flag.message.includes("NOT stock") || !flag.message.includes("2026-11-27")) throw new Error(`flag message: ${flag.message}`);
+  // A piece already on the road keeps the old rule (counted today).
+  equal(familyArrivalRisk({ source_key: "CSN-9", material_id: "M", eta_to_plant: "2026-11-14", qty_base: 1, lifecycle_kind: "IN_TRANSIT" }, "2026-11-17").assumed_eta, "2026-11-17", "on the road: today");
 });

@@ -29,6 +29,17 @@ export function isManualDocumentDateWithinWindow(value, today = new Date()) {
   return value >= bounds.min && value <= bounds.max;
 }
 
+// A date that is exactly the value already stored on the document is never re-checked
+// against the window: the window is a typo guard for a date being entered, and a record
+// re-opened later (e.g. a Stroke edited to add an alternate group) must keep its genuine
+// original date. Any OTHER value -- older or newer -- still has to be inside the window.
+// The backend repeats this check against the stored DB value; this only mirrors it for UX.
+export function isManualDocumentDateAcceptable(value, storedValue, today = new Date()) {
+  const stored = String(storedValue ?? "").slice(0, 10);
+  if (stored && /^\d{4}-\d{2}-\d{2}$/.test(stored) && value === stored) return true;
+  return isManualDocumentDateWithinWindow(value, today);
+}
+
 export const MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE = "Date must be within three calendar months before or after today.";
 
 export function getManualPastDateBounds(today = new Date()) {

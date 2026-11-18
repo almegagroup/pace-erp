@@ -22,7 +22,7 @@ import QuickFilterInput from "../../../components/inputs/QuickFilterInput.jsx";
 import TransactionCompanySelector from "../../../components/inputs/TransactionCompanySelector.jsx";
 import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../components/inputs/transactionCompanyRuntime.js";
 import { useMenu } from "../../../context/useMenu.js";
-import { getManualDocumentDateBounds, isManualDocumentDateWithinWindow, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../utils/manualDocumentDateWindow.js";
+import { getManualDocumentDateBounds, isManualDocumentDateAcceptable, MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE } from "../../../utils/manualDocumentDateWindow.js";
 import {
   listStrokeMasters, getStrokeMaster, updateStrokeMaster,
   approveStrokeMaster, revertStrokeMaster, rejectStrokeMaster, deactivateStrokeMaster, reactivateStrokeMaster,
@@ -264,7 +264,7 @@ export default function StrokeApprovalPage() {
       toast("Communication Date, Type, Communicator Name, and Communication Reference are required.", "error");
       return;
     }
-    if (!isManualDocumentDateWithinWindow(editForm.communication_date)) {
+    if (!isManualDocumentDateAcceptable(editForm.communication_date, row.communication_date)) {
       toast(MANUAL_DOCUMENT_DATE_WINDOW_MESSAGE, "error");
       return;
     }

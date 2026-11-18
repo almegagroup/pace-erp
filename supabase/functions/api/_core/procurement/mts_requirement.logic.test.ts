@@ -8,6 +8,7 @@
  *   [T22] Excel export parity         → frontend exports the grid's own filtered rows/columns
  */
 import {
+  sameDayStockTypeShift,
   displayUnitOf,
   effectiveProductionAssignments,
   groupCoveredBy,
@@ -37,6 +38,7 @@ import {
   moqInBase,
   nmRequiredDays,
   partitionPoLineInbound,
+  effectiveOpenQty,
   type PlanLineVersion,
   type PolicyRow,
   type RequirementInput,
@@ -1089,4 +1091,58 @@ Deno.test("PO22 in transit: dispatched qty counts in full even above the PO line
   const calendar = buildCalendar("2026-11-01", "2026-11-16")!;
   const b = bucketInbound(mixed, calendar);
   assertEqual([b.cm, b.cm_dispatched], [5000, 2000], "CM holds both, the dispatched part is 2,000");
+});
+
+Deno.test("Coverage: a group member whose allocated demand ends because its own stock is used up shows that cover, not 'beyond plan'", () => {
+  // PM bag in a group (owner 2026-11-12, CMP005 AWP 40 KG bag): the group's demand is allocated to the member with the most stock, day by day,
+  // until that stock is gone. The member's own demand series therefore stops early; the plan did not end, its stock did.
+  const calendar = buildCalendar("2026-11-01", "2026-11-12")!;
+  const demand = new Map<string, number>();
+  const days = calendar.horizon.filter((d) => d >= "2026-11-12");
+  for (let i = 0; i < 25; i += 1) demand.set(days[i], 2500); // 62,500 allocated over 25 days, then nothing
+  const used = coverageDays(62500.000411, calendar, demand, null, 0);
+  assertEqual([used.days, used.stockout_date !== null], [25, true], "stock used up by the allocated demand: 25 days, a stock-out date, not null");
+  // Control: stock well above the allocated demand with the plan ended = really beyond the plan.
+  const beyond = coverageDays(90000, calendar, demand, null, 0);
+  assertEqual(beyond.days, null, "stock left over after the plan ended is still 'beyond plan'");
+});
+
+Deno.test("PO22 knock-off: a knocked-off remainder is no longer an expected arrival", () => {
+  assertEqual(effectiveOpenQty(0.5, 0.5), 0, "42 MT ordered, 41.5 received, 0.5 knocked off: nothing is expected");
+  assertEqual(effectiveOpenQty(42, 0.5), 41.5, "42 open, 0.5 knocked off, CSN dispatched 41.5: the CSN is all that is left");
+  assertEqual(effectiveOpenQty(10, 0), 10, "no knock-off changes nothing");
+  assertEqual(effectiveOpenQty(1, 5), 0, "never negative");
+  assertEqual(effectiveOpenQty(null, null), 0, "missing values count as 0");
+  const warnings: Warning[] = [];
+  const events = partitionPoLineInbound({
+    material_id: "RM-A", po_line_id: "line", po_number: "ASCP2627-0192", line_number: 1, open_qty: effectiveOpenQty(42, 0.5), base_per_po_unit: 1,
+    expected_delivery_date: "2026-10-28", at_gate: [], lots: [],
+    csns: [{ id: "c", csn_number: "3000000370", status: "TRN", dispatch_qty: 41.5, received_qty: 0, eta: "2026-11-18", is_mother_with_children: false }],
+  } as never, "2026-11-16", warnings);
+  assertEqual(events.map((e) => [e.kind, e.qty]), [["IN_TRANSIT", 41.5]], "only the dispatched 41.5 remains, no 0.5 'open PO' remainder");
+});
+
+Deno.test("Sub-CSN: when its Mother CSN is in transit, the share counts as in transit, not as an open PO", () => {
+  const calendar = buildCalendar("2026-11-01", "2026-11-16")!;
+  const planned: InboundEvent = { material_id: "M", qty: 9000, date: "2026-11-29", kind: "SUB_CSN_PLANNED", date_source: "SUB_CSN_ETA", reference: "Sub-CSN 3000000331 · PO ASC/PO125 (planned transfer from another company)", mother_in_transit: false };
+  const moving: InboundEvent = { ...planned, mother_in_transit: true };
+  const a = bucketInbound([planned], calendar);
+  assertEqual([a.dispatched, a.open_po, a.cm_dispatched], [0, 9000, 0], "mother not shipped: still an open PO piece");
+  const b = bucketInbound([moving], calendar);
+  assertEqual([b.dispatched, b.open_po, b.cm, b.cm_dispatched], [9000, 0, 9000, 9000], "mother in transit: dispatched, same date and quantity");
+});
+
+Deno.test("same-day QA release: P321 moves stock QA -> Unrestricted today, nothing else is added (owner 2026-11-16)", () => {
+  const rows = sameDayStockTypeShift([
+    { material_id: "CF", storage_location_id: "R2", stock_type_code: "QUALITY_INSPECTION", direction: "OUT", qty: 1000 },
+    { material_id: "CF", storage_location_id: "R2", stock_type_code: "UNRESTRICTED", direction: "IN", qty: 1000 },
+  ]);
+  const get = (type: string) => rows.find((r) => r.stock_type_code === type)?.qty;
+  assert(get("QUALITY_INSPECTION") === -1000 && get("UNRESTRICTED") === 1000, `got ${JSON.stringify(rows)}`);
+  assert(sameDayStockTypeShift([]).length === 0, "no legs -> no rows");
+  const back = sameDayStockTypeShift([
+    { material_id: "CF", storage_location_id: "R2", stock_type_code: "UNRESTRICTED", direction: "OUT", qty: 400 },
+    { material_id: "CF", storage_location_id: "R2", stock_type_code: "UNRESTRICTED", direction: "IN", qty: 400 },
+  ]);
+  assert(back.length === 0, "a leg and its exact reversal net to nothing");
 });

@@ -40,12 +40,17 @@ export default function MtsRollingPlanDownload({ runtimeContext, planMonth, asOf
       for (const [index, c] of list.entries()) {
         setBusy(`${c.label} (${index + 1}/${list.length})…`);
         let rolling;
-        try {
-          rolling = await getMtsRollingPlan({ company_id: c.id, plan_month: planMonth, as_of: asOf, demand_at: demandAt || undefined });
-        } catch (error) {
-          skipped.push(`${c.label}: not included — ${errorText(error)}`);
-          continue;
+        // A database timeout on a big company is usually momentary: try it once more before giving up on it. No retry for "no access".
+        let lastError = null;
+        for (let attempt = 1; attempt <= 2 && !rolling; attempt += 1) {
+          try {
+            rolling = await getMtsRollingPlan({ company_id: c.id, plan_month: planMonth, as_of: asOf, demand_at: demandAt || undefined });
+          } catch (error) {
+            lastError = error;
+            if (/permission|access|forbidden/i.test(errorText(error))) break;
+          }
         }
+        if (!rolling) { skipped.push(`${c.label}: not included — ${errorText(lastError)}`); continue; }
         const notes = [];
         let plan = null;
         try {

@@ -5,12 +5,17 @@
  *          ONE material (all its GRNs, then the RM -> SFG -> FG cascade) and can be repeated safely.
  * Authority: Frontend
  */
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import ModalBase from "../../../../components/layer/ModalBase.jsx";
-import { grnGstInclusiveBackfill } from "../procurementApi.js";
+import { grnGstInclusiveBackfill, grnGstInclusiveBackfillJob } from "../procurementApi.js";
 import { openActionConfirm } from "../../../../store/actionConfirm.js";
 
 const money = (value) => Number(value ?? 0).toLocaleString("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+const POLL_MS = 3000;
+const POLL_LIMIT_MS = 30 * 60 * 1000;
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+const clock = (seconds) => `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
 
 export default function GstInclusiveBackfillModal({ visible, onClose }) {
   const [checking, setChecking] = useState(false);
@@ -18,6 +23,27 @@ export default function GstInclusiveBackfillModal({ visible, onClose }) {
   const [plan, setPlan] = useState(null);
   const [results, setResults] = useState({});
   const [error, setError] = useState("");
+  const [elapsed, setElapsed] = useState(0);
+  const aliveRef = useRef(true);
+  useEffect(() => () => { aliveRef.current = false; }, []);
+
+  // The correction runs as a background job on the server; this polls it (short GETs, so the screen is never blocked).
+  async function waitForJob(jobId) {
+    const startedAt = Date.now();
+    while (aliveRef.current && Date.now() - startedAt < POLL_LIMIT_MS) {
+      await sleep(POLL_MS);
+      setElapsed(Math.round((Date.now() - startedAt) / 1000));
+      let job;
+      try {
+        job = await grnGstInclusiveBackfillJob(jobId);
+      } catch {
+        continue; // a missed poll is not a failed job
+      }
+      if (job?.status === "DONE") return job.result;
+      if (job?.status === "FAILED") throw new Error(job.error === "INTERRUPTED" ? "The server restarted while this was running. Press Check, then Apply again." : (job.error || "GST_BACKFILL_FAILED"));
+    }
+    throw new Error("Still running on the server. Close this window, wait a minute and press Check (dry run) to see what is left.");
+  }
 
   async function check() {
     setChecking(true);
@@ -42,7 +68,9 @@ export default function GstInclusiveBackfillModal({ visible, onClose }) {
     setApplyingId(row.material_id);
     setError("");
     try {
-      const res = await grnGstInclusiveBackfill({ apply: true, material_id: row.material_id });
+      setElapsed(0);
+      const started = await grnGstInclusiveBackfill({ apply: true, material_id: row.material_id });
+      const res = await waitForJob(started.job_id);
       setResults((current) => ({ ...current, [row.material_id]: res }));
       setPlan(await grnGstInclusiveBackfill({}));
     } catch (err) {
@@ -98,7 +126,7 @@ export default function GstInclusiveBackfillModal({ visible, onClose }) {
                     <td className="border border-slate-200 px-2 py-1 text-right">{money(row.value_change)}</td>
                     <td className="border border-slate-200 px-2 py-1 text-right">
                       <button type="button" onClick={() => void apply(row)} disabled={Boolean(applyingId)} className="border border-sky-700 bg-sky-100 px-3 py-1 font-semibold text-sky-950 disabled:opacity-50">
-                        {applyingId === row.material_id ? "Applying..." : "Apply"}
+                        {applyingId === row.material_id ? `Applying ${clock(elapsed)}` : "Apply"}
                       </button>
                     </td>
                   </tr>

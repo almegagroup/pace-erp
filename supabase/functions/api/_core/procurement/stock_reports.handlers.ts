@@ -1064,6 +1064,55 @@ export async function getStockLedgerReportHandler(
       await Promise.all(vendorCustomerFetches);
     }
 
+    // "Output Material": what a production posting was made FOR. A Process PO
+    // (PROC_PO) posting -> the SFG/Prodshade it produces; a Packing PO (PACK_PO)
+    // posting -> the FG SKU. Resolved from the PO number carried in the
+    // document's reference_document_number. Every other reference type
+    // (GRN, OS, RTV, ...) has no output material and stays blank ("—").
+    const processPoNumbers = new Set<string>();
+    const packPoNumbers = new Set<string>();
+    for (const doc of docMap.values()) {
+      const refType = toTrimmedString(doc.reference_document_type).toUpperCase();
+      const refNumber = toTrimmedString(doc.reference_document_number);
+      if (!refNumber) continue;
+      if (refType === "PROC_PO") processPoNumbers.add(refNumber);
+      else if (refType === "PACK_PO") packPoNumbers.add(refNumber);
+    }
+    const outputMaterialByPo = new Map<string, string>();
+    if (processPoNumbers.size > 0 || packPoNumbers.size > 0) {
+      let processPoRows: JsonRecord[];
+      let packPoRows: JsonRecord[];
+      try {
+        [processPoRows, packPoRows] = await Promise.all([
+          fetchInChunks<JsonRecord>([...processPoNumbers], (chunk) =>
+            serviceRoleClient.schema("erp_production").from("process_order")
+              .select("po_number, material_id").eq("company_id", companyId).in("po_number", chunk)),
+          fetchInChunks<JsonRecord>([...packPoNumbers], (chunk) =>
+            serviceRoleClient.schema("erp_production").from("packing_order")
+              .select("po_number, material_id").eq("company_id", companyId).in("po_number", chunk)),
+        ]);
+      } catch {
+        return reportErrorResponse(req, ctx, "STOCK_LEDGER_FETCH_FAILED", 500, "Unable to fetch stock ledger report.");
+      }
+      const outputMaterialIdByKey = new Map<string, string>();
+      for (const po of processPoRows) outputMaterialIdByKey.set(`PROC_PO:${toTrimmedString(po.po_number)}`, toTrimmedString(po.material_id));
+      for (const po of packPoRows) outputMaterialIdByKey.set(`PACK_PO:${toTrimmedString(po.po_number)}`, toTrimmedString(po.material_id));
+      const outputMaterialIds = [...new Set([...outputMaterialIdByKey.values()].filter(Boolean))];
+      let outputMaterialRows: JsonRecord[];
+      try {
+        outputMaterialRows = await fetchInChunks<JsonRecord>(outputMaterialIds, (chunk) =>
+          serviceRoleClient.schema("erp_master").from("material_master")
+            .select("id, pace_code, external_code, material_name").in("id", chunk));
+      } catch {
+        return reportErrorResponse(req, ctx, "STOCK_LEDGER_FETCH_FAILED", 500, "Unable to fetch stock ledger report.");
+      }
+      const outputMaterialLabelById = new Map(outputMaterialRows.map((m) => [toTrimmedString(m.id), resolveMaterialLabel(m)]));
+      for (const [key, materialId] of outputMaterialIdByKey) {
+        const label = outputMaterialLabelById.get(materialId);
+        if (label) outputMaterialByPo.set(key, label);
+      }
+    }
+
     const rows = ledgerRows.map((row) => {
       const doc = docMap.get(row.stock_document_id);
       const material = materialMap.get(row.material_id);
@@ -1127,6 +1176,7 @@ export async function getStockLedgerReportHandler(
         value: normalizeNumber(row.posted_value, 4),
         direction: row.direction || "—",
         reference_document: toTrimmedString(doc?.reference_document_number) || "—",
+        output_material: outputMaterialByPo.get(`${refType}:${toTrimmedString(doc?.reference_document_number)}`) || "—",
         packing_po_number: fgPoNumber || "—",
         vendor_customer: vendorCustomerLabelByRef.get(`${refType}:${refId}`) || "—",
         user_display: userLabel || "—",

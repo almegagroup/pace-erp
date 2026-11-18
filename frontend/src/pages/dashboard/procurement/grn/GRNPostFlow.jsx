@@ -17,6 +17,28 @@ function statusBadge(status) {
   return <span className="inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold bg-amber-100 text-amber-800">PENDING</span>;
 }
 
+// FG keeps its SKU code in material_name; document_name is the readable name, so lead with that.
+function materialLabel(row) {
+  const name = row?.material_name || "";
+  const doc = row?.document_name || "";
+  if (doc && name && doc !== name) return `${name} — ${doc}`;
+  return doc || name || "—";
+}
+
+const fmtQty = (value) => String(Number(Number(value).toFixed(4)));
+
+// Outer / Inner / Base units of a line raised in its base unit (FG STO): factor = base units per 1 of that unit.
+function unitRows(line) {
+  const base = line?.base_uom_code;
+  if (!base || line?.uom_code !== base) return [];
+  const alternates = line.uom_alternates ?? [];
+  if (alternates.length === 0) return [];
+  return [
+    ...alternates.map((alt, index) => ({ role: index === 0 ? "Outer" : "Inner", code: alt.uom_code, factor: alt.factor })),
+    { role: "Base", code: base, factor: 1 },
+  ];
+}
+
 function vendorDisplay(row) {
   if (!row?.vendor_name) return "—";
   return `${row.vendor_code || ""} — ${row.vendor_name}`.replace(/^( — )/, "");
@@ -144,7 +166,7 @@ function GELinesScreen({ geData, onSelectLine, onBack, successNotice }) {
                 render: (row) => (
                   <span>
                     {row.external_sku && <span className="font-medium text-slate-900">{row.external_sku} — </span>}
-                    <span className={row.external_sku ? "text-slate-700" : "font-medium text-slate-900"}>{row.material_name || "—"}</span>
+                    <span className={row.external_sku ? "text-slate-700" : "font-medium text-slate-900"}>{materialLabel(row)}</span>
                   </span>
                 ),
               },
@@ -402,6 +424,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
     if (shipToMissing) { setError("Ship To Location Mentioned In Invoice is required for a CRCP-enabled document. (Tab: Receipt)"); setActiveTab(TABS.indexOf("Receipt")); return; }
     if (gstMissing) { setError("GST % from the invoice is required. Enter 0 when the invoice is zero-rated. (Tab: Accounts)"); setActiveTab(TABS.indexOf("Accounts")); return; }
     if (geLine.batch_tracking_required && !batchLotNumber.trim()) { setError("Batch/lot number is required for this material. (Tab: Pack & shelf life)"); setActiveTab(TABS.indexOf("Pack & shelf life")); return; }
+    if (!transporterId) { setError("Transporter is required. (Tab: Transporter)"); setActiveTab(TABS.indexOf("Transporter")); return; }
     if (isBulk && !physicalContainerNumber.trim()) { setError("Physical Container Number is required for a Bulk GRN. (Tab: Transporter)"); setActiveTab(TABS.indexOf("Transporter")); return; }
 
     setSaving(true);
@@ -458,7 +481,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
   return (
     <ErpScreenScaffold
       eyebrow={`Post GRN → ${geHeader.ge_number} → Line ${geLine.line_number}`}
-      title={geLine.material_name || `Line ${geLine.line_number}`}
+      title={materialLabel(geLine) !== "—" ? materialLabel(geLine) : `Line ${geLine.line_number}`}
       notices={error ? [{ key: "grn-form-err", tone: "error", message: error }] : []}
       actions={[
         { key: "cancel", label: "Cancel", tone: "neutral", onClick: onCancel },
@@ -507,6 +530,22 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
                 </p>
               </div>
             </div>
+            {unitRows(geLine).length > 0 && (
+              <table className="mb-4 w-full max-w-xl border border-slate-200 text-sm">
+                <thead className="bg-slate-50 text-[11px] uppercase text-slate-500">
+                  <tr><th className="px-3 py-1.5 text-left">Unit</th><th className="px-3 py-1.5 text-right">Invoice qty</th><th className="px-3 py-1.5 text-right">Received qty</th></tr>
+                </thead>
+                <tbody>
+                  {unitRows(geLine).map((unit) => (
+                    <tr key={unit.role} className="border-t border-slate-100">
+                      <td className="px-3 py-1.5">{unit.role} · {unit.code}</td>
+                      <td className="px-3 py-1.5 text-right">{fmtQty(Number(geLine.ge_qty ?? 0) / unit.factor)}</td>
+                      <td className="px-3 py-1.5 text-right">{fmtQty(receivedQtyNum / unit.factor)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            )}
             <div className="grid gap-3 md:grid-cols-2">
               <ErpDenseFormRow label={<>Received qty <span className="text-red-500">*</span></>}>
                 <input
@@ -686,6 +725,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
             <div className="grid grid-cols-2 gap-3 mb-4 md:grid-cols-3">
               {[
                 ["PACE code", geLine.pace_code ?? "—"],
+                ["Document name", geLine.document_name ?? "—"],
                 ["Material name", geLine.material_name ?? "—"],
                 ["External code", geLine.external_sku ?? "—"],
                 ["Base UOM", geLine.base_uom_code ?? "—"],
@@ -741,6 +781,11 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
               <p className="mt-1 text-base font-medium text-slate-900">
                 {geLine.po_rate != null ? `₹ ${Number(geLine.po_rate).toFixed(4)} / ${geLine.uom_code}` : "—"}
               </p>
+              {geLine.po_rate != null && unitRows(geLine).filter((unit) => unit.role !== "Base").map((unit) => (
+                <p key={unit.role} className="mt-0.5 text-sm text-slate-700">
+                  {unit.role}: ₹ {(Number(geLine.po_rate) * unit.factor).toFixed(4)} / {unit.code}
+                </p>
+              ))}
               {isPoGstInclusive && (
                 <p className="mt-1 text-xs text-slate-600">
                   {basicRate !== null
@@ -796,7 +841,7 @@ function GRNEntryForm({ geLine, geHeader, geData, onPosted, onCancel }) {
             </p>
             <div className="grid gap-3 md:grid-cols-3">
               <div className="md:col-span-3">
-                <ErpDenseFormRow label="Transporter">
+                <ErpDenseFormRow label={<>Transporter <span className="text-red-500">*</span></>}>
                   {transporterId && transporterName ? (
                     <div className="flex items-center gap-2">
                       <span className="flex-1 h-9 flex items-center px-3 border border-emerald-300 bg-emerald-50 text-sm text-emerald-900 rounded">

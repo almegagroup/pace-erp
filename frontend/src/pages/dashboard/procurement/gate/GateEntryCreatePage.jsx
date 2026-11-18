@@ -462,8 +462,9 @@ export default function GateEntryCreatePage() {
     }));
 
     setLines((prev) => {
-      const withoutTrigger = rowIndex !== null ? prev.filter((_, i) => i !== rowIndex) : prev;
-      return [...withoutTrigger, ...newLines];
+      // The picked STO lines take the trigger row's own place (not the bottom, below the blank rows).
+      if (rowIndex === null) return [...prev, ...newLines];
+      return [...prev.slice(0, rowIndex), ...newLines, ...prev.slice(rowIndex + 1)];
     });
     closeStoDrawer();
   }

@@ -115,18 +115,20 @@ export type IfAbsentInput = { reference: string; other_eta: string; best_eta: st
  * Judged alone with every other order on its recorded date - so it differs from the main date, which also protects against
  * several orders being late together.
  */
-export function ifAbsentText(list: readonly IfAbsentInput[], currentEta: string | null, overdueDays: number | null = null): string {
+export function ifAbsentText(list: readonly IfAbsentInput[], currentEta: string | null, overdueDays: number | null = null, thisOrder: string | null = null): string {
   const rec = currentEta ?? "?";
+  // Management asked "which is 'this order'?" (2026-11-17): name it when the caller knows it.
+  const self = thisOrder ? `THIS order (${thisOrder})` : "this order";
   const overdue = overdueDays && overdueDays > 0 ? ` Its recorded date has already passed (${overdueDays} d overdue).` : "";
   const alone = " (judged alone, other orders on their recorded dates)";
   return list.map((x) => {
     const other = `${x.reference} (${x.other_eta})`;
-    if (x.not_needed_in_plan) return `If ${other} does not come: this order is still not needed inside the plan${alone}.`;
+    if (x.not_needed_in_plan) return `If ${other} does not come: ${self} is still not needed inside the plan${alone}.`;
     if (!x.best_eta) return `If ${other} does not come: no date can be advised.`;
-    if (x.shift_days === 0) return `If ${other} does not come: this order must land at plant by its recorded date ${rec}${alone}.${overdue}`;
+    if (x.shift_days === 0) return `If ${other} does not come: ${self} must land at plant by its recorded date ${rec}${alone}.${overdue}`;
     return x.shift_days > 0
-      ? `If ${other} does not come: this order must land at plant by ${x.best_eta} at the latest, else a level falls below its Min (${x.shift_days} d after its recorded date ${rec})${alone}.${overdue}`
-      : `If ${other} does not come: this order must land at plant by ${x.best_eta} (${-x.shift_days} d before its recorded date ${rec})${alone}.${overdue}`;
+      ? `If ${other} does not come: ${self} must land at plant by ${x.best_eta} at the latest, else a level falls below its Min (${x.shift_days} d after its recorded date ${rec})${alone}.${overdue}`
+      : `If ${other} does not come: ${self} must land at plant by ${x.best_eta} (${-x.shift_days} d before its recorded date ${rec})${alone}.${overdue}`;
   }).join("\n");
 }
 

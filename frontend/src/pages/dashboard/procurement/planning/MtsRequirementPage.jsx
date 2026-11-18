@@ -184,7 +184,11 @@ const groupDemand = (row) => (groupPools(row).length ? groupPools(row).reduce((s
 /** Why a cover-days cell is blank: stock outlasts the PO21 plan, or the item is used only through a group (its cover is the group's). */
 const coverEmptyText = (row) => {
   const ownDemand = Number(row.cm_prorata ?? 0) + Number(row.nm_req ?? 0) > 0;
-  if (ownDemand && Number(row.current_stock ?? 0) > 0) return "Beyond plan";
+  if (ownDemand && Number(row.current_stock ?? 0) > 0) {
+    // Stock outlasts the PO21 plan: show the days at the plan's average daily use so a small stock and a huge one do not look alike.
+    const daily = Number(row.total_prorata_daily ?? 0);
+    return daily > 0.000001 ? `Beyond plan (≈ ${Math.floor(Number(row.current_stock) / daily)} d)` : "Beyond plan";
+  }
   if (!ownDemand && Number(row.group_share_qty ?? 0) > 0) return `Via ${groupVia(row).split(" — ").pop().split("; ")[0] || "group"}`;
   return null;
 };
@@ -207,6 +211,9 @@ const INBOUND_KIND_LABELS = {
   STO_IN_TRANSIT: "STO in transit",
   SUB_CSN_PLANNED: "Sub-CSN transfer (planned)",
 };
+
+/** A Sub-CSN share whose Mother CSN is in transit is in transit too (its own status can still say ORD). */
+const inboundKindLabel = (e) => (e.kind === "SUB_CSN_PLANNED" && e.mother_in_transit ? "Sub-CSN (mother in transit)" : INBOUND_KIND_LABELS[e.kind] ?? e.kind);
 
 export default function MtsRequirementPage() {
   const { runtimeContext } = useMenu();
@@ -554,7 +561,7 @@ function SourceDetail({ row, du }) {
     { key: "prodshades", label: "Prodshade(s) (PO21 plan)", width: "260px", render: (p) => p.prodshades.join("; "), copyValue: (p) => p.prodshades.join("; ") },
   ];
   const inboundColumns = [
-    { key: "kind", label: "Kind", width: "150px", render: (e) => INBOUND_KIND_LABELS[e.kind] ?? e.kind, copyValue: (e) => INBOUND_KIND_LABELS[e.kind] ?? e.kind },
+    { key: "kind", label: "Kind", width: "150px", render: (e) => inboundKindLabel(e), copyValue: (e) => inboundKindLabel(e) },
     { key: "reference", label: "Document (PO / CSN / GE / Lot)", width: "360px" },
     { key: "date", label: "ETA to Plant", width: "100px", render: (e) => e.date ?? "UNKNOWN", copyValue: (e) => e.date ?? "UNKNOWN" },
     { key: "date_source", label: "Date Source", width: "180px" },

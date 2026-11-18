@@ -1812,6 +1812,31 @@ async function groupCascadeNodes(nodes: CascadeNode[]): Promise<CascadeNodeGroup
 // cost. Only resolvable via the impacted row's own reference_document_id
 // (§106 tagging) — legacy untagged rows (pre-17 July) can't cascade through
 // this leg, a known accepted gap (CLAUDE.md §104).
+// An MTS Process PO's Verify posts one FG (SKU) receipt per BATCH, all under the PO's own material document, but its Packing PO
+// FG line keeps only ONE ledger id. Following the Packing PO alone re-valued 1 receipt per PO and left every other batch's
+// receipt (and so the FG stock value) at the old rate. Every FG P101 receipt the PO posted is a downstream leg.
+async function collectMtsFgLedgerIds(processOrderId: string, knownLedgerIds: string[]): Promise<string[]> {
+  const ids = new Set(knownLedgerIds.filter(Boolean));
+  const { data: docs } = await serviceRoleClient.schema("erp_inventory").from("stock_document")
+    .select("id").eq("reference_document_type", "PROC_PO").eq("reference_document_id", processOrderId);
+  const docIds = ((docs ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.id)).filter(Boolean);
+  if (docIds.length === 0) return [...ids];
+  const legs: JsonRecord[] = [];
+  for (let index = 0; index < docIds.length; index += 100) {
+    const { data } = await serviceRoleClient.schema("erp_inventory").from("stock_ledger")
+      .select("id, material_id").eq("direction", "IN").eq("movement_type_code", "P101")
+      .in("stock_document_id", docIds.slice(index, index + 100));
+    legs.push(...((data ?? []) as JsonRecord[]));
+  }
+  const materialIds = [...new Set(legs.map((row) => toTrimmedString(row.material_id)).filter(Boolean))];
+  if (materialIds.length === 0) return [...ids];
+  const { data: materials } = await serviceRoleClient.schema("erp_master").from("material_master")
+    .select("id, material_type").in("id", materialIds);
+  const fgMaterialIds = new Set(((materials ?? []) as JsonRecord[]).filter((row) => toUpperTrimmedString(row.material_type) === "FG").map((row) => toTrimmedString(row.id)));
+  for (const leg of legs) if (fgMaterialIds.has(toTrimmedString(leg.material_id))) ids.add(toTrimmedString(leg.id));
+  return [...ids];
+}
+
 async function findDownstreamGroup(
   impacted: JsonRecord,
 ): Promise<
@@ -1848,7 +1873,7 @@ async function findDownstreamGroup(
       return {
         kind: "MTS_PROCESS_PO",
         documentId: String(poLine.process_order_id),
-        fgLedgerIds: [...new Set(((fgLines ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.stock_ledger_id)).filter(Boolean))],
+        fgLedgerIds: await collectMtsFgLedgerIds(String(poLine.process_order_id), ((fgLines ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.stock_ledger_id))),
       };
     }
     return { kind: "PROCESS_PO", documentId: String(poLine.process_order_id), fgLedgerId: (po?.fg_stock_ledger_id as string | null) ?? null };
@@ -1891,7 +1916,7 @@ async function findDownstreamGroup(
       return {
         kind: "MTS_PROCESS_PO",
         documentId: processOrderId,
-        fgLedgerIds: [...new Set(((fgLines ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.stock_ledger_id)).filter(Boolean))],
+        fgLedgerIds: await collectMtsFgLedgerIds(processOrderId, ((fgLines ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.stock_ledger_id))),
       };
     }
     if (po?.qi_release_stock_ledger_id) {

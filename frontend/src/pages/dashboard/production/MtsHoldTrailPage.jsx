@@ -134,6 +134,15 @@ export default function MtsHoldTrailPage() {
   const allRows = useMemo(() => (Array.isArray(reportQuery.data?.items) ? reportQuery.data.items : []), [reportQuery.data]);
   const summaryRows = useMemo(() => (Array.isArray(reportQuery.data?.summary) ? reportQuery.data.summary : []), [reportQuery.data]);
 
+  // The "held right now" table above the grid ignores the Event Date filter; the grid below does not. Say so, and say how
+  // many of the held SKUs actually have an event inside the range, so a held SKU missing from the grid is not a mystery.
+  const rangeNote = useMemo(() => {
+    if (!submittedParams || summaryRows.length === 0) return null;
+    const inGrid = new Set(allRows.map((row) => `${row.company_code}|${row.sku}`));
+    const shown = summaryRows.filter((row) => inGrid.has(`${row.company_code}|${row.sku}`)).length;
+    return { from: submittedParams.date_from, to: submittedParams.date_to, shown, held: summaryRows.length };
+  }, [submittedParams, summaryRows, allRows]);
+
   const displayedRows = useMemo(() => {
     const term = allColumnSearch.trim().toLowerCase();
     return term ? allRows.filter((row) => rowSearchText(row).includes(term)) : allRows;
@@ -332,6 +341,14 @@ export default function MtsHoldTrailPage() {
                 </div>
                 <p className="mt-2 text-xs text-slate-600">All dates — the Event Date filter does not apply here.</p>
               </div>
+            ) : null}
+            {rangeNote ? (
+              <p className={`mb-2 text-xs ${rangeNote.shown < rangeNote.held ? "text-amber-700" : "text-slate-600"}`}>
+                Events from {formatDay(rangeNote.from)} to {formatDay(rangeNote.to)}
+                {rangeNote.shown < rangeNote.held
+                  ? ` · ${rangeNote.shown} of ${rangeNote.held} held SKUs have events here — widen the Event Date to see the rest.`
+                  : "."}
+              </p>
             ) : null}
             <div className="mb-3 flex flex-wrap items-end justify-between gap-3">
               <label className="min-w-[260px] flex-1 text-xs font-semibold uppercase tracking-[0.1em] text-slate-600">

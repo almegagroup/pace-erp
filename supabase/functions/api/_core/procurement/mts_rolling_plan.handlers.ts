@@ -8,7 +8,8 @@
  * every block is derived from that run, so the file shows exactly what the screens show.
  * Read-only: never creates a PO, CSN, transfer or stock posting.
  */
-import { actionText, bestDateText, bestDateWhy, ifAbsentText, togetherText } from "./mts_best_date_text.logic.ts";
+import { selfCheckBlock } from "./mts_report_selfcheck.logic.ts";
+import { actionText, bestDateText, bestDateWhy, togetherText } from "./mts_best_date_text.logic.ts";
 import { assertCompanyScope } from "../../_shared/companyScope.ts";
 import { fetchInChunks } from "../../_shared/chunkedIn.ts";
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
@@ -20,6 +21,7 @@ import { groupCoveredBy, isTransferFed } from "./mts_requirement.logic.ts";
 import { loadBulkMaterialIds } from "./mts_bulk_materials.ts";
 import { memberMattersForGaps } from "./mts_planning.logic.ts";
 import { fail, handleError, type ReqHandlerContext, requireRequirementViewAccess, todayInIndia } from "./mts_requirement.handlers.ts";
+import { addDaysToIso, daysBetweenIso } from "./mts_level_cover.logic.ts";
 import { buildWaterfallView } from "./mts_waterfall_view.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -74,7 +76,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       serviceRoleClient.schema("erp_master").from("companies").select("company_code, company_name").eq("id", companyId).maybeSingle(),
     ]);
     const plan = await computePlanning({ companyId, ...parsed.params!, extraMonths: ROLLING_EXTRA_MONTHS, manualLots: userLots, scheduleChecks: true });
-    const { req: reqData, projection, assembly, calendar, vendorOptions, selections } = plan._internal;
+    const { req: reqData, projection, projectionAdvice, projectionPure, projectionShown, assembly, calendar, vendorOptions, selections } = plan._internal;
     const mattersForGaps = (m: string) => {
       const rowsOf = projection.rows.filter((r) => r.material_id === m);
       return memberMattersForGaps({
@@ -121,7 +123,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       csnIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(csnIds, (chunk) => serviceRoleClient
         .schema("erp_procurement").from("consignment_note").select("id, vendor_id, csn_type, etd, bl_date, eta_at_port, ata_at_port, eta_to_plant_calculated").in("id", chunk)),
       serviceRoleClient.schema("erp_procurement").from("consignment_note")
-        .select("csn_number, material_id, vendor_id, dispatch_qty, po_qty, po_uom_code, hold_reason, inactive_from_status, inactive_at, eta_to_plant_calculated")
+        .select("csn_number, po_id, material_id, vendor_id, dispatch_qty, po_qty, po_uom_code, hold_reason, inactive_from_status, inactive_at, eta_to_plant_calculated")
         .or(`company_id.eq.${companyId},consignee_company_id.eq.${companyId}`).eq("status", "HLD").order("inactive_at", { ascending: false }).limit(10000),
       materialIds.length === 0 ? Promise.resolve([] as JsonRecord[]) : fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient
         .schema("erp_procurement").from("consignment_note").select("material_id, ata_at_port, eta_at_port, gate_entry_date")
@@ -137,6 +139,11 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     const vendorRows = vendorIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(vendorIds, (chunk) => serviceRoleClient
       .schema("erp_master").from("vendor_master").select("id, vendor_name").in("id", chunk));
     const vendorName = new Map(vendorRows.map((v) => [text(v.id), text(v.vendor_name) || "—"]));
+    // Owner 2026-11-17: a CSN is never named without its PO.
+    const heldPoIds = unique(heldCsns.map((c) => text(c.po_id)).filter(Boolean));
+    const heldPoRows = heldPoIds.length === 0 ? [] : await fetchInChunks<JsonRecord>(heldPoIds, (chunk) => serviceRoleClient
+      .schema("erp_procurement").from("purchase_order").select("id, po_number").in("id", chunk));
+    const poNumberOfId = new Map(heldPoRows.map((r) => [text(r.id), text(r.po_number)]));
     const vendorByPo = new Map(pos.map((p) => [text(p.po_number), vendorName.get(text(p.vendor_id)) ?? null]));
     const vendorByCsn = new Map(csnRows.map((c) => [text(c.id), vendorName.get(text(c.vendor_id)) ?? null]));
     // CSN Tracker legs of every inbound piece: ATD (BL date) else ETD, ATA at port else ETA at port, ETA to plant (owner 2026-11-04).
@@ -147,7 +154,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     }));
     const recOf = (csnId?: string | null) => (csnId ? recordedByCsn.get(csnId) ?? null : null);
     const held_csns = heldCsns.map((c) => ({
-      csn_number: text(c.csn_number), material: nameOf(text(c.material_id)), supplier: vendorName.get(text(c.vendor_id)) ?? "—",
+      csn_number: text(c.csn_number), po_number: poNumberOfId.get(text(c.po_id)) || "—", material: nameOf(text(c.material_id)), supplier: vendorName.get(text(c.vendor_id)) ?? "—",
       qty: Number(c.dispatch_qty ?? c.po_qty ?? 0), uom: text(c.po_uom_code), previous_status: text(c.inactive_from_status),
       reason: text(c.hold_reason), held_at: text(c.inactive_at).slice(0, 10) || null, eta: text(c.eta_to_plant_calculated) || null,
     }));
@@ -186,7 +193,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const o = key ? optimumByKey.get(key) : null;
       const a = key ? arrivalByKey.get(key) : null;
       if (!o || !a) return { etd: "", port: "", plant: "", why: "", absent: "", action: "" };
-      const absent = ifAbsentText(a.if_absent ?? [], currentEta, overdueOf(currentEta));
+      // Owner 2026-11-17: no 'if another order does not come' text anywhere in the report.
+      const absent = "";
       if (o.not_needed_in_plan) return { etd: "", port: "", plant: "", why: bestText(key, currentEta, unit, uom), absent, action: actionText({ not_needed_in_plan: true, best_eta: o.best.eta, current_eta: currentEta, shift_days: o.shift_days }) };
       const w = key ? windowByKey.get(key) : null;
       const q = (n: number) => inUnit(unit, n) ?? 0;
@@ -237,6 +245,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
     type Row = Record<string, unknown>;
     const altText = (list: Array<{ route: string; material: string; vendor: string; etd: string; port: string | null; plant: string; moq: number | null }>) => list.map((x) => `${x.route === "IMPORT" ? "IMPORT" : "LOCAL"} · ${x.material} · ${x.vendor}: ETD ${x.etd}${x.port ? ` · Port ${x.port}` : ""} · Plant ${x.plant}`).join("\n");
     const cmpDay = (a: string | null, b: string | null) => String(a ?? "9999").localeCompare(String(b ?? "9999"));
+    // Owner 2026-11-17: the advice run's lots that fall INSIDE the recorded orders of the family being built (urgent suggestions, never counted).
+    let urgentLots: Array<{ day: string; material_id: string; qty_base: number }> = [];
     const buildSections = (memberIds: string[], fu: { base_per_unit: number } | null, legs: (m: string, vendorId: string | null | undefined, date: string | null) => { port_eta: string | null; import_etd: string | null }, events: Array<{ member: string; reference: string; kind: string; date_source?: string; csn_id?: string; reschedule_key?: string; qty: number }>, wfv: { levels?: Array<{ label: string; target_days: number | null; max_days: number | null; critical_days: number | null; reserve_now: number; cover_days_now: number | null }>; events?: Array<{ day: string; kind: string; level: string; qty: number; by_material?: Array<{ material: string; qty: number }> }>; matrix?: Array<{ day: string; levels: Array<{ level: string; by_material: Array<{ material: string; qty: number }> }>; pool: Array<{ material: string; qty: number }>; closing: Array<{ material: string; qty: number }> }> }) => {
       const waterfallLevels = wfv.levels ?? [];
       const fam = (plan.schedule_checks ?? []).find((f) => f.member_ids.some((m) => memberIds.includes(m)));
@@ -266,15 +276,58 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         return { cover: l.cover_days, min: l.min_days, max: l.max_days, minD: whole(l.cover_days), maxD: whole(l.max_cover_days !== null && l.max_days !== null ? Math.min(l.max_cover_days, l.max_days) : l.max_cover_days), beyond: l.max_cover_days === null, reserve: q(l.reserve_qty), excess: q(ownPool.reduce((sum, p) => sum + p.qty, 0)), excess_split: ownPool.map((p) => `${nameOf(p.material_id)}: ${dq(p.material_id, p.qty)} ${uomOf(p.material_id) ?? ""}`.trim()).join("\n") };
       };
       // Owner 2026-11-07: the cover on the evening BEFORE the landing day, so the sheet can show 'before → after' for one order.
-      const dayBefore = (days: typeof fam.days_a, key: string, date: string | null) => {
+      // Owner 2026-11-18: a level has a day record only on days something happens to IT; on any other date its state is the latest
+      // earlier record carried over the quiet days (cover shrinks one day per day, the free stock stays), so no cell is left blank.
+      // Owner 2026-11-18: where the stock outlasts the plan the engine gives no day count. Show the days up to the plan's last day of use for this
+      // level, and what is still left after it (the spare), instead of a blank.
+      const lastUseDayOf = (key: string): string | null => {
+        const lv = levelMap.get(key);
+        if (!lv) return null;
+        const prefix = `${lv.level_kind}|${lv.level_id}|`;
+        let max: string | null = null;
+        for (const k of levelUse.keys()) if (k.startsWith(prefix)) { const d = k.slice(prefix.length); if (max === null || d > max) max = d; }
+        return max;
+      };
+      const useBetween = (key: string, fromExclusive: string, toInclusive: string): number => {
+        const lv = levelMap.get(key);
+        if (!lv) return 0;
+        const prefix = `${lv.level_kind}|${lv.level_id}|`;
+        let sum = 0;
+        for (const [k, v] of levelUse) if (k.startsWith(prefix)) { const d = k.slice(prefix.length); if (d > fromExclusive && d <= toInclusive) sum += v; }
+        return q(sum);
+      };
+      // Owner 2026-11-18: exact records only. The planner keeps the day before and the day of every landing, so nothing is estimated
+      // (a carried-forward guess ignored the pool top-ups of quiet days and showed false zeros).
+      const stateNear = (days: typeof fam.days_a, key: string, date: string | null) => {
+        const base = stateAt(days, key, date);
+        if (!base || !date) return null;
+        const reserveAtDate: number | null = base.reserve ?? null;
+        let coverBeyond: { days: number; left: number } | null = null;
+        if (base.minD === null && reserveAtDate !== null) {
+          const lastUse = lastUseDayOf(key);
+          if (lastUse && lastUse >= date) coverBeyond = { days: daysBetweenIso(date, lastUse), left: Math.max(0, reserveAtDate - useBetween(key, date, lastUse)) };
+        }
+        // Max cover is capped by the plan too: no day count means the reserve plus the level's own spare outlasts it.
+        let maxBeyond: { days: number; left: number } | null = null;
+        if (base.maxD === null && reserveAtDate !== null) {
+          const lastUse = lastUseDayOf(key);
+          if (lastUse && lastUse >= date) maxBeyond = { days: daysBetweenIso(date, lastUse), left: Math.max(0, reserveAtDate + (base.excess ?? 0) - useBetween(key, date, lastUse)) };
+        }
+        return { ...base, reserveAtDate, coverBeyond, maxBeyond };
+      };
+      // The state on the evening BEFORE the landing day. A lot that lands on the as-of day itself has no earlier record: its "before" is today's own state.
+      const stateBefore = (days: typeof fam.days_a, key: string, date: string | null) => {
         if (!date) return null;
-        // level_days holds only the days something happens: take the latest day strictly before this one.
-        const prior = days.filter((x) => x.day < date && x.levels.some((l) => l.level_key === key)).map((x) => x.day).sort().pop();
-        const cover = prior ? stateAt(days, key, prior)?.minD ?? null : null;
-        if (!prior || cover === null) return null;
-        // No event between: the cover only shrinks one day per day, so the evening before this day = cover at the prior event day minus the quiet days in between.
-        const gap = Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${prior}T00:00:00Z`)) / 86_400_000) - 1;
-        return Math.max(0, cover - Math.max(0, gap));
+        return stateNear(days, key, addDaysToIso(date, -1)) ?? (date <= calendar.asOf ? stateNear(days, key, calendar.asOf) : null);
+      };
+      const dayBefore = (days: typeof fam.days_a, key: string, date: string | null) => stateBefore(days, key, date)?.minD ?? null;
+      // What this level's reserve actually gained on the landing day: closing reserve - opening reserve + that day's use.
+      const reserveGain = (days: typeof fam.days_a, lv: { level_key: string; level_kind: string; level_id: string }, date: string | null) => {
+        if (!date) return null;
+        const after = stateNear(days, lv.level_key, date)?.reserveAtDate ?? null;
+        const before = stateBefore(days, lv.level_key, date)?.reserveAtDate ?? null;
+        if (after === null || before === null) return null;
+        return Math.max(0, round(after - before + (proRata(lv, date) ?? 0)));
       };
       const statusOf = (st: ReturnType<typeof stateAt>, without: boolean) => {
         if (!st || st.cover === null || st.min === null) return "";
@@ -283,7 +336,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         if (st.cover < st.min + 1) return `Exactly at Min${suffix}`;
         return `Above Min${suffix}`;
       };
-      const whole = (n: number | null | undefined) => (n === null || n === undefined ? null : Math.round(n));
+      // Owner 2026-11-18: days are whole, rounded DOWN (16.9 d shows 16).
+      const whole = (n: number | null | undefined) => (n === null || n === undefined ? null : Math.floor(n + 1e-9));
       const allocOf = (alloc: typeof fam.alloc_a, ref: string, levelKind: string, destId: string) => alloc.filter((a) => a.ref === ref && a.dest_kind === levelKind && a.dest_id === destId).reduce((sum, a) => sum + a.qty, 0);
       const arrivalByRefMat = new Map(plan.reschedulable_arrivals.map((a) => [`${a.reference}|${a.material_id}`, a]));
       const eventOf = (reference: string, material: string) => events.find((e) => e.reference === reference && e.member === material);
@@ -313,19 +367,20 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           const arr = arrivalByRefMat.get(`${a.reference}|${a.material_id}`);
           const cells = ev?.reschedule_key ? bestCells(ev.reschedule_key, a.recorded ?? null, fu as never, uomOf(a.material_id) ?? "KG") : { etd: "", port: "", plant: "", why: "", absent: "", action: "" };
           // Owner 2026-11-12: an existing order's Min / Max count only today's stock and the existing orders (no suggested lot); a suggested lot that lands before it is mentioned, not counted.
-          const stA = stateAt(fam.days_a_pure, lv.level_key, a.recorded);
-          const stB = stateAt(fam.days_b_pure, lv.level_key, a.advised);
-          const lotsBefore = (lots: typeof fam.lots_a, date: string | null) => (date ? lots.filter((l) => l.day >= calendar.asOf && l.day <= date && lv.members.includes(l.material_id)).map((l) => ({ day: l.day, material: nameOf(l.material_id), qty: q(l.qty_base) })) : []);
+          const stA = stateNear(fam.days_a_pure, lv.level_key, a.recorded);
+          const stB = stateNear(fam.days_b_pure, lv.level_key, a.advised);
+          const lotsBefore = (lots: ReadonlyArray<{ day: string; material_id: string; qty_base: number }>, date: string | null) => (date ? lots.filter((l) => l.day >= calendar.asOf && l.day <= date && lv.members.includes(l.material_id)).map((l) => ({ day: l.day, material: nameOf(l.material_id), qty: q(l.qty_base) })) : []);
           const toLevel = allocOf(fam.alloc_b, a.source_key, lv.level_kind, lv.level_id);
           rows.push({
             kind: "Existing order", ref: `${a.reference}${ev?.csn_id ? "" : ""}`, material: nameOf(a.material_id), supplier: supplierOf(a.reference, ev?.csn_id) ?? "—", status: ev ? (arrivalStatus(ev.kind as never, ev.date_source as never) as string) : "",
             lot_qty: q(a.qty_base), existing_eta: a.recorded, action: cells.action, etd: cells.etd, port: cells.port, plant: cells.plant || a.advised, why: cells.why, absent: cells.absent,
             engine_eta: a.advised, to_level: q(toLevel), pct: a.qty_base > 0 ? toLevel / a.qty_base : null,
-            min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, excess_split: stB?.excess_split ?? null, level_status: statusOf(stB, false), reserve_after: stB?.reserve ?? null,
+            min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, excess_a: stA?.excess ?? null, excess_split: stB?.excess_split ?? null, level_status: statusOf(stB, false), reserve_after: stB?.reserve ?? null,
             arr_note: arr?.shared_note ?? "", rec: recOf(ev?.csn_id),
             prorata_a: proRata(lv, a.recorded ?? null), prorata_b: proRata(lv, a.advised ?? null),
             min_a_before: dayBefore(fam.days_a_pure, lv.level_key, a.recorded ?? null), min_b_before: dayBefore(fam.days_b_pure, lv.level_key, a.advised ?? null),
-            new_lots_a: lotsBefore(fam.lots_a, a.recorded ?? null), new_lots_b: lotsBefore(fam.lots_b, a.advised ?? null),
+            max_a_x: stA?.maxBeyond ?? null, max_b_x: stB?.maxBeyond ?? null, min_a_x: stA?.coverBeyond ?? null, min_b_x: stB?.coverBeyond ?? null, min_a_before_x: stateBefore(fam.days_a_pure, lv.level_key, a.recorded ?? null)?.coverBeyond ?? null, min_b_before_x: stateBefore(fam.days_b_pure, lv.level_key, a.advised ?? null)?.coverBeyond ?? null, into_reserve: reserveGain(fam.days_a_pure, lv, a.recorded ?? null),
+            new_lots_a: lotsBefore(urgentLots, a.recorded ?? null), new_lots_b: lotsBefore(urgentLots, a.advised ?? null),
           });
         }
         for (const ref of lotRefs) {
@@ -336,8 +391,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           const buy = buyOf(ref) ?? advisory.find((x) => x.material_id === lot.material_id);
           const dayA = a?.day ?? null;
           const dayB = b?.day ?? null;
-          const stA = stateAt(fam.days_a, lv.level_key, dayA ?? dayB);
-          const stB = stateAt(fam.days_b, lv.level_key, dayB ?? dayA);
+          const stA = stateNear(fam.days_a, lv.level_key, dayA ?? dayB);
+          const stB = stateNear(fam.days_b, lv.level_key, dayB ?? dayA);
           const toLevel = b ? allocOf(fam.alloc_b, ref, lv.level_kind, lv.level_id) : allocOf(fam.alloc_a, ref, lv.level_kind, lv.level_id);
           const lg = legs(lot.material_id, buy?.vendor_id, dayB ?? dayA);
           const flag = a && b ? (dayA === dayB ? "both" : "both, dates differ") : a ? "recorded dates only" : "engine dates only";
@@ -349,10 +404,12 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
             kind: "Projection", ref: "NEW (engine)", po_by: buy?.recommended_po_by ?? null, material: nameOf(lot.material_id), supplier: buy?.vendor_label ?? "—", status: "Projection", lot_qty: q(lot.qty_base), existing_eta: dayA, action,
             etd: lg.import_etd ?? "", port: lg.port_eta ?? "", plant: dayB ?? "", why: buy ? (buy.need_kind === "GROUP" ? `Triggered by group free stock${buy.trigger_group_id ? ` — ${groupLabel.get(buy.trigger_group_id) ?? ""}` : ""}` : "Triggered by its own use") : "", absent: "",
             engine_eta: dayB, to_level: q(toLevel), pct: lot.qty_base > 0 ? toLevel / lot.qty_base : null,
-            min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, excess_split: stB?.excess_split ?? null,
+            min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, excess_a: stA?.excess ?? null, excess_split: stB?.excess_split ?? null,
             level_status: statusOf(stB, !b), reserve_after: stB?.reserve ?? null, flag,
             prorata_a: proRata(lv, dayA), prorata_b: proRata(lv, dayB),
-            min_a_before: dayBefore(fam.days_a, lv.level_key, dayA), min_b_before: dayBefore(fam.days_b, lv.level_key, dayB),
+            // Owner 2026-11-17: the 'before landing' cover of a new order is on the SAME basis as section 2 (stock + recorded orders only, no suggested lot).
+            min_a_before: dayBefore(fam.days_a_pure, lv.level_key, dayA), min_b_before: dayBefore(fam.days_b_pure, lv.level_key, dayB),
+            max_a_x: stA?.maxBeyond ?? null, max_b_x: stB?.maxBeyond ?? null, min_a_x: stA?.coverBeyond ?? null, min_b_x: stB?.coverBeyond ?? null, min_a_before_x: stateBefore(fam.days_a_pure, lv.level_key, dayA)?.coverBeyond ?? null, min_b_before_x: stateBefore(fam.days_b_pure, lv.level_key, dayB)?.coverBeyond ?? null, into_reserve: reserveGain(fam.days_a, lv, dayA ?? dayB),
             alternatives: buy ? altText(alternativesFor(buy, dayA ?? dayB)) : "",
           });
         }
@@ -413,7 +470,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const poolOf = (days: typeof fam.days_a, dt: string) => { const d = days.find((x) => x.day === dt); return d ? { total: q(d.pool_qty), by: d.pool_by.filter((p) => p.qty > 0.5).map((p) => ({ material: nameOf(p.material_id), qty: q(p.qty) })) } : null; };
       const landsOf = (view: "A" | "B", dt: string) => [
         ...fam.arrivals.filter((a) => a.qty_base > 0 && (view === "A" ? a.recorded : a.advised) === dt).map((a) => `+ ${nameOf(a.material_id)} ${fmt(q(a.qty_base))} (${poNumberOfReference(a.reference) ?? a.reference})`),
-        ...(view === "A" ? fam.lots_a : fam.lots_b).filter((l) => l.day === dt).map((l) => `+ NEW ${nameOf(l.material_id)} ${fmt(q(l.qty_base))} (suggested, not counted)`),
+        ...(view === "A" ? fam.lots_a : fam.lots_b).filter((l) => l.day === dt).map((l) => `+ NEW ${nameOf(l.material_id)} ${fmt(q(l.qty_base))} (engine lot, counted in projection)`),
       ];
       const poolDiary = [...new Set([...fam.days_a.map((d) => d.day), ...fam.days_b.map((d) => d.day)])].sort().map((dt) => ({
         // Owner 2026-11-12: the excess pool counts today's stock and the existing orders only; a suggested lot is listed in 'lands' but never counted.
@@ -441,13 +498,34 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const unmet = new Map(days.map((day) => [day, 0]));
       for (const u of projection.group_unmet) if (groupSet.has(u.group_id) && unmet.has(u.day)) unmet.set(u.day, (unmet.get(u.day) ?? 0) + u.qty_base);
       const grid = familyDayGrid(days, memberRows, unmet);
+      // The day table shows today's stock and the existing orders only (owner 2026-11-12); `grid` (with suggested lots) keeps driving the alarms.
+      const pureRows = projectionShown.rows.filter((r) => memberSet.has(r.material_id));
+      const unmetPure = new Map(days.map((day) => [day, 0]));
+      for (const u of projectionShown.group_unmet) if (groupSet.has(u.group_id) && unmetPure.has(u.day)) unmetPure.set(u.day, (unmetPure.get(u.day) ?? 0) + u.qty_base);
+      const gridPure = familyDayGrid(days, pureRows, unmetPure);
+      // Owner 2026-11-16: inside the recorded orders a lot is only a suggestion (not counted); after the last recorded order the
+      // engine's own lots are counted in the projection (`projectionShown` plans none inside the recorded span).
+      const recordedEnd = [
+        ...memberIds.flatMap((m) => (rowById.get(m)?.inbound_events ?? []).map((e) => (e.date && e.date >= calendar.asOf ? e.date : calendar.asOf))),
+        ...userLots.filter((l) => memberSet.has(l.material_id)).map((l) => l.plant_eta),
+      ].reduce((max, d) => (d > max ? d : max), "");
+      const suggestedByDay = new Map<string, number>();
+      // The advice run may place a lot INSIDE the recorded orders (e.g. 'order today for the 22nd'); that is the urgent suggestion, never counted here.
+      urgentLots = [];
+      for (const r of projectionAdvice.rows) {
+        if (!memberSet.has(r.material_id) || !(r.planned_lot_qty_base > 0.000001) || r.day > recordedEnd) continue;
+        suggestedByDay.set(r.day, (suggestedByDay.get(r.day) ?? 0) + r.planned_lot_qty_base);
+        urgentLots.push({ day: r.day, material_id: r.material_id, qty_base: r.planned_lot_qty_base });
+      }
+      const newLotByDay = new Map<string, number>();
+      for (const r of pureRows) if (r.planned_lot_qty_base > 0.000001) newLotByDay.set(r.day, (newLotByDay.get(r.day) ?? 0) + r.planned_lot_qty_base);
       const fu = familyUnit(memberIds);
       const gridByDay = new Map(grid.map((g) => [g.day, g]));
       // Owner 2026-10-28: what is left in the pool (held for no level) after each day's receipts — the latest Material x Level snapshot on or before the day.
       // A snapshot belongs to one planned part (a family, or a lone item), so several snapshots can share a day: take each member's own
       // latest pool quantity and add them up (the last snapshot of the day alone would show only one part, e.g. 195 KG instead of the pool).
       const poolByMember = new Map<string, Array<{ day: string; qty: number }>>();
-      for (const snap of projection.level_matrix ?? []) {
+      for (const snap of projectionShown.level_matrix ?? []) {
         for (const [id, q] of Object.entries(snap.pool)) {
           if (!memberSet.has(id)) continue;
           const list = poolByMember.get(id) ?? [];
@@ -472,12 +550,14 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       const events = memberIds.flatMap((m) => (rowById.get(m)?.inbound_events ?? []).map((e) => ({ ...e, member: m })));
       const ownByDay = new Map<string, number>();
       for (const l of userLots) if (memberSet.has(l.material_id)) ownByDay.set(l.plant_eta, (ownByDay.get(l.plant_eta) ?? 0) + l.qty_base);
-      const rows = grid.filter((g, index) => index === 0 || g.arrivals > 0 || ownByDay.has(g.day)).map((g) => {
+      const rows = gridPure.filter((g, index) => index === 0 || g.arrivals > 0 || ownByDay.has(g.day) || suggestedByDay.has(g.day) || newLotByDay.has(g.day)).map((g) => {
         // Owner 2026-10-26: an open piece whose ETA passed or is missing is counted today (as the
         // planner does), so it must be listed on today's row with its PO / vendor / status.
         const today = events.filter((e) => (e.date && e.date >= calendar.asOf ? e.date : calendar.asOf) === g.day);
         return {
           day: g.day, opening: inUnit(fu, g.opening), arrivals: inUnit(fu, g.arrivals), dispatch: inUnit(fu, ownByDay.get(g.day) ?? 0) || null,
+          suggested_lot: suggestedByDay.has(g.day) ? inUnit(fu, suggestedByDay.get(g.day) ?? 0) : null,
+          new_lot: newLotByDay.has(g.day) ? inUnit(fu, newLotByDay.get(g.day) ?? 0) : null,
           use: inUnit(fu, g.use), closing: inUnit(fu, g.closing), excess: excessAt(g.day), max_days: g.max_days, max_days_est: g.max_days_est, min_stock: inUnit(fu, g.min_stock), min_days: g.min_days, min_days_est: g.min_days_est,
           references: today.map((e) => e.reference),
           qtys: today.map((e) => `${dq(e.member, e.qty)} ${uomOf(e.member) ?? ""}`.trim()),
@@ -605,6 +685,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           return out;
         }),
         rows, prediction,
+        // Owner 2026-11-17: the sheet proves itself on every download (printed in red on the block when a check fails).
+        self_check: selfCheckBlock(rows as never, recordedEnd || null),
       });
     }
 
@@ -643,7 +725,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       req_nm: dq(r.material_id, r.metrics.nm_req), prorata_nm: dq(r.material_id, r.metrics.nm_prorata_daily),
       current_stock: dq(r.material_id, r.metrics.current_stock), intransit_cm: dq(r.material_id, r.metrics.intransit_cm_dispatched), intransit_nm: dq(r.material_id, r.metrics.intransit_nm_dispatched), open_po_cm: dq(r.material_id, r.metrics.open_po_cm), open_po_nm: dq(r.material_id, r.metrics.open_po_nm),
       // Owner 2026-11-08: why the cover is blank — stock outlasts the PO21 plan, or the item is used only through a group.
-      current_stk_days_note: r.metrics.current_stk_days === null ? (Number(r.metrics.cm_prorata ?? 0) + Number(r.metrics.nm_req ?? 0) > 0 && Number(r.metrics.current_stock ?? 0) > 0 ? "Beyond plan" : Number(r.group_share_qty ?? 0) > 0 ? `Via ${[...new Set(r.pools.filter((p) => p.group_id).map((p) => groupLabel.get(p.group_id!) ?? "group"))][0] ?? "group"}` : null) : null,
+      current_stk_days_note: r.metrics.current_stk_days === null ? (Number(r.metrics.cm_prorata ?? 0) + Number(r.metrics.nm_req ?? 0) > 0 && Number(r.metrics.current_stock ?? 0) > 0 ? (Number(r.metrics.total_prorata_daily ?? 0) > 0.000001 ? `Beyond plan (≈ ${Math.floor(Number(r.metrics.current_stock) / Number(r.metrics.total_prorata_daily))} d)` : "Beyond plan") : Number(r.group_share_qty ?? 0) > 0 ? `Via ${[...new Set(r.pools.filter((p) => p.group_id).map((p) => groupLabel.get(p.group_id!) ?? "group"))][0] ?? "group"}` : null) : null,
       // Owner 2026-11-12: an item used through a group shows the group and the group's own demand, so its 0 own demand is not read as "no need".
       group_via: [...new Set(r.pools.filter((p) => p.group_id).map((p) => groupFullLabel.get(p.group_id!) ?? "—"))].join("; ") || null,
       group_demand: r.pools.some((p) => p.group_id) ? dq(r.material_id, r.pools.filter((p) => p.group_id).reduce((sum, p) => sum + p.pool_total, 0)) : null,

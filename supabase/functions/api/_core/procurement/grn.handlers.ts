@@ -474,7 +474,7 @@ export async function getGELinesForGRNHandler(
     const [matResp, poLineResp, existingGrnResp] = await Promise.all([
       matIds.length > 0
         ? serviceRoleClient.schema("erp_master").from("material_master")
-            .select("id, pace_code, material_name, material_type, external_sku, base_uom_code, qa_required_on_inward, batch_tracking_required, expiry_tracking_enabled, hsn_code")
+            .select("id, pace_code, material_name, document_name, material_type, external_sku, base_uom_code, qa_required_on_inward, batch_tracking_required, expiry_tracking_enabled, hsn_code")
             .in("id", matIds)
         : { data: [], error: null },
       poLineIds.length > 0
@@ -510,7 +510,8 @@ export async function getGELinesForGRNHandler(
     const stoLineIds = [...new Set(linesList.map((l) => String(l.sto_line_id ?? "")).filter(Boolean))];
     const stoLineResp = stoLineIds.length > 0
       ? await serviceRoleClient.schema("erp_procurement").from("stock_transfer_order_line")
-          .select("id, sto_id").in("id", stoLineIds)
+          .select("id, sto_id, transfer_price, conversion_cost_per_unit")
+          .in("id", stoLineIds)
       : { data: [] };
     const stoIds = [...new Set((stoLineResp.data ?? []).map((sl: JsonRecord) => String(sl.sto_id ?? "")).filter(Boolean))];
     const stoResp = stoIds.length > 0
@@ -518,6 +519,13 @@ export async function getGELinesForGRNHandler(
           .select("id, sto_number, delivery_type, crcp_enabled, sending_company_id, receiving_company_id").in("id", stoIds)
       : { data: [] };
     const stoLineMap = new Map<string, JsonRecord>((stoLineResp.data ?? []).map((sl: JsonRecord) => [String(sl.id), sl]));
+    // An STO receipt has no vendor: the sending company is the supplier, so the GRN form shows it in the Vendor slot.
+    const stoSenderIds = [...new Set((stoResp.data ?? []).map((st: JsonRecord) => String(st.sending_company_id ?? "")).filter(Boolean))];
+    const stoSenderResp = stoSenderIds.length > 0
+      ? await serviceRoleClient.schema("erp_master").from("companies")
+          .select("id, company_code, company_name, gst_number, state_name, full_address, pin_code").in("id", stoSenderIds)
+      : { data: [] };
+    const stoSenderMap = new Map<string, JsonRecord>((stoSenderResp.data ?? []).map((c: JsonRecord) => [String(c.id), c]));
     const stoMap = new Map<string, JsonRecord>((stoResp.data ?? []).map((s: JsonRecord) => [String(s.id), s]));
 
     // Fetch CSN data for pre-filling (1 CSN per GE line)
@@ -579,6 +587,24 @@ export async function getGELinesForGRNHandler(
         [`${c.material_id}|${c.from_uom_code}|${c.to_uom_code}`, c]
       )
     );
+
+    // Every fixed alternate unit of each material (Outer / Inner pack -> Base), so the GRN form can show the
+    // quantity and rate in all units, not only the one the document was raised in.
+    const altUomResp = matIds.length > 0
+      ? await fetchInChunks<JsonRecord>(matIds, (idChunk) =>
+          serviceRoleClient.schema("erp_master").from("material_uom_conversion")
+            .select("material_id, from_uom_code, to_uom_code, conversion_factor, variable_conversion")
+            .in("material_id", idChunk).eq("active", true))
+      : [];
+    const altUomByMaterial = new Map<string, { uom_code: string; factor: number }[]>();
+    for (const c of altUomResp) {
+      const mat = matMap.get(String(c.material_id));
+      const factor = Number(c.conversion_factor);
+      if (!mat || c.variable_conversion || !(factor > 0) || String(c.to_uom_code) !== String(mat.base_uom_code)) continue;
+      const list = altUomByMaterial.get(String(c.material_id)) ?? [];
+      list.push({ uom_code: String(c.from_uom_code), factor });
+      altUomByMaterial.set(String(c.material_id), list);
+    }
 
     // §3.2.7 "GRN-level Ship To Leg capture" -- resolve each line's own
     // CRCP allow-list (issuing company + whichever companies the PO/STO
@@ -660,6 +686,11 @@ export async function getGELinesForGRNHandler(
       const vendor = po ? vendorMap.get(String(po.vendor_id)) : null;
       const stoLine = l.sto_line_id ? stoLineMap.get(String(l.sto_line_id)) : null;
       const sto = stoLine ? stoMap.get(String(stoLine.sto_id)) : null;
+      const stoSender = !po && sto ? stoSenderMap.get(String(sto.sending_company_id)) ?? null : null;
+      // Same figure the post handler uses: transfer price + the conversion cost fixed at FG STO create.
+      const stoRate = stoLine && parseNullableNumber(stoLine.transfer_price) !== null
+        ? Number(((parseNullableNumber(stoLine.transfer_price) ?? 0) + (parseNullableNumber(stoLine.conversion_cost_per_unit) ?? 0)).toFixed(6))
+        : null;
       const deliveryType = toTrimmedString(po?.delivery_type ?? sto?.delivery_type) || "STANDARD";
       const crcpEnabled = Boolean(po?.crcp_enabled ?? sto?.crcp_enabled);
       const shipToOptionIds: string[] = crcpEnabled
@@ -690,9 +721,13 @@ export async function getGELinesForGRNHandler(
       return {
         ...l,
         material_name: mat?.material_name ?? null,
+        pace_code: (mat as JsonRecord | undefined)?.pace_code ?? null,
+        document_name: (mat as JsonRecord | undefined)?.document_name ?? null,
         material_type: (mat as JsonRecord | undefined)?.material_type ?? null,
         external_sku: mat?.external_sku ?? null,
         base_uom_code: baseUomCode,
+        // Largest pack first (Outer, then Inner); the form adds the Base unit itself.
+        uom_alternates: (altUomByMaterial.get(String(l.material_id)) ?? []).sort((a, b) => b.factor - a.factor),
         // FG STO receipts skip Inward QA (see the GRN post handler), so show no QA requirement for them.
         qa_required_on_inward: stoLine && toUpperTrimmedString((mat as JsonRecord | undefined)?.material_type) === "FG"
           ? false
@@ -702,18 +737,18 @@ export async function getGELinesForGRNHandler(
         hsn_code: mat?.hsn_code ?? null,
         po_number: po?.po_number ?? null,
         sto_number: sto?.sto_number ?? null,
-        po_rate: poLine?.unit_rate ?? null,
+        po_rate: poLine?.unit_rate ?? stoRate,
         po_gst_terms: po?.gst_terms ?? null,
         vendor_id: po?.vendor_id ?? null,
         // A Gate Entry may legitimately contain lines from several vendors.
         // Carry the selected PO line's vendor details with that line so the
         // GRN form never falls back to the GE's first line vendor.
-        vendor_code: vendor?.vendor_code ?? null,
-        vendor_name: vendor?.vendor_name ?? null,
-        vendor_gst: vendor?.gst_number ?? null,
+        vendor_code: vendor?.vendor_code ?? stoSender?.company_code ?? null,
+        vendor_name: vendor?.vendor_name ?? stoSender?.company_name ?? null,
+        vendor_gst: vendor?.gst_number ?? stoSender?.gst_number ?? null,
         vendor_address: [vendor?.reg_address_line1, vendor?.reg_address_city, vendor?.reg_address_state, vendor?.reg_address_pin]
-          .filter(Boolean).join(", ") || null,
-        vendor_type: po?.vendor_type ?? "DOMESTIC",
+          .filter(Boolean).join(", ") || [stoSender?.full_address, stoSender?.pin_code].filter(Boolean).join(" - ") || null,
+        vendor_type: po?.vendor_type ?? (stoSender ? "STO (Inter-company)" : "DOMESTIC"),
         // §3.7/§3.2.7 -- drives GRNPostFlow's tab-hiding (Bulk, invoice not
         // yet known) and the mandatory Ship-To dropdown (any CRCP GRN).
         delivery_type: deliveryType,
@@ -750,11 +785,11 @@ export async function getGELinesForGRNHandler(
       gate_entry: {
         ...gateEntry,
         vendor_id: firstVendor?.id ?? null,
-        vendor_code: firstVendor?.vendor_code ?? null,
-        vendor_name: firstVendor?.vendor_name ?? null,
-        vendor_type: firstPo?.vendor_type ?? null,
-        vendor_gst: firstVendor?.gst_number ?? null,
-        vendor_address: [firstVendor?.reg_address_line1, firstVendor?.reg_address_city, firstVendor?.reg_address_state, firstVendor?.reg_address_pin].filter(Boolean).join(", ") || null,
+        vendor_code: firstVendor?.vendor_code ?? resolvedLines[0]?.vendor_code ?? null,
+        vendor_name: firstVendor?.vendor_name ?? resolvedLines[0]?.vendor_name ?? null,
+        vendor_type: firstPo?.vendor_type ?? resolvedLines[0]?.vendor_type ?? null,
+        vendor_gst: firstVendor?.gst_number ?? resolvedLines[0]?.vendor_gst ?? null,
+        vendor_address: [firstVendor?.reg_address_line1, firstVendor?.reg_address_city, firstVendor?.reg_address_state, firstVendor?.reg_address_pin].filter(Boolean).join(", ") || resolvedLines[0]?.vendor_address || null,
       },
       lines: resolvedLines,
     }, ctx.request_id, req);
@@ -951,6 +986,9 @@ export async function createAndPostGRNFromLineHandler(
     const discrepancyRemarks = toTrimmedString(body.discrepancy_remarks) || null;
     if (discrepancyQty !== 0 && !discrepancyRemarks) {
       return procurementErrorResponse(req, ctx, "GRN_DISCREPANCY_REMARKS_REQUIRED", 400, "Remarks are required when received qty differs from invoice qty.");
+    }
+    if (!toTrimmedString(body.transporter_id)) {
+      return procurementErrorResponse(req, ctx, "GRN_TRANSPORTER_REQUIRED", 400, "Transporter is required.");
     }
 
     // UOM conversion: if PO UOM ≠ base UOM, stock qty = received_qty × per_pack_qty
@@ -2167,6 +2205,19 @@ export async function mapGrnInvoiceHandler(
         `Selected GRN quantity (${selectedGrnQty.toFixed(4)}) cannot exceed Invoice Quantity (${invoiceQty.toFixed(4)}).`,
       );
     }
+    // One GRN against one invoice: record the Invoice Qty and the difference exactly like a normal GRN does
+    // (ge_qty = Invoice qty, discrepancy_qty = Invoice - Received, remarks required when they differ). With several
+    // GRNs on one invoice there is no per-GRN invoice quantity, so nothing is stored (only the check above applies).
+    const singleGrn = grns.length === 1 ? grns[0] : null;
+    let singleGrnDifference: { diff: number; remarks: string | null } | null = null;
+    if (singleGrn) {
+      const diff = Number((invoiceQty - Number(singleGrn.received_qty ?? 0)).toFixed(6));
+      const remarks = toTrimmedString(body.discrepancy_remarks) || toTrimmedString(singleGrn.discrepancy_remarks) || null;
+      if (Math.abs(diff) > 0.0001 && !remarks) {
+        return procurementErrorResponse(req, ctx, "GRN_MAPPING_DISCREPANCY_REMARKS_REQUIRED", 400, "Remarks are required when the Invoice Quantity differs from the GRN quantity.");
+      }
+      singleGrnDifference = { diff, remarks: Math.abs(diff) > 0.0001 ? remarks : null };
+    }
     const shipToByGrnId = new Map<string, string | null>();
     for (const grn of grns) {
       // §8A pattern #2 -- scope + EDIT-level PROC_GRN_LIST at the GRN company OR the ITC owner (PO company).
@@ -2208,6 +2259,9 @@ export async function mapGrnInvoiceHandler(
           gst_pct: gstPct,
           ship_to_company_id: shipToByGrnId.get(String(grn.id)) ?? null,
           rate_confirmed: true,
+          ...(singleGrn && singleGrnDifference && String(grn.id) === String(singleGrn.id)
+            ? { ge_qty: invoiceQty, discrepancy_qty: singleGrnDifference.diff, discrepancy_remarks: singleGrnDifference.remarks }
+            : {}),
           last_updated_at: new Date().toISOString(),
         })
         .eq("id", String(grn.id));
@@ -2268,13 +2322,37 @@ export async function unmapGrnInvoiceHandler(
       }
     }
 
+    // Map stored the invoice quantity in ge_qty; unmapping takes the invoice away, so give back the quantity the gate
+    // entry recorded. A split child keeps its own ge_qty (it is only part of the truck), so it is left alone.
+    const geLineIdByGrn = new Map<string, string>();
+    for (const grn of grns) {
+      const geLineId = toTrimmedString(grn.gate_entry_line_id) || toTrimmedString(grn.source_gate_entry_line_id);
+      if (geLineId && !grn.split_source_grn_id) geLineIdByGrn.set(String(grn.id), geLineId);
+    }
+    const geQtyByLine = new Map<string, number>();
+    const geLineRows = await fetchInChunks<JsonRecord>([...new Set(geLineIdByGrn.values())], (idChunk) =>
+      serviceRoleClient.schema("erp_procurement").from("gate_entry_line").select("id, ge_qty").in("id", idChunk));
+    for (const row of geLineRows) {
+      const qty = parseNullableNumber(row.ge_qty);
+      if (qty !== null) geQtyByLine.set(String(row.id), qty);
+    }
+
     const results: JsonRecord[] = [];
     // DEPENDENT: see mapGrnInvoiceHandler's own note -- same cascade engine,
     // same reasoning for processing one GRN at a time.
     for (const grn of grns) {
+      const gateQty = geQtyByLine.get(geLineIdByGrn.get(String(grn.id)) ?? "");
+      const restoredDiff = gateQty === undefined ? null : Number((gateQty - Number(grn.received_qty ?? 0)).toFixed(6));
       const { error: updateError } = await serviceRoleClient
         .schema("erp_procurement").from("goods_receipt")
         .update({
+          ...(gateQty !== undefined && restoredDiff !== null
+            ? {
+              ge_qty: gateQty,
+              discrepancy_qty: restoredDiff,
+              discrepancy_remarks: Math.abs(restoredDiff) > 0.0001 ? (toTrimmedString(grn.discrepancy_remarks) || null) : null,
+            }
+            : {}),
           invoice_number: null,
           invoice_date: null,
           invoice_rate: null,
@@ -2347,7 +2425,12 @@ export async function splitGrnHandler(
       invoiceDate: toTrimmedString((s as JsonRecord).invoice_date),
       invoiceRate: parseNullableNumber((s as JsonRecord).invoice_rate),
       gstPct: parseNullableNumber((s as JsonRecord).gst_pct),
+      // `quantity` is the RECEIVED quantity the new GRN carries (what payable / landed cost follow).
       quantity: parseNullableNumber((s as JsonRecord).quantity),
+      // Optional: what the vendor's invoice says. Never stored (same as plain Map); only checked against `quantity`.
+      invoiceQuantity: parseNullableNumber((s as JsonRecord).invoice_quantity),
+      // Why this invoice's Received is below its Invoice Qty (required then, same as a normal GRN's discrepancy remarks).
+      remarks: toTrimmedString((s as JsonRecord).remarks) || null,
     }));
     if (!grnId || rawSlicesParsed.length < 2) {
       return procurementErrorResponse(req, ctx, "GRN_SPLIT_INVALID", 400, "grn_id and at least 2 invoice slices are required.");
@@ -2360,7 +2443,19 @@ export async function splitGrnHandler(
     }
     // Re-typed with non-null quantity/invoiceRate -- every element already
     // passed the validation loop above, so this narrowing is safe.
-    const slices = rawSlicesParsed as { invoiceNumber: string; invoiceDate: string; invoiceRate: number; gstPct: number; quantity: number }[];
+    const slices = rawSlicesParsed as { invoiceNumber: string; invoiceDate: string; invoiceRate: number; gstPct: number; quantity: number; invoiceQuantity: number | null; remarks: string | null }[];
+    // Same rule as plain Map ("GRN quantity cannot exceed Invoice Quantity"), applied per invoice: a truck that arrived
+    // short is fine (Received below Invoice Qty), but an invoice can never carry more received stock than it invoices.
+    for (let i = 0; i < slices.length; i += 1) {
+      const invoiceQuantity = slices[i].invoiceQuantity;
+      if (invoiceQuantity !== null && (invoiceQuantity <= 0 || slices[i].quantity - invoiceQuantity > 0.0001)) {
+        return procurementErrorResponse(req, ctx, "GRN_SPLIT_RECEIVED_EXCEEDS_INVOICE", 400, `Invoice ${slices[i].invoiceNumber}: Received Qty (${slices[i].quantity}) cannot exceed its Invoice Qty (${invoiceQuantity}).`);
+      }
+      // Same rule as a normal GRN: any Invoice-vs-Received difference needs remarks.
+      if (invoiceQuantity !== null && Math.abs(invoiceQuantity - slices[i].quantity) > 0.0001 && !slices[i].remarks) {
+        return procurementErrorResponse(req, ctx, "GRN_SPLIT_DISCREPANCY_REMARKS_REQUIRED", 400, `Invoice ${slices[i].invoiceNumber}: remarks are required when Received Qty differs from Invoice Qty.`);
+      }
+    }
 
     const { data: grn, error: grnError } = await serviceRoleClient
       .schema("erp_procurement").from("goods_receipt")
@@ -2391,7 +2486,7 @@ export async function splitGrnHandler(
     const originalReceivedQty = parsePositiveNumber(grn.received_qty) ?? 0;
     const sliceQtySum = Number(slices.reduce((sum, s) => sum + (s.quantity ?? 0), 0).toFixed(6));
     if (Math.abs(sliceQtySum - originalReceivedQty) > 0.0001) {
-      return procurementErrorResponse(req, ctx, "GRN_SPLIT_QTY_MISMATCH", 400, `Invoice quantities (${sliceQtySum}) must sum exactly to the GRN's received quantity (${originalReceivedQty}).`);
+      return procurementErrorResponse(req, ctx, "GRN_SPLIT_QTY_MISMATCH", 400, `Received quantities of all invoices (${sliceQtySum}) must add up exactly to the GRN's received quantity (${originalReceivedQty}).`);
     }
 
     const geQtyShares = splitProportionally(parseNullableNumber(grn.ge_qty) ?? 0, slices, originalReceivedQty);
@@ -2418,7 +2513,15 @@ export async function splitGrnHandler(
         id: newId,
         grn_number: newGrnNumber,
         received_qty: slice.quantity,
-        ge_qty: geQtyShares[i],
+        // "Invoice qty" is the ge_qty column everywhere else (GRN post, AC01). With an Invoice Qty given it is that
+        // invoice's own quantity; for an old caller it stays this slice's share of the original.
+        ge_qty: slice.invoiceQuantity ?? geQtyShares[i],
+        // Recomputed per child. It used to be copied whole from the original, so every child of a short GRN showed the
+        // original's full shortage again (prod GRN 2000000701: 1 on each of two children, 2 in total instead of 1).
+        discrepancy_qty: Number(((slice.invoiceQuantity ?? geQtyShares[i]) - slice.quantity).toFixed(6)),
+        discrepancy_remarks: Math.abs((slice.invoiceQuantity ?? geQtyShares[i]) - slice.quantity) > 0.0001
+          ? (slice.remarks ?? toTrimmedString(grn.discrepancy_remarks) ?? null) || null
+          : null,
         considered_qty: consideredQtyShares[i],
         net_weight_from_weighbridge: netWeightShares[i],
         invoice_number: slice.invoiceNumber,

@@ -1610,7 +1610,12 @@ export async function createPgiInvoiceHandler(req: Request, ctx: ProcurementHand
         p_posted_by: ctx.auth_user_id,
         p_context: context,
       });
-    if (postDocumentError) return doErrorResponse(req, ctx, "PGI_POST_FAILED", 500, postDocumentError.message || "Unable to post PGI and invoice.");
+    if (postDocumentError) {
+      if ((postDocumentError.message ?? "").includes("DO_ALREADY_INVOICED")) {
+        return doErrorResponse(req, ctx, "DO_ALREADY_INVOICED", 409, "This delivery order already has an active invoice.");
+      }
+      return doErrorResponse(req, ctx, "PGI_POST_FAILED", 500, postDocumentError.message || "Unable to post PGI and invoice.");
+    }
 
     // Best-effort: copy this DO's own Transporter/LR Number/LR Date onto its
     // Plan Feed (FO), one entry per PGI'd dispatch -- see plan_feed.handlers.ts's

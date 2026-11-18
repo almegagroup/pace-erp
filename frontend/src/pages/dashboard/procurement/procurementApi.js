@@ -1649,6 +1649,10 @@ export function grnGstInclusiveBackfill(payload) {
   return fetchProcurement("POST", "/api/procurement/grn-gst-inclusive-backfill", payload);
 }
 
+export function grnGstInclusiveBackfillJob(jobId) {
+  return fetchProcurement("GET", "/api/procurement/grn-gst-inclusive-backfill/job", undefined, { job_id: jobId });
+}
+
 export function recalculateValuation(data) {
   return fetchProcurement("POST", "/api/procurement/opening-stock/recalculate-valuation", data);
 }

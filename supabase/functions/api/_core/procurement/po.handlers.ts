@@ -1685,11 +1685,18 @@ export async function createPOHandler(
       };
     });
 
+    // PO serials must follow the order the user entered the rows in (row 1 gets the lowest number).
+    // Allocating inside the parallel inserts below made the serial order a race: with 3-6 rows of the
+    // same item the delivery dates ended up on scrambled PO numbers (found live 2026-11-17, Nouryon/GABROSA).
+    // DEPENDENT: each number must be taken in row order, one after another, before any insert starts.
+    const poNumbers: string[] = [];
+    for (let rowIndex = 0; rowIndex < validatedMaterials.length; rowIndex += 1) {
+      poNumbers.push(isOpeningPo ? openingPoNumber as string : await generateCompanyDocNumber(companyId, "PO"));
+    }
+
     const purchaseOrders = await Promise.all(
-      validatedMaterials.map(async ({ materialRecord, preparedLine, freightTerm, gstTerms, rebateRateUomBasis, lcRequired, paymentTermId }) => {
-        const poNumber = isOpeningPo
-          ? openingPoNumber as string
-          : await generateCompanyDocNumber(companyId, "PO");
+      validatedMaterials.map(async ({ materialRecord, preparedLine, freightTerm, gstTerms, rebateRateUomBasis, lcRequired, paymentTermId }, rowIndex) => {
+        const poNumber = poNumbers[rowIndex];
 
         const { data: poData, error: poError } = await serviceRoleClient
           .schema("erp_procurement")

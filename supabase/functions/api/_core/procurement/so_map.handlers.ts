@@ -1160,6 +1160,9 @@ export async function saveSoMapGroupHandler(req: Request, ctx: ProcurementHandle
       }
       const { data: groupId, error } = await serviceRoleClient.schema("erp_procurement")
         .rpc("save_so_map_group_atomic", { p_group: groupPayload, p_allocations: allocations });
+      if (error?.message?.includes("SO_MAP_FO_ACTIVE_ON_OTHER_SO")) {
+        return soMapErrorResponse(req, ctx, "SO_MAP_FO_ACTIVE_ON_OTHER_SO", 409, "This FO Number is already actively mapped on another SO. Unmap it there first.");
+      }
       if (error || !groupId) return soMapErrorResponse(req, ctx, "SO_MAP_GROUP_CREATE_FAILED", 500, "Unable to create Ship-To mapping group.");
       return okResponse({ group_id: groupId }, ctx.request_id, req);
     }

@@ -1083,3 +1083,80 @@ Deno.test("report contract: a run without plan_buys carries no suggested lot, so
   const a = coverOn(pure, day); const b = coverOn(withLots, day);
   assert(a !== null && b !== null && b > a, `with a suggested lot the cover is higher (${b}) than without (${a})`);
 });
+
+Deno.test("family planner: no engine lot lands inside the recorded orders; lots are planned and counted after the last one (owner 2026-11-16)", () => {
+  const days = daysTo("2027-02-28");
+  const input: FamilyPlannerInput = {
+    as_of: AS_OF, horizon_end: "2027-02-28",
+    opening_qty_by_material: { SOLO: 300 },
+    own_demand: days.map((d) => ({ material_id: "SOLO", required_by: d, qty_base: 10 })),
+    group_demand: [],
+    confirmed_arrivals: [{ material_id: "SOLO", eta_to_plant: "2026-11-20", qty_base: 400, source_key: "csn-1" }],
+    policies: [policy("SOLO", 20, 10, [{ vendor: "V", lead: 5, cost: 1 }])],
+  };
+  const counted = planFamily(input);
+  const shown = planFamily({ ...input, lots_after_recorded: true });
+  const lotDays = (r: ReturnType<typeof planFamily>) => r.rows.filter((x) => x.planned_lot_qty_base > 0).map((x) => x.day);
+  assert(lotDays(shown).length > 0, "the engine still plans lots after the recorded orders");
+  assert(lotDays(shown).every((d) => d > "2026-11-20"), `no lot on/before the last recorded arrival, got ${lotDays(shown).join(",")}`);
+  assert(lotDays(counted).length >= lotDays(shown).length, "the advice run is unchanged");
+});
+
+Deno.test("arrival optimizer: an unshipped order is never advised to land today for a gap that a shipment on the road closes (owner 2026-11-17)", () => {
+  const days = daysTo("2027-03-31");
+  const input: FamilyPlannerInput = {
+    as_of: AS_OF, horizon_end: "2027-03-31",
+    // 27 days of stock against a 30-day Min: below Min from today until the shipment on the road lands on day 6.
+    opening_qty_by_material: { M: 2700 },
+    own_demand: days.map((d) => ({ material_id: "M", required_by: d, qty_base: 100 })),
+    group_demand: [],
+    confirmed_arrivals: [
+      { material_id: "M", eta_to_plant: addDays(AS_OF, 6), qty_base: 2500, source_key: "A|M|0|SHIPPED" },
+      { material_id: "M", eta_to_plant: addDays(AS_OF, 9), qty_base: 2500, source_key: "A|M|1|UNSHIPPED" },
+    ],
+    policies: [policy("M", 30, 15, [{ vendor: "V", lead: 5, cost: 1 }])],
+  };
+  const unaware = optimizeFamilyArrival(input, "A|M|1|UNSHIPPED");
+  assert(unaware !== null && unaware.best.eta === AS_OF, `without the shipped/unshipped split the gap pulls it to today: ${unaware?.best.eta}`);
+  const aware = optimizeFamilyArrival({ ...input, unshipped_keys: new Set(["A|M|1|UNSHIPPED"]) }, "A|M|1|UNSHIPPED");
+  assert(aware !== null && aware.best.eta > addDays(AS_OF, 6), `the unshipped order is judged after the shipment lands, got ${aware?.best.eta}`);
+});
+
+Deno.test("one calculation: up to the last recorded order the plan equals the 'recorded only' run, after it the engine's lots are counted (owner 2026-11-17)", () => {
+  const input = rdpFamily();
+  const withOrder: FamilyPlannerInput = {
+    ...input,
+    confirmed_arrivals: [
+      { material_id: "DA", eta_to_plant: "2026-11-12", qty_base: 20000, source_key: "A|DA|0|PO 1/1 · CSN 1 (TRN)" },
+      { material_id: "RP", eta_to_plant: "2026-11-25", qty_base: 25000, source_key: "A|RP|0|PO 2/1 · CSN 2 (ORD)" },
+    ],
+  };
+  const recordedOnly = planFamily({ ...withOrder, plan_buys: false, refill_method: "FIRST" });
+  const unified = planFamily({ ...withOrder, lots_after_recorded: true, refill_method: "FIRST" });
+  const lastRecorded = "2026-11-25";
+  const closingOf = (r: ReturnType<typeof planFamily>, day: string) => r.rows.filter((x) => x.day === day).reduce((s, x) => s + x.closing_qty_base, 0);
+  for (const day of ["2026-10-22", "2026-11-01", "2026-11-12", "2026-11-20", lastRecorded]) {
+    assert(Math.abs(closingOf(recordedOnly, day) - closingOf(unified, day)) < 1e-6, `closing on ${day} differs: ${closingOf(recordedOnly, day)} vs ${closingOf(unified, day)}`);
+  }
+  const lotDays = unified.rows.filter((x) => x.planned_lot_qty_base > 0).map((x) => x.day);
+  assert(lotDays.every((d) => d > lastRecorded), `no lot inside the recorded orders: ${lotDays.join(",")}`);
+  assert(recordedOnly.rows.every((x) => x.planned_lot_qty_base === 0), "the recorded-only run counts no lot at all");
+});
+
+Deno.test("family planner: a LATE need (already below Min) never lands its lot on or before the last recorded order (owner 2026-11-18)", () => {
+  const days = daysTo("2027-02-28");
+  const lastRecorded = addDays(AS_OF, 5);
+  const input: FamilyPlannerInput = {
+    as_of: AS_OF, horizon_end: "2027-02-28",
+    // 10 days of stock against a 20-day Min: the need is late today. The vendor can deliver in 1 day, but one recorded order lands on day 5.
+    opening_qty_by_material: { SOLO: 100 },
+    own_demand: days.map((d) => ({ material_id: "SOLO", required_by: d, qty_base: 10 })),
+    group_demand: [],
+    confirmed_arrivals: [{ material_id: "SOLO", eta_to_plant: lastRecorded, qty_base: 20, source_key: "csn-late" }],
+    policies: [policy("SOLO", 20, 10, [{ vendor: "V", lead: 1, cost: 1 }])],
+  };
+  const shown = planFamily({ ...input, lots_after_recorded: true });
+  const lotDays = shown.rows.filter((x) => x.planned_lot_qty_base > 0).map((x) => x.day);
+  assert(lotDays.length > 0, "a lot is still planned");
+  assert(lotDays.every((d) => d > lastRecorded), `no lot on/before ${lastRecorded}, got ${lotDays.join(",")}`);
+});

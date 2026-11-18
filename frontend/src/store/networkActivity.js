@@ -160,6 +160,23 @@ export function finishNetworkActivity(token, { ok = true } = {}) {
   emit();
 }
 
+// Safety valve for the blocking overlay: if a response never arrives (dropped connection, proxy idle timeout) the
+// overlay would otherwise stay forever. Releases the screen only -- the request itself is left alone, so any write the
+// server is still performing completes normally.
+export function releaseBlockingActivity() {
+  let released = 0;
+  for (const [token, request] of Array.from(activeRequests.entries())) {
+    if (request.mode === "blocking") {
+      activeRequests.delete(token);
+      released += 1;
+    }
+  }
+  if (released === 0) return 0;
+  rebuildSnapshot({ lastCompletedAt: Date.now(), lastOutcome: "idle", lastResolvedMode: "blocking" });
+  emit();
+  return released;
+}
+
 export function getNetworkActivitySnapshot() {
   return { ...snapshot };
 }

@@ -990,6 +990,27 @@ export function explodeDemand(input: ExplosionInput): ExplosionResult {
 export type StockRow = { material_id: string; storage_location_id: string; stock_type_code: string; qty: number };
 export type ReservationRow = { material_id: string; storage_location_id: string; qty: number };
 
+/** One stock-ledger leg posted on the as-of day itself (only the QA release / return legs are read, see below). */
+export type SameDayStockLeg = { material_id: string; storage_location_id: string; stock_type_code: string; direction: string; qty: number };
+
+/**
+ * Owner 2026-11-16: the plan's opening stock is the ledger closing of the day BEFORE as-of. A QA decision posted on as-of day
+ * itself (P321 QA -> Unrestricted, P322 back) only moves the same physical stock between types, so it must show today, not
+ * tomorrow: otherwise stock that is already usable shows as short. Consumption posted today is NOT added (today's use is
+ * planned from demand, counting it twice would double-cut). Returns delta rows to append to the stock rows.
+ */
+export function sameDayStockTypeShift(legs: readonly SameDayStockLeg[]): StockRow[] {
+  const acc = new Map<string, StockRow>();
+  for (const leg of legs) {
+    const sign = String(leg.direction).toUpperCase() === "IN" ? 1 : -1;
+    const key = `${leg.material_id}|${leg.storage_location_id}|${leg.stock_type_code}`;
+    const row = acc.get(key) ?? { material_id: leg.material_id, storage_location_id: leg.storage_location_id, stock_type_code: leg.stock_type_code, qty: 0 };
+    row.qty += sign * Number(leg.qty);
+    acc.set(key, row);
+  }
+  return [...acc.values()].filter((row) => Math.abs(row.qty) > 0.0000001);
+}
+
 /**
  * R→R advisory route (source contract §5, owner D1/D12): a transfer is only ever suggested between
  * raw-material stores (R-series codes). Every source must be an R store (otherwise the qty is not
@@ -1464,6 +1485,8 @@ export type InboundEvent = {
   original_date?: string | null;
   /** Owner 2026-10-30: a Sub-CSN share moves together with the other shares of its Mother CSN (one vessel); names the other companies' shares. */
   shared_note?: string;
+  /** Owner 2026-11-16: a Sub-CSN share whose Mother CSN is in transit is in transit too (the child's own status can still say ORD). */
+  mother_in_transit?: boolean;
 };
 
 /**
@@ -1520,6 +1543,15 @@ const CSN_CLOSED = new Set(["GRD", "GED", "KOF", "CAN"]);
  * has sub-CSNs is skipped (its children carry the quantity). Quantity promised
  * to another company by a Sub-CSN (committed_transfer_base) is removed first.
  */
+/**
+ * What is really still expected on a PO line: its open quantity minus what was knocked off.  The CSN Tracker's knock-off only adds to
+ * `knocked_off_qty` (it never reduces `open_qty`), so without this a knocked-off 0.5 MT short-delivery counted as an arrival for ever
+ * (owner 2026-11-16, DOLTEX 30/80: three lines, each 42 MT ordered, 41.5 MT delivered, 0.5 MT knocked off).
+ */
+export function effectiveOpenQty(openQty: number | null | undefined, knockedOffQty: number | null | undefined): number {
+  return Math.max(0, Number(openQty ?? 0) - Number(knockedOffQty ?? 0));
+}
+
 export function partitionPoLineInbound(line: PoLineInboundInput, asOf: string, warnings: Warning[]): InboundEvent[] {
   const events: InboundEvent[] = [];
   const ref = `PO ${line.po_number}/${line.line_number}`;
@@ -1626,11 +1658,12 @@ export function bucketInbound(events: InboundEvent[], calendar: PlanningCalendar
       continue;
     }
     buckets.total += event.qty;
-    if (event.kind === "SCHEDULED_LOT" || event.kind === "PO_REMAINDER" || event.kind === "SUB_CSN_PLANNED") buckets.open_po += event.qty;
+    const notShipped = event.kind === "SCHEDULED_LOT" || event.kind === "PO_REMAINDER" || (event.kind === "SUB_CSN_PLANNED" && !event.mother_in_transit);
+    if (notShipped) buckets.open_po += event.qty;
     else buckets.dispatched += event.qty;
     if (!event.date) { buckets.unknown += event.qty; assumeToday(event.qty); continue; }
     if (event.date < calendar.asOf) { buckets.overdue += event.qty; assumeToday(event.qty); continue; }
-    const isDispatched = !(event.kind === "SCHEDULED_LOT" || event.kind === "PO_REMAINDER" || event.kind === "SUB_CSN_PLANNED");
+    const isDispatched = !notShipped;
     if (event.date <= calendar.cmEnd) { buckets.cm += event.qty; if (isDispatched) buckets.cm_dispatched += event.qty; }
     else if (event.date <= calendar.nmEnd) { buckets.nm += event.qty; if (isDispatched) buckets.nm_dispatched += event.qty; }
     else { buckets.later += event.qty; continue; }
@@ -1773,7 +1806,12 @@ export function coverageDays(
     balance += inboundByDay?.get(day) ?? 0;
     const demand = demandByDay.get(day) ?? 0;
     if (demand <= EPSILON) {
-      if (planEnded && lastDemandDay !== null && day > lastDemandDay && balance > EPSILON) return { days: null, stockout_date: null, extrapolated: false };
+      if (planEnded && lastDemandDay !== null && day > lastDemandDay) {
+        // Owner 2026-11-12: a group member's demand series is what the group allocated to ITS stock, so it stops when that stock is used up,
+        // not when the plan ends (CMP005 AWP 40 KG bag showed "beyond plan" with ~25 days of stock). Used up (within a rounding residue) = a stock-out.
+        if (balance <= Math.max(EPSILON, Math.abs(opening) * 1e-6)) return { days: round2(covered), stockout_date: day, extrapolated: false };
+        return { days: null, stockout_date: null, extrapolated: false };
+      }
       covered += 1;
       continue;
     }

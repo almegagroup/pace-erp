@@ -12,6 +12,7 @@ import { resolveUserDisplayNames } from "../../_shared/resolveUserDisplayNames.t
 import { serviceRoleClient } from "../../_shared/serviceRoleClient.ts";
 import { okResponse } from "../response.ts";
 import { normalizePlanMonth } from "./mts_customer_plan.logic.ts";
+import { reportKeepDays } from "./mts_level_cover.logic.ts";
 import { buildCalendar, isIsoDate, isTransferFed, monthEnd, moqInBase, orderUnitOf, preferredVendorOrderUom, type PolicyOverride, toMaterialBase } from "./mts_requirement.logic.ts";
 import {
   cachedLoad,
@@ -31,8 +32,9 @@ import { familyClosure } from "./mts_item_plan.logic.ts";
 import { loadGroupCoveragePolicyVersions } from "./mts_group_policy.handlers.ts";
 import { bulkOnlyGroupIds, loadBulkMaterialIds } from "./mts_bulk_materials.ts";
 import { type FamilyGroupDemand, type FamilyOpeningReceipt, type FamilyOwnDemand, type FamilyPlannerInput, type RefillMethod, familyMoveCost, optimizeFamilyArrival, optimizeFamilyTogether, planFamily } from "./mts_family_planner.logic.ts";
-import { assemblePlanningInput, familyArrivalEta, priceUnitCode, familyArrivalRisk, isFamilyAllocatableArrival, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
+import { assemblePlanningInput, overdueUnshippedEta, familyArrivalEta, priceUnitCode, familyArrivalRisk, isFamilyAllocatableArrival, storeGroupPeriodShares, storePeriodLabel, storeTransferHints, type VendorTerm } from "./mts_planning.logic.ts";
 import { applyOrderConstraints, totalLeadTimeDays } from "./mts_optimizer_phase3d.logic.ts";
+import { planningShareKey } from "./mts_planning_share.logic.ts";
 import type { OptimizerAdvisoryBuy, OptimizerManualLot, OptimizerVendorOption } from "./mts_optimizer_phase3d.types.ts";
 import { averageOrderCost, type CostOption, costOption, DEFAULT_CYCLE_DAYS, economicCycleDays, landedAdder, type LandedCostBasis, rankCostOptions, resolvePurchaseCurrency } from "./mts_cost.logic.ts";
 import { interestPctAt } from "./mts_planning_cost.logic.ts";
@@ -440,7 +442,23 @@ function costOptionsFor(
  */
 export const PLANNING_EXTRA_MONTHS = 4;
 
-export async function computePlanning(p: PlanningParams) {
+// Owner 2026-11-16: the Requirement page fires the same heavy /planning call from several widgets at once (prod log: four
+// ~20 s computations in parallel pinned the only CPU and login took 94 s). Identical calls that overlap share ONE computation;
+// nothing is kept after it finishes, so no stale answer is ever served. Simulations (overrides) are never shared.
+const planningInFlight = new Map<string, Promise<unknown>>();
+export function computePlanning(p: PlanningParams) {
+  const key = planningShareKey(p);
+  if (key === null) return computePlanningOnce(p);
+  const running = planningInFlight.get(key);
+  if (running) return running as ReturnType<typeof computePlanningOnce>;
+  const started = computePlanningOnce(p);
+  planningInFlight.set(key, started);
+  const release = () => { if (planningInFlight.get(key) === started) planningInFlight.delete(key); };
+  started.then(release, release);
+  return started;
+}
+
+async function computePlanningOnce(p: PlanningParams) {
   const calendar = buildCalendar(p.planMonth, p.asOf, p.extraMonths ?? 0);
   if (!calendar) throw new Error("MTS_REQ_AS_OF_OUTSIDE_MONTH");
   const req = await computeRequirement(p.companyId, calendar, p.asOf, p.today, p.demandAt, {
@@ -554,6 +572,15 @@ export async function computePlanning(p: PlanningParams) {
     transferIncoming.set(arrival.material_id, { qty: (seen?.qty ?? 0) + arrival.qty_base, label: seen ? `${seen.label}, ${when}` : `ETA ${when}` });
   }
   const familyArrivalCandidates = assembly.input.confirmed_arrivals.filter((arrival) => !transferFed.has(arrival.material_id));
+  // Owner 2026-11-17: a not-yet-shipped order whose ETA passed is dated today + its shortest route time, never counted as today's stock.
+  const movableSourceKeys = new Set(req.output.rows.flatMap((r) => r.inbound_events.map((event, index) => (event.reschedule_key ? `A|${r.material_id}|${index}|${event.reference}` : null)).filter((k): k is string => k !== null)));
+  const shortestRouteDays = new Map(req.output.rows.map((r) => {
+    const days = (r.lead_time?.configured_routes ?? []).map((route) => route.route_days).filter((d): d is number => typeof d === "number" && Number.isFinite(d) && d > 0);
+    return [r.material_id, days.length ? Math.min(...days) : null] as const;
+  }));
+  const isOverdueUnshipped = (arrival: { source_key: string; eta_to_plant: string | null }) => movableSourceKeys.has(arrival.source_key)
+    && !isFamilyAllocatableArrival("", arrival.eta_to_plant, assembly.input.as_of);
+  const unshippedEtaOf = (arrival: { material_id: string }) => overdueUnshippedEta(assembly.input.as_of, shortestRouteDays.get(arrival.material_id) ?? null);
   const familyInput: FamilyPlannerInput = {
     // Owner 2026-11-07 (§49): the planner chooses 1st refill / 2nd refill / on-arrival per family.
     refill_method: "AUTO",
@@ -569,12 +596,12 @@ export async function computePlanning(p: PlanningParams) {
     confirmed_arrivals: familyArrivalCandidates.map((arrival) => ({
       source_key: arrival.source_key,
       material_id: arrival.material_id,
-      eta_to_plant: familyArrivalEta(arrival.eta_to_plant, assembly.input.as_of),
+      eta_to_plant: isOverdueUnshipped(arrival) ? unshippedEtaOf(arrival) : familyArrivalEta(arrival.eta_to_plant, assembly.input.as_of),
       qty_base: arrival.qty_base,
     })),
     arrival_risks: familyArrivalCandidates
       .filter((arrival) => !isFamilyAllocatableArrival(arrival.lifecycle_kind, arrival.eta_to_plant, assembly.input.as_of))
-      .map((arrival) => familyArrivalRisk(arrival, assembly.input.as_of)),
+      .map((arrival) => familyArrivalRisk(arrival, assembly.input.as_of, isOverdueUnshipped(arrival) ? unshippedEtaOf(arrival) : null)),
     policies: assembly.input.policies,
     manual_lots: p.manualLots ?? [],
     // The Store "keep" quantity is read at the end of each period (owner 2026-10-28).
@@ -591,9 +618,17 @@ export async function computePlanning(p: PlanningParams) {
     ),
   };
   const plannerStarted = Date.now();
-  const projection = planFamily(familyInput);
+  const projectionAdvice = planFamily(familyInput);
   // What-if / reschedule runs on one family reuse the method chosen here instead of choosing again.
-  const refillPicks: Record<string, RefillMethod> = Object.fromEntries((projection.refill_choices ?? []).map((c) => [c.key, c.method]));
+  const refillPicks: Record<string, RefillMethod> = Object.fromEntries((projectionAdvice.refill_choices ?? []).map((c) => [c.key, c.method]));
+  // Owner 2026-11-12: the same plan WITHOUT the engine's suggested lots (only today's stock and the existing orders). The day tables of the report
+  // are built from this one, so a suggestion never changes an Opening / Closing / Min / Excess number; the suggested lots are listed beside it.
+  const projectionPure = planFamily({ ...familyInput, plan_buys: false, refill_method: "FIRST", refill_picks: refillPicks });
+  // Owner 2026-11-16: the day tables show the recorded orders, then the engine's own lots counted once the recorded orders end.
+  const projectionShown = planFamily({ ...familyInput, lots_after_recorded: true, refill_method: "FIRST", refill_picks: refillPicks });
+  // Owner 2026-11-17: ONE calculation for the report. The Excel (scheduleChecks) reads every number from the plan that counts no engine lot
+  // inside the recorded orders and counts the engine's lots after the last one; the advice run stays for the Action tab and the urgent list.
+  const projection = p.scheduleChecks ? projectionShown : projectionAdvice;
   const plannerMs = Date.now() - plannerStarted;
   const groupAssignments = (() => {
     type AssignmentReason = "SINGLE_SELECTED" | "CHEAPEST_SELECTED" | "NONE_SELECTED";
@@ -641,6 +676,7 @@ export async function computePlanning(p: PlanningParams) {
     return {
       ...familyInput,
       refill_picks: refillPicks,
+      unshipped_keys: movableSourceKeys,
       opening_qty_by_material: pick(familyInput.opening_qty_by_material),
       opening_receipts: (familyInput.opening_receipts ?? []).filter((r) => members.has(r.material_id)),
       own_demand: familyInput.own_demand.filter((d) => members.has(d.material_id)),
@@ -728,7 +764,6 @@ export async function computePlanning(p: PlanningParams) {
     }
     return out;
   })();
-  const movableSourceKeys = new Set(req.output.rows.flatMap((r) => r.inbound_events.map((event, index) => (event.reschedule_key ? `A|${r.material_id}|${index}|${event.reference}` : null)).filter((k): k is string => k !== null)));
   // Owner 2026-10-29: each not-yet-shipped order is first judged alone (every other order as planned). Moving them all at once can leave a level below Critical,
   // so the family's orders are then moved together to their advised dates and the latest-moving order is pulled back to its current date until no extra
   // level-day falls below Critical: the advised dates shown are jointly safe.
@@ -834,14 +869,18 @@ export async function computePlanning(p: PlanningParams) {
         }
       }
       const movedArrivals = input.confirmed_arrivals.map((a) => (moves.has(a.source_key) ? { ...a, eta_to_plant: moves.get(a.source_key)! } : a));
-      const resB = planFamily({ ...input, plan_buys: true, trace: false, level_days: true, confirmed_arrivals: movedArrivals });
-      const resA = planFamily({ ...input, plan_buys: true, trace: false, level_days: true });
+      const resB = planFamily({ ...input, plan_buys: true, lots_after_recorded: true, trace: false, level_days: true, confirmed_arrivals: movedArrivals });
+      const resA = planFamily({ ...input, plan_buys: true, lots_after_recorded: true, trace: false, level_days: true });
       // Suggested lots are advice, not a decision (owner 2026-11-12): the Min / Max shown beside an existing order must not count them.
-      const resBPure = planFamily({ ...input, plan_buys: false, trace: false, level_days: true, confirmed_arrivals: movedArrivals });
-      const resAPure = planFamily({ ...input, plan_buys: false, trace: false, level_days: true });
+      // Inside the recorded orders no lot is counted, so these runs ARE the 'recorded only' view there (and count the engine's lots after it).
+      const resBPure = resB;
+      const resAPure = resA;
       const lotsA = lotsOf(resA);
       const lotsB = lotsOf(resB);
-      const keep = new Set<string>([input.as_of, ...input.confirmed_arrivals.map((a) => String(a.eta_to_plant)), ...movedArrivals.map((a) => String(a.eta_to_plant)), ...lotsA.map((l) => l.day), ...lotsB.map((l) => l.day)]);
+      const landingDays = [...input.confirmed_arrivals.map((a) => String(a.eta_to_plant)), ...movedArrivals.map((a) => String(a.eta_to_plant)), ...lotsA.map((l) => l.day), ...lotsB.map((l) => l.day)];
+      // Owner 2026-11-18: the report shows each level's cover just BEFORE a landing and just AFTER it, so keep both days exactly. A day in between
+      // is never estimated: the waterfall tops a level up from the pool on days nothing lands, so an estimate would be wrong.
+      const keep = reportKeepDays(input.as_of, landingDays);
       out.push({
         member_ids: members,
         arrivals: input.confirmed_arrivals.map((a) => ({
@@ -1183,14 +1222,9 @@ export async function computePlanning(p: PlanningParams) {
         const bestPortEta = best && inlandDays !== null ? new Date(Date.parse(`${best.best.eta}T00:00:00Z`) - inlandDays * 86_400_000).toISOString().slice(0, 10) : null;
         const bestEtd = best && routeDaysEff !== null && routeDaysEff >= 0 ? new Date(Date.parse(`${best.best.eta}T00:00:00Z`) - routeDaysEff * 86_400_000).toISOString().slice(0, 10) : null;
         const ownKey = keyOf.get(event)!;
-        const ifAbsent = best ? [...new Set([movableInFamily.filter((a) => a.source_key !== ownKey && String(a.eta_to_plant) < String(currentEta)).slice(-1)[0], movableInFamily.filter((a) => a.source_key !== ownKey && String(a.eta_to_plant) >= String(currentEta))[0]].filter(Boolean))].map((other) => {
-          const alt = optimizeFamilyArrival({ ...input, confirmed_arrivals: input.confirmed_arrivals.filter((a) => a.source_key !== other!.source_key) }, ownKey);
-          return {
-            reference: refOfKey(other!.source_key), other_eta: String(other!.eta_to_plant),
-            best_eta: alt && !alt.not_needed_in_plan ? alt.best.eta : null, shift_days: alt?.shift_days ?? 0, not_needed_in_plan: alt?.not_needed_in_plan ?? false,
-            binding_day: alt?.binding?.day ?? null,
-          };
-        }) : [];
+        // Owner 2026-11-17: the report never says what happens 'if another order does not come' - an order that was placed is placed to arrive,
+        // so each order is judged on its recorded date and its engine date only. (Also saves one optimizer run per neighbour order.)
+        const ifAbsent: Array<{ reference: string; other_eta: string; best_eta: string | null; shift_days: number; not_needed_in_plan: boolean; binding_day: string | null }> = [];
         const together = jointFam ? jointFam.together : null;
         // Owner 2026-10-30: against Target (Min): how many more days the level sits below its Min, and how low its cover goes, at the advised date.
         const critEta = best && !best.not_needed_in_plan ? best.critical_latest_eta : null;
@@ -1262,7 +1296,7 @@ export async function computePlanning(p: PlanningParams) {
   };
   console.log(JSON.stringify({ event: "MTS_TIMING", step: "planning_done", reuse, planner_ms: plannerMs, total_ms: Date.now() - planningStarted }));
   // Internal pieces for the P1 item plan (never serialised by the Planning endpoint).
-  const internal = { req, assembly, projection, calendar, vendorOptions, vendorTerms, orderUnitFor, familyInputFor, selections: selections.map };
+  const internal = { req, assembly, projection, projectionAdvice, projectionPure, projectionShown, calendar, vendorOptions, vendorTerms, orderUnitFor, familyInputFor, selections: selections.map };
   Object.defineProperty(payload, "_internal", { value: internal, enumerable: false });
   return payload as typeof payload & { readonly _internal: typeof internal };
 }
