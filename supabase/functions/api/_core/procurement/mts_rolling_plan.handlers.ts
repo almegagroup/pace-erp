@@ -21,7 +21,7 @@ import { groupCoveredBy, isTransferFed } from "./mts_requirement.logic.ts";
 import { loadBulkMaterialIds } from "./mts_bulk_materials.ts";
 import { memberMattersForGaps } from "./mts_planning.logic.ts";
 import { fail, handleError, type ReqHandlerContext, requireRequirementViewAccess, todayInIndia } from "./mts_requirement.handlers.ts";
-import { addDaysToIso, carryCover, levelRecordUpTo } from "./mts_level_cover.logic.ts";
+import { addDaysToIso, carryCover, daysBetweenIso, levelRecordUpTo } from "./mts_level_cover.logic.ts";
 import { buildWaterfallView } from "./mts_waterfall_view.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -278,20 +278,60 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
       // Owner 2026-11-07: the cover on the evening BEFORE the landing day, so the sheet can show 'before → after' for one order.
       // Owner 2026-11-18: a level has a day record only on days something happens to IT; on any other date its state is the latest
       // earlier record carried over the quiet days (cover shrinks one day per day, the free stock stays), so no cell is left blank.
-      const stateNear = (days: typeof fam.days_a, key: string, date: string | null) => {
-        const exact = stateAt(days, key, date);
-        if (exact || !date) return exact;
-        const hit = levelRecordUpTo(days, key, date);
-        const base = hit ? stateAt(days, key, hit.record.day) : null;
-        if (!hit || !base) return null;
-        return { ...base, cover: base.cover === null ? null : Math.max(0, base.cover - hit.gap), minD: carryCover(base.minD, hit.gap), maxD: carryCover(base.maxD, hit.gap) };
+      // Owner 2026-11-18: where the stock outlasts the plan the engine gives no day count. Show the days up to the plan's last day of use for this
+      // level, and what is still left after it (the spare), instead of a blank.
+      const lastUseDayOf = (key: string): string | null => {
+        const lv = levelMap.get(key);
+        if (!lv) return null;
+        const prefix = `${lv.level_kind}|${lv.level_id}|`;
+        let max: string | null = null;
+        for (const k of levelUse.keys()) if (k.startsWith(prefix)) { const d = k.slice(prefix.length); if (max === null || d > max) max = d; }
+        return max;
       };
-      // The cover on the evening BEFORE the landing day = the state on the day before.
-      // A lot that lands on the as-of day itself has no earlier record: its "before" is today's own cover.
-      const dayBefore = (days: typeof fam.days_a, key: string, date: string | null) => {
+      const useBetween = (key: string, fromExclusive: string, toInclusive: string): number => {
+        const lv = levelMap.get(key);
+        if (!lv) return 0;
+        const prefix = `${lv.level_kind}|${lv.level_id}|`;
+        let sum = 0;
+        for (const [k, v] of levelUse) if (k.startsWith(prefix)) { const d = k.slice(prefix.length); if (d > fromExclusive && d <= toInclusive) sum += v; }
+        return q(sum);
+      };
+      const stateNear = (days: typeof fam.days_a, key: string, date: string | null) => {
         if (!date) return null;
-        const before = stateNear(days, key, addDaysToIso(date, -1))?.minD ?? null;
-        return before ?? (date <= calendar.asOf ? stateNear(days, key, calendar.asOf)?.minD ?? null : null);
+        const exact = stateAt(days, key, date);
+        let base = exact;
+        let gap = 0;
+        let reserveAtDate = exact?.reserve ?? null;
+        if (!exact) {
+          const hit = levelRecordUpTo(days, key, date);
+          const rec = hit ? stateAt(days, key, hit.record.day) : null;
+          if (!hit || !rec) return null;
+          base = rec;
+          gap = hit.gap;
+          reserveAtDate = rec.reserve === null || rec.reserve === undefined ? null : Math.max(0, rec.reserve - useBetween(key, hit.record.day, date));
+        }
+        if (!base) return null;
+        const minD = carryCover(base.minD, gap);
+        let coverBeyond: { days: number; left: number } | null = null;
+        if (minD === null && reserveAtDate !== null) {
+          const lastUse = lastUseDayOf(key);
+          if (lastUse && lastUse >= date) coverBeyond = { days: daysBetweenIso(date, lastUse), left: Math.max(0, reserveAtDate - useBetween(key, date, lastUse)) };
+        }
+        return { ...base, cover: base.cover === null ? null : Math.max(0, base.cover - gap), minD, maxD: carryCover(base.maxD, gap), reserveAtDate, coverBeyond };
+      };
+      // The state on the evening BEFORE the landing day. A lot that lands on the as-of day itself has no earlier record: its "before" is today's own state.
+      const stateBefore = (days: typeof fam.days_a, key: string, date: string | null) => {
+        if (!date) return null;
+        return stateNear(days, key, addDaysToIso(date, -1)) ?? (date <= calendar.asOf ? stateNear(days, key, calendar.asOf) : null);
+      };
+      const dayBefore = (days: typeof fam.days_a, key: string, date: string | null) => stateBefore(days, key, date)?.minD ?? null;
+      // What this level's reserve actually gained on the landing day: closing reserve - opening reserve + that day's use.
+      const reserveGain = (days: typeof fam.days_a, lv: { level_key: string; level_kind: string; level_id: string }, date: string | null) => {
+        if (!date) return null;
+        const after = stateNear(days, lv.level_key, date)?.reserveAtDate ?? null;
+        const before = stateBefore(days, lv.level_key, date)?.reserveAtDate ?? null;
+        if (after === null || before === null) return null;
+        return Math.max(0, round(after - before + (proRata(lv, date) ?? 0)));
       };
       const statusOf = (st: ReturnType<typeof stateAt>, without: boolean) => {
         if (!st || st.cover === null || st.min === null) return "";
@@ -343,6 +383,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
             arr_note: arr?.shared_note ?? "", rec: recOf(ev?.csn_id),
             prorata_a: proRata(lv, a.recorded ?? null), prorata_b: proRata(lv, a.advised ?? null),
             min_a_before: dayBefore(fam.days_a_pure, lv.level_key, a.recorded ?? null), min_b_before: dayBefore(fam.days_b_pure, lv.level_key, a.advised ?? null),
+            min_a_x: stA?.coverBeyond ?? null, min_b_x: stB?.coverBeyond ?? null, min_a_before_x: stateBefore(fam.days_a_pure, lv.level_key, a.recorded ?? null)?.coverBeyond ?? null, min_b_before_x: stateBefore(fam.days_b_pure, lv.level_key, a.advised ?? null)?.coverBeyond ?? null, into_reserve: reserveGain(fam.days_a_pure, lv, a.recorded ?? null),
             new_lots_a: lotsBefore(urgentLots, a.recorded ?? null), new_lots_b: lotsBefore(urgentLots, a.advised ?? null),
           });
         }
@@ -372,6 +413,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
             prorata_a: proRata(lv, dayA), prorata_b: proRata(lv, dayB),
             // Owner 2026-11-17: the 'before landing' cover of a new order is on the SAME basis as section 2 (stock + recorded orders only, no suggested lot).
             min_a_before: dayBefore(fam.days_a_pure, lv.level_key, dayA), min_b_before: dayBefore(fam.days_b_pure, lv.level_key, dayB),
+            min_a_x: stA?.coverBeyond ?? null, min_b_x: stB?.coverBeyond ?? null, min_a_before_x: stateBefore(fam.days_a_pure, lv.level_key, dayA)?.coverBeyond ?? null, min_b_before_x: stateBefore(fam.days_b_pure, lv.level_key, dayB)?.coverBeyond ?? null, into_reserve: reserveGain(fam.days_a, lv, dayA ?? dayB),
             alternatives: buy ? altText(alternativesFor(buy, dayA ?? dayB)) : "",
           });
         }

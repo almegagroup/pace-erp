@@ -201,7 +201,7 @@ const L_GREY = "FFF2F2F2";
 const L_AMBER = "FFFFF2CC";
 const L_GREEN = "FFE2EFDA";
 const L_DGREY = "FFD9D9D9";
-const LEAN_WIDTHS = [22, 40, 14, 16, 13, 13, 20, 22, 24, 18, 60];
+const LEAN_WIDTHS = [22, 40, 14, 18, 16, 14, 14, 20, 22, 28, 18, 60];
 const LEAN_COLS = LEAN_WIDTHS.length;
 function fill(cell, argb) { cell.fill = { type: "pattern", pattern: "solid", fgColor: { argb } }; }
 // Whole numbers from 100 up; below that up to 3 decimals, so a family kept in MT never shows 0.167 MT/day as "0".
@@ -299,17 +299,17 @@ function writeLeanFamily(sheet, b, company) {
 
   // ── 1. TODAY — what each level holds
   title("1. TODAY — what each level holds", { size: 12, fillArgb: L_BLUE });
-  span([["Level (narrow first)", 2], ["Min · Max · Critical (days)", 2], ["Held by this level"], [`Use / day (${u})`], ["Cover today (days)"], ["Note", 4]], { bold: true, fillArgb: L_GREY });
+  span([["Level (narrow first)", 2], ["Min · Max · Critical (days)", 2], ["Held by this level"], [`Use / day today (${u})`], ["Cover today (days, follows the monthly plan)"], ["Note", 5]], { bold: true, fillArgb: L_GREY });
   for (const sct of sections) {
     const todayRow = (sct.rows ?? []).find((r) => r.kind === "Stock today");
     const low = sct.today_cover !== null && sct.today_cover !== undefined && sct.target_days !== null && sct.target_days !== undefined && Number(sct.today_cover) < Number(sct.target_days);
     const out = span([[`${sct.label}\n${(sct.members ?? []).join(" + ")}`, 2], [policyOf(sct), 2], [qty(sct.reserve_now ?? todayRow?.lot_qty)], [qty(todayRow?.prorata_b)], [wd(sct.today_cover)], [low ? belowMinToday(sct).trim() : "", 4]]);
     if (low) { out.getCell(7).font = { bold: true, color: { argb: RED } }; out.getCell(8).font = { color: { argb: RED } }; }
   }
-  span([["EXCESS POOL\n(no level needs it yet)", 2], [matLines(b.excess_after), 2], ["", 7]], { bold: true, fillArgb: L_GREEN });
+  span([["EXCESS POOL\n(no level needs it yet)", 2], [matLines(b.excess_after), 2], ["", 8]], { bold: true, fillArgb: L_GREEN });
   if ((b.qa_stock ?? []).length) {
     const qaTotal = b.qa_stock.reduce((sum, x) => sum + x.qty, 0);
-    span([["IN QA today\n(not counted)", 2], [matLines(b.qa_stock), 2], [b.qa_extra_days !== null && b.qa_extra_days !== undefined ? `If all ${qty(qaTotal)} ${u} passes QA, the family's cover grows by about ${wd(b.qa_extra_days)} d.${b.first_shortage_day ? ` The shortage from ${b.first_shortage_day} may be a QA delay, not a missing order: chase QA before ordering.` : ""}` : "Cover effect not shown: no planned use.", 7]], { fillArgb: L_AMBER });
+    span([["IN QA today\n(not counted)", 2], [matLines(b.qa_stock), 2], [b.qa_extra_days !== null && b.qa_extra_days !== undefined ? `If all ${qty(qaTotal)} ${u} passes QA, the family's cover grows by about ${wd(b.qa_extra_days)} d.${b.first_shortage_day ? ` The shortage from ${b.first_shortage_day} may be a QA delay, not a missing order: chase QA before ordering.` : ""}` : "Cover effect not shown: no planned use.", 8]], { fillArgb: L_AMBER });
   }
   sheet.addRow([]);
 
@@ -324,7 +324,9 @@ function writeLeanFamily(sheet, b, company) {
     if (eng < rec) return `Must land by ${eng}: if it lands on ${rec}, the cover just before it is ${wd(r.min_a_before)} d, below Min ${target ?? "—"}.`;
     return `Can wait until ${eng}: cover is then ${wd(r.min_b)} d (Min ${target ?? "—"}).`;
   };
-  const coverPair = (before, after) => `${wd(before)} → ${wd(after)}`;
+  // Where the stock outlasts the plan the engine gives no day count: show the days up to the plan's last day of use and what is spare after it.
+  const coverTxt = (value, beyond) => (value !== null && value !== undefined ? wd(value) : beyond ? `${beyond.days} d to plan end, ${qty(beyond.left)} ${u} spare` : "—");
+  const coverPair = (before, after, bx, ax) => `${coverTxt(before, bx)} → ${coverTxt(after, ax)}`;
   const belowMin = (value, sct) => value !== null && value !== undefined && sct.target_days !== null && sct.target_days !== undefined && Number(value) < Number(sct.target_days);
   const engineText = (r) => {
     const en = r.engine_eta ?? "";
@@ -336,25 +338,25 @@ function writeLeanFamily(sheet, b, company) {
   title("2. LEVEL BY LEVEL — every order on its Tracker date (CSN Tracker: ATD / ATA when they exist, else ETD / ETA), the Suggested date beside it", { size: 12, fillArgb: L_BLUE });
   for (const sct of sections) {
     title(`${sct.label} — ${policyOf(sct)} · ${(sct.members ?? []).join(" + ")}`, { size: 11, fillArgb: L_GREY });
-    row(["Tracker date", "Order", "Lot qty", "Taken by this level (Suggested plan)", "Cover before (d)", "Cover after (d)", "Excess after (this level's items)", "Suggested date", "Suggested: cover before → after (d)", "Suggested: excess after", "Why this date"], { bold: true, fillArgb: L_GREY });
+    row(["Tracker date", "Order", "Lot qty", "Share of this lot the level will use over time", "Went into reserve that day (Tracker date)", "Cover before (d)", "Cover after (d)", "Excess after (this level's items)", "Suggested date", "Suggested: cover before → after (d)", "Suggested: excess after", "Why this date"], { bold: true, fillArgb: L_GREY });
     const today = (sct.rows ?? []).find((r) => r.kind === "Stock today");
-    if (today) row([day(todayIso), `Today's stock\n${(sct.members ?? []).join(" + ")}`, qty(today.lot_qty), qty(sct.reserve_now ?? today.to_level), "", wd(today.min_a), qty(today.excess), "", "", "", ""]);
+    if (today) row([day(todayIso), `Today's stock\n${(sct.members ?? []).join(" + ")}`, qty(today.lot_qty), qty(sct.reserve_now ?? today.to_level), "", "", coverTxt(today.min_a, today.min_a_x), qty(today.excess), "", "", "", ""]);
     const existing = (sct.rows ?? []).filter((r) => r.kind === "Existing order")
       .sort((x, y) => String(x.existing_eta ?? x.engine_eta ?? "").localeCompare(String(y.existing_eta ?? y.engine_eta ?? "")) || String(x.engine_eta ?? "").localeCompare(String(y.engine_eta ?? "")));
     for (const r of existing) {
-      const out = row([recordedText(r.rec, r.existing_eta, todayIso), `${r.material}\n${refName(r.ref)}\n${r.supplier ?? ""} · ${STATUS_LABEL[r.status] ?? r.status ?? ""}`, qty(r.lot_qty), qty(r.to_level),
-        wd(r.min_a_before), wd(r.min_a), qty(r.excess_a), engineText(r), coverPair(r.min_b_before, r.min_b), qty(r.excess), [whyText(r, sct), r.action, r.arr_note].filter(Boolean).join("\n")]);
-      if (r.engine_eta && r.existing_eta && r.engine_eta !== r.existing_eta) fill(out.getCell(8), L_AMBER);
-      if (belowMin(r.min_a_before, sct)) out.getCell(5).font = { bold: true, color: { argb: RED } };
-      if (belowMin(r.min_b_before, sct)) out.getCell(9).font = { bold: true, color: { argb: RED } };
+      const out = row([recordedText(r.rec, r.existing_eta, todayIso), `${r.material}\n${refName(r.ref)}\n${r.supplier ?? ""} · ${STATUS_LABEL[r.status] ?? r.status ?? ""}`, qty(r.lot_qty), qty(r.to_level), qty(r.into_reserve),
+        coverTxt(r.min_a_before, r.min_a_before_x), coverTxt(r.min_a, r.min_a_x), qty(r.excess_a), engineText(r), coverPair(r.min_b_before, r.min_b, r.min_b_before_x, r.min_b_x), qty(r.excess), [whyText(r, sct), r.action, r.arr_note].filter(Boolean).join("\n")]);
+      if (r.engine_eta && r.existing_eta && r.engine_eta !== r.existing_eta) fill(out.getCell(9), L_AMBER);
+      if (belowMin(r.min_a_before, sct)) out.getCell(6).font = { bold: true, color: { argb: RED } };
+      if (belowMin(r.min_b_before, sct)) out.getCell(10).font = { bold: true, color: { argb: RED } };
     }
     const projections = (sct.rows ?? []).filter((r) => r.kind === "Projection")
       .sort((x, y) => String(x.existing_eta ?? x.engine_eta ?? "").localeCompare(String(y.existing_eta ?? y.engine_eta ?? "")));
     for (const r of projections) {
-      const out = row([r.existing_eta ? day(r.existing_eta) : "—", `NEW (engine)\n${r.material}\nOrder by ${day(r.po_by) || "—"} · ${r.supplier ?? "—"}`, qty(r.lot_qty), qty(r.to_level),
-        wd(r.min_a_before), wd(r.min_a), qty(r.excess_a), engineText(r), coverPair(r.min_b_before, r.min_b), qty(r.excess), [r.why, r.action].filter(Boolean).join("\n")], { fillArgb: L_AMBER });
-      if (belowMin(r.min_a_before, sct)) out.getCell(5).font = { bold: true, color: { argb: RED } };
-      if (belowMin(r.min_b_before, sct)) out.getCell(9).font = { bold: true, color: { argb: RED } };
+      const out = row([r.existing_eta ? day(r.existing_eta) : "—", `NEW (engine)\n${r.material}\nOrder by ${day(r.po_by) || "—"} · ${r.supplier ?? "—"}`, qty(r.lot_qty), qty(r.to_level), qty(r.into_reserve),
+        coverTxt(r.min_a_before, r.min_a_before_x), coverTxt(r.min_a, r.min_a_x), qty(r.excess_a), engineText(r), coverPair(r.min_b_before, r.min_b, r.min_b_before_x, r.min_b_x), qty(r.excess), [r.why, r.action].filter(Boolean).join("\n")], { fillArgb: L_AMBER });
+      if (belowMin(r.min_a_before, sct)) out.getCell(6).font = { bold: true, color: { argb: RED } };
+      if (belowMin(r.min_b_before, sct)) out.getCell(10).font = { bold: true, color: { argb: RED } };
     }
     sheet.addRow([]);
   }

@@ -1142,3 +1142,21 @@ Deno.test("one calculation: up to the last recorded order the plan equals the 'r
   assert(lotDays.every((d) => d > lastRecorded), `no lot inside the recorded orders: ${lotDays.join(",")}`);
   assert(recordedOnly.rows.every((x) => x.planned_lot_qty_base === 0), "the recorded-only run counts no lot at all");
 });
+
+Deno.test("family planner: a LATE need (already below Min) never lands its lot on or before the last recorded order (owner 2026-11-18)", () => {
+  const days = daysTo("2027-02-28");
+  const lastRecorded = addDays(AS_OF, 5);
+  const input: FamilyPlannerInput = {
+    as_of: AS_OF, horizon_end: "2027-02-28",
+    // 10 days of stock against a 20-day Min: the need is late today. The vendor can deliver in 1 day, but one recorded order lands on day 5.
+    opening_qty_by_material: { SOLO: 100 },
+    own_demand: days.map((d) => ({ material_id: "SOLO", required_by: d, qty_base: 10 })),
+    group_demand: [],
+    confirmed_arrivals: [{ material_id: "SOLO", eta_to_plant: lastRecorded, qty_base: 20, source_key: "csn-late" }],
+    policies: [policy("SOLO", 20, 10, [{ vendor: "V", lead: 1, cost: 1 }])],
+  };
+  const shown = planFamily({ ...input, lots_after_recorded: true });
+  const lotDays = shown.rows.filter((x) => x.planned_lot_qty_base > 0).map((x) => x.day);
+  assert(lotDays.length > 0, "a lot is still planned");
+  assert(lotDays.every((d) => d > lastRecorded), `no lot on/before ${lastRecorded}, got ${lotDays.join(",")}`);
+});

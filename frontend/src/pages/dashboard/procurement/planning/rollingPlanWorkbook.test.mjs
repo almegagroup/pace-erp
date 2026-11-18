@@ -195,9 +195,9 @@ test("Group tabs: MHEC and RDP families sit on their own tabs; Today, level by l
   assert.ok(cells.some((t) => t.includes("Port 2026-11-23 (ATA, due)") && t.includes("ETD 2026-10-19 (ATD)") && !t.includes("(ATD, due)")), "a port date still ahead of today says due; a past ETD does not");
   assert.ok(cells.some((t) => t.includes("Port 2026-10-10 (ATA)") && !t.includes("2026-10-10 (ATA, due)")), "a past actual date is plain");
   const head = []; sheet.eachRow((row) => { if (String(row.getCell(1).value) === "Tracker date") head.push(row.values.slice(1).map(String)); });
-  assert.deepEqual(head[0], ["Tracker date", "Order", "Lot qty", "Taken by this level (Suggested plan)", "Cover before (d)", "Cover after (d)", "Excess after (this level's items)", "Suggested date", "Suggested: cover before → after (d)", "Suggested: excess after", "Why this date"], "level table columns");
+  assert.deepEqual(head[0], ["Tracker date", "Order", "Lot qty", "Share of this lot the level will use over time", "Went into reserve that day (Tracker date)", "Cover before (d)", "Cover after (d)", "Excess after (this level's items)", "Suggested date", "Suggested: cover before → after (d)", "Suggested: excess after", "Why this date"], "level table columns");
   assert.ok(!cells.some((t) => /recorded|Recorded|\bEngine date\b|If another order|ONE plan for the whole sheet|NEW lot not counted|POOL DIARY|How to read|Refill method/.test(t) && !t.startsWith("NEW (engine)")), "old wording is gone");
-  const amber = []; sheet.eachRow((row) => { const c = row.getCell(8); if (c.fill?.fgColor?.argb === "FFFFF2CC") amber.push(c.address); });
+  const amber = []; sheet.eachRow((row) => { const c = row.getCell(9); if (c.fill?.fgColor?.argb === "FFFFF2CC") amber.push(c.address); });
   assert.ok(amber.length >= 1, "a Suggested date that differs from the Tracker date is amber");
   assert.ok(cells.some((t) => t.includes("Stock lasts") === false) && cells.some((t) => t === "1,250"), "pro-rata today");
   assert.equal(wb.getWorksheet("RM Group").rowCount, 1, "no other RM group family -> only the empty-text row");
@@ -327,14 +327,14 @@ test("family block (owner 2026-11-18): whole days rounded down, per-level excess
   const rows = [];
   wb.getWorksheet("RM RDP").eachRow((row) => rows.push(row.values.slice(1).map((v) => String(v ?? ""))));
   const newRow = rows.find((r) => r[1]?.startsWith("NEW (engine)"));
-  assert.equal(newRow[4], "16", "cover before is rounded DOWN (16.9 -> 16)");
-  assert.equal(newRow[5], "29", "cover after is rounded down (29.8 -> 29)");
-  assert.equal(newRow[8], "16 → 29", "Suggested before → after, whole days");
-  assert.equal(newRow[9], "2,269", "excess after on the Suggested date");
+  assert.equal(newRow[5], "16", "cover before is rounded DOWN (16.9 -> 16)");
+  assert.equal(newRow[6], "29", "cover after is rounded down (29.8 -> 29)");
+  assert.equal(newRow[9], "16 → 29", "Suggested before → after, whole days");
+  assert.equal(newRow[10], "2,269", "excess after on the Suggested date");
   const ordered = rows.find((r) => r[1]?.includes("CSN 3000000433"));
-  assert.equal(ordered[4], "26", "26.9 -> 26");
-  assert.equal(ordered[8], "28 → 45");
-  assert.ok(ordered[10].includes("Prepone to 2026-10-04"), "the engine's decision is in the Why column");
+  assert.equal(ordered[5], "26", "26.9 -> 26");
+  assert.equal(ordered[9], "28 → 45");
+  assert.ok(ordered[11].includes("Prepone to 2026-10-04"), "the engine's decision is in the Why column");
   const p3 = rows.find((r) => r[0]?.startsWith("Celanese RDP") && r[0].includes("Order by 2026-10-24") && r.some((c) => c.includes("LOCAL")) && r.some((c) => c.includes("ETD 2026-10-26 → Port 2026-11-05 → Plant 2026-11-08")));
   assert.ok(p3, "new-orders table row with the other route");
   assert.ok(rows.some((r) => r[0] === "New order" && r.includes("Tracker date") && r.includes("Suggested date")), "new-orders header uses Tracker / Suggested date");
@@ -353,4 +353,16 @@ test("stand-alone tabs keep their layout but use Suggested wording and no 'if an
 
 test("the download page imports downloadRollingPlanWorkbook: it must stay exported (a missing export shows as 'h is not a function')", () => {
   assert.equal(typeof workbookModule.downloadRollingPlanWorkbook, "function");
+});
+
+test("stock that outlasts the plan: days up to the plan end and the spare quantity, never a blank (owner 2026-11-18)", () => {
+  const base = company("a", "Almeha Coatings");
+  const sections = [{ label: "Exclusive — Gabrosa", kind: "OWN", members: ["Gabrosa"], target_days: 30, max_days: 60, critical_days: 20, rows: [
+    { kind: "Existing order", ref: "PO P1/1 · CSN 3000000001 (TRN)", material: "Gabrosa", supplier: "X", status: "IN_TRANSIT", lot_qty: 10000, to_level: 4000, existing_eta: "2027-02-17", engine_eta: "2027-02-17",
+      min_a_before: null, min_a: null, min_b_before: null, min_b: null, min_a_before_x: { days: 40, left: 1200 }, min_a_x: { days: 40, left: 5200 }, min_b_before_x: { days: 40, left: 1200 }, min_b_x: { days: 40, left: 5200 }, into_reserve: 4000, excess_a: 0, excess: 0 }] }];
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], level_sections: sections, level_today: [], excess_after: [] }] }], asOf: "2026-11-18" });
+  const cells = [];
+  wb.getWorksheet("RM RDP").eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
+  assert.ok(cells.includes("40 d to plan end, 1,200 KG spare"), "before: days to plan end and the spare");
+  assert.ok(cells.includes("40 d to plan end, 5,200 KG spare → 40 d to plan end, 5,200 KG spare") || cells.includes("40 d to plan end, 1,200 KG spare → 40 d to plan end, 5,200 KG spare"), "the Suggested pair is not blank either");
 });
