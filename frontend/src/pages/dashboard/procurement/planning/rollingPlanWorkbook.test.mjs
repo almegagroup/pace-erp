@@ -189,7 +189,7 @@ test("Group tabs: MHEC and RDP families sit on their own tabs; Today, level by l
   assert.ok(cells.some((t) => t.startsWith("2. LEVEL BY LEVEL")) && cells.some((t) => t.startsWith("3. NEW ORDERS THE ENGINE ADDS")), "level-by-level table and new orders");
   assert.ok(!cells.some((t) => t.startsWith("4. EXCESS POOL") || t.startsWith("5. FAMILY DAY BY DAY")), "no separate excess-pool or day-by-day tables");
   assert.ok(cells.some((t) => t.includes("ETD 2026-09-24 (ATD)")), "the Tracker's ATD");
-  assert.ok(cells.some((t) => t.includes("Must land by 2026-11-21: on 2026-11-29 this level is at 22 d, below Min 30")), "a too-late order: the Tracker-date cover and the Suggested date");
+  assert.ok(cells.some((t) => t.includes("Must land by 2026-11-21: if it lands on 2026-11-29, the cover just before it is")), "a too-late order: the Tracker-date cover and the Suggested date");
   assert.ok(cells.some((t) => t.includes("Can wait until 2026-12-02: cover is then 30 d (Min 30)")), "an order that can wait");
   assert.ok(cells.some((t) => t.startsWith("On time. Cover after it lands: 40 d (Min 30)")), "an order on its Suggested date");
   assert.ok(cells.some((t) => t.includes("Port 2026-11-23 (ATA, due)") && t.includes("ETD 2026-10-19 (ATD)") && !t.includes("(ATD, due)")), "a port date still ahead of today says due; a past ETD does not");

@@ -287,7 +287,12 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         return { ...base, cover: base.cover === null ? null : Math.max(0, base.cover - hit.gap), minD: carryCover(base.minD, hit.gap), maxD: carryCover(base.maxD, hit.gap) };
       };
       // The cover on the evening BEFORE the landing day = the state on the day before.
-      const dayBefore = (days: typeof fam.days_a, key: string, date: string | null) => (date ? stateNear(days, key, addDaysToIso(date, -1))?.minD ?? null : null);
+      // A lot that lands on the as-of day itself has no earlier record: its "before" is today's own cover.
+      const dayBefore = (days: typeof fam.days_a, key: string, date: string | null) => {
+        if (!date) return null;
+        const before = stateNear(days, key, addDaysToIso(date, -1))?.minD ?? null;
+        return before ?? (date <= calendar.asOf ? stateNear(days, key, calendar.asOf)?.minD ?? null : null);
+      };
       const statusOf = (st: ReturnType<typeof stateAt>, without: boolean) => {
         if (!st || st.cover === null || st.min === null) return "";
         const suffix = without ? ", even without this order" : "";

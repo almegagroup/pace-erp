@@ -321,7 +321,7 @@ function writeLeanFamily(sheet, b, company) {
     if (!eng) return "Not needed: this level stays above its Min without it.";
     if (!rec) return `Must land by ${eng}.`;
     if (eng === rec) return `On time. Cover after it lands: ${wd(r.min_a)} d (Min ${target ?? "—"}).`;
-    if (eng < rec) return `Must land by ${eng}: on ${rec} this level is at ${wd(r.min_a)} d, below Min ${target ?? "—"}.`;
+    if (eng < rec) return `Must land by ${eng}: if it lands on ${rec}, the cover just before it is ${wd(r.min_a_before)} d, below Min ${target ?? "—"}.`;
     return `Can wait until ${eng}: cover is then ${wd(r.min_b)} d (Min ${target ?? "—"}).`;
   };
   const coverPair = (before, after) => `${wd(before)} → ${wd(after)}`;
