@@ -582,3 +582,17 @@ export function buildRollingPlanWorkbook({ companies, asOf }) {
 
   return wb;
 }
+
+export async function downloadRollingPlanWorkbook({ companies, asOf, fileName }) {
+  const wb = buildRollingPlanWorkbook({ companies, asOf });
+  const buffer = await wb.xlsx.writeBuffer();
+  const blob = new Blob([buffer], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = fileName;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}

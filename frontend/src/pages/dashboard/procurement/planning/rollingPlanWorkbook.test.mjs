@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import * as workbookModule from "./rollingPlanWorkbook.js";
 import { buildPlanMatrix, buildRollingPlanWorkbook, companyLabel, sheetName } from "./rollingPlanWorkbook.js";
 
 const company = (id, name, extra = {}) => ({
@@ -348,4 +349,8 @@ test("stand-alone tabs keep their layout but use Suggested wording and no 'if an
   wb.getWorksheet("RM Stand-alone").eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
   assert.ok(cells.includes("Tracker date: ETD / Port / Plant") && cells.includes("ETD (suggested)"));
   assert.ok(!cells.includes("If another order does not come") && !cells.some((c) => c.includes("(engine)")), "old wording is gone");
+});
+
+test("the download page imports downloadRollingPlanWorkbook: it must stay exported (a missing export shows as 'h is not a function')", () => {
+  assert.equal(typeof workbookModule.downloadRollingPlanWorkbook, "function");
 });
