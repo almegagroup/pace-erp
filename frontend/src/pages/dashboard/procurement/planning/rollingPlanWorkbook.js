@@ -266,6 +266,27 @@ const suggestedQty = (r, uom) => [
   ...(hasQty(r.suggested_lot) ? [`${qty(r.suggested_lot)} ${uom ?? ""}`.trim()] : []),
   ...(hasQty(r.new_lot) ? [`${qty(r.new_lot)} ${uom ?? ""}`.trim()] : []),
 ];
+// Family tabs, last two columns (owner 2026-11-18): for every stock / CSN / projection row, each level's Min → Max (cover before → after landing) on the
+// Tracker date and on the Suggested date, and the excess left in each level. All numbers are the engine's own; nothing is estimated here.
+const LEVEL_HEAD = ["Level Min → Max   (Tracker date | Suggested date)", "Excess by level   (Tracker | Suggested)"];
+const levelDays = (v, beyond, u = "") => (v !== null && v !== undefined ? String(Math.floor(Number(v) + 1e-9)) : beyond ? `${beyond.days} d to plan end + ${qty(beyond.left)} ${u} spare`.replace("  ", " ") : "—");
+function levelColumns(b, match, isToday = false) {
+  const minMax = []; const excess = [];
+  for (const sct of b.level_sections ?? []) {
+    const rows = (sct.rows ?? []).filter((r) => (isToday ? r.kind === "Stock today" : match(r)));
+    if (!rows.length) continue;
+    for (const r of rows) {
+      const mm = isToday
+        ? `${sct.label}: ${levelDays(sct.today_cover)} d cover today`
+        : `${sct.label}: ${levelDays(r.min_a_before, r.min_a_before_x, b.uom ?? "")} → ${levelDays(r.max_a, r.max_a_x, b.uom ?? "")}  |  ${levelDays(r.min_b_before, r.min_b_before_x, b.uom ?? "")} → ${levelDays(r.max_b, r.max_b_x, b.uom ?? "")}`;
+      const ex = isToday ? `${sct.label}: ${qty(r.excess)}` : `${sct.label}: ${qty(r.excess_a)}  |  ${qty(r.excess)}`;
+      if (!minMax.includes(mm)) minMax.push(mm);
+      if (!excess.includes(ex)) excess.push(ex);
+    }
+  }
+  return [minMax.join("\n"), excess.join("\n")];
+}
+
 function writeBlocks(sheet, companies, kind, { filter = () => true, sections = false, emptyText } = {}) {
   const list = companies.flatMap((c) => (c.blocks ?? []).filter((b) => b.kind === kind && filter(b)).map((b) => ({ ...b, company: c })))
     .sort((a, b) => a.title.localeCompare(b.title) || companyLabel(a.company).localeCompare(companyLabel(b.company)));
@@ -303,7 +324,8 @@ function writeBlocks(sheet, companies, kind, { filter = () => true, sections = f
       tn.getCell(1).font = { italic: true, bold: true };
     }
     if (sections) writeFamilyToday(sheet, b);
-    styleHeader(sheet.addRow(BLOCK_HEAD));
+    styleHeader(sheet.addRow(sections ? [...BLOCK_HEAD, ...LEVEL_HEAD] : BLOCK_HEAD));
+    const asOfDay = (b.rows ?? [])[0]?.day ?? "";
     for (const r of b.rows) {
       const row = sheet.addRow([
         day(r.day), num(r.opening), num(r.arrivals) || null, num(r.dispatch), num(r.use), num(r.closing), num(r.excess), coverCell(r.max_days, r.max_days_est, r.closing, b.plan_end), num(r.min_stock), coverCell(r.min_days, r.min_days_est, r.min_stock, b.plan_end),
@@ -311,6 +333,7 @@ function writeBlocks(sheet, companies, kind, { filter = () => true, sections = f
         [...r.statuses.map((s) => STATUS_LABEL[s] ?? s), ...suggestedText(r, b.uom).map(() => "Suggested")].join("\n"),
         ...bestColumns(r),
         (r.rec_cells ?? []).map((rec) => recordedText(rec, null)).filter((t) => t !== "—").join("\n"),
+        ...(sections ? levelColumns(b, (x) => x.kind === "Existing order" && x.existing_eta && (String(x.existing_eta).slice(0, 10) === r.day || (String(x.existing_eta).slice(0, 10) < asOfDay && r.day === asOfDay)), r.day === asOfDay && !(r.references ?? []).length) : []),
       ]);
       row.eachCell((cell, i) => { cell.border = BORDER; if (i >= 2 && i <= 10) cell.numFmt = NUM; cell.alignment = { vertical: "top", wrapText: i >= 11 }; });
       if (r.closing < 0) row.getCell(6).font = { bold: true, color: { argb: RED } };
@@ -320,22 +343,24 @@ function writeBlocks(sheet, companies, kind, { filter = () => true, sections = f
     if (b.prediction.length) {
       const p = sheet.addRow(["Prediction"]);
       p.getCell(1).font = { bold: true, italic: true };
-      styleHeader(sheet.addRow(PRED_HEAD));
+      styleHeader(sheet.addRow(sections ? [...PRED_HEAD, "", ...LEVEL_HEAD] : PRED_HEAD));
       for (const x of b.prediction) {
         const row = sheet.addRow([
           x.source === "YOU" ? "Planner" : "Suggested", day(x.import_etd), day(x.port_eta), day(x.date), num(x.qty), coverCell(x.max_days, x.max_days_est, 0, b.plan_end), coverCell(x.min_days, x.min_days_est, 0, b.plan_end), x.material, x.supplier ?? "", day(x.po_by),
           x.uom ?? "", days(x.trigger_cover_days), days(x.trigger_min_days), triggeredBy(x), [minGapText(x.min_gap), minDipText(x.min_dip)].filter(Boolean).join("\n"), "", "", "", alternativesText(x.alternatives),
+          ...(sections ? ["", ...levelColumns(b, (y) => y.kind === "Projection" && y.material === x.material && (String(y.existing_eta ?? "").slice(0, 10) === day(x.date) || String(y.engine_eta ?? "").slice(0, 10) === day(x.date)))] : []),
         ]);
         row.eachCell((cell, i) => { cell.border = BORDER; if (i >= 5 && i <= 7) cell.numFmt = NUM; });
         row.getCell(14).alignment = { wrapText: true, vertical: "top" };
         row.getCell(15).alignment = { wrapText: true, vertical: "top" };
         row.getCell(19).alignment = { wrapText: true, vertical: "top" };
+        if (sections) { row.getCell(21).alignment = { wrapText: true, vertical: "top" }; row.getCell(22).alignment = { wrapText: true, vertical: "top" }; }
       }
     }
     sheet.addRow([]);
     sheet.addRow([]);
   }
-  widths(sheet, [16, 26, 24, 18, 13, 13, 38, 13, 13, 13, 42, 42, 13, 9, 10, 10, 10, 10, 14, 14, 44, 40]);
+  widths(sheet, sections ? [16, 26, 24, 18, 13, 13, 38, 13, 13, 13, 42, 42, 13, 9, 10, 10, 10, 10, 14, 14, 56, 34] : [16, 26, 24, 18, 13, 13, 38, 13, 13, 13, 42, 42, 13, 9, 10, 10, 10, 10, 14, 14, 44, 40]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

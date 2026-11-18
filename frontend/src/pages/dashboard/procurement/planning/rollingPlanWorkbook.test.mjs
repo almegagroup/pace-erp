@@ -282,3 +282,30 @@ test("a CSN is never named without its PO in the day table, and the held-CSN tab
   assert.ok(cells.includes("ASCP2627-0300/1") && cells.includes("3000000999"), "held CSN table lists the PO next to the CSN");
   await wb.xlsx.writeBuffer();
 });
+
+test("family tabs: the last two columns give each level's Min → Max (Tracker | Suggested) and its excess, on the stock / CSN rows and on the projection rows", async () => {
+  const base = company("a", "Almeha Coatings");
+  const rows = [
+    { day: "2026-10-21", opening: 1000, arrivals: 0, dispatch: null, use: 100, closing: 900, max_days: 9, min_stock: 900, min_days: 9, references: [], qtys: [], suppliers: [], statuses: [], best_dates: [] },
+    { day: "2026-11-06", opening: 500, arrivals: 24750, dispatch: null, use: 100, closing: 25150, max_days: 40, min_stock: 400, min_days: 4, references: ["PO ACP/PO80/2026-27/1 · CSN 3000000451"], qtys: [24750], suppliers: ["DAIREN"], statuses: ["ORDERED"], best_dates: [] },
+  ];
+  const sections = [
+    { label: "Exclusive — VAE A", kind: "OWN", members: ["VAE A"], target_days: 20, max_days: 35, critical_days: 10, today_cover: 22, rows: [
+      { kind: "Stock today", lot_qty: 900, prorata_b: 100, min_a: 22, excess: 0 },
+      { kind: "Existing order", existing_eta: "2026-11-06", engine_eta: "2026-11-04", min_a_before: 18, max_a: 35, min_b_before: 20, max_b: 35, excess_a: 0, excess: 2269 },
+      { kind: "Projection", material: "VAE A", existing_eta: "2026-12-27", engine_eta: "2026-12-27", min_a_before: 19, max_a: null, max_a_x: { days: 40, left: 1500 }, min_b_before: 19, max_b: 35, excess_a: 0, excess: 0 }] },
+    { label: "RDP — RDP", kind: "GROUP", members: ["VAE A", "VAE B"], target_days: 25, max_days: 45, critical_days: 12, today_cover: 24, rows: [
+      { kind: "Stock today", lot_qty: 2000, prorata_b: 200, min_a: 24, excess: 5 },
+      { kind: "Existing order", existing_eta: "2026-11-06", engine_eta: "2026-11-06", min_a_before: 26, max_a: 43, min_b_before: 28, max_b: 45, excess_a: 100, excess: 0 }] }];
+  const pred = [{ source: "ENGINE", import_etd: "2026-12-01", port_eta: "2026-12-15", date: "2026-12-27", qty: 24000, max_days: 35, min_days: 19, material: "VAE A", supplier: "CELANESE", po_by: "2026-10-12" }];
+  const wb = buildRollingPlanWorkbook({ companies: [{ ...base, blocks: [{ ...base.blocks[0], rows, prediction: pred, level_sections: sections, level_today: [], excess_after: [] }] }], asOf: "2026-10-21" });
+  const cells = [];
+  wb.getWorksheet("RM RDP").eachRow((row) => row.eachCell((c) => cells.push(String(c.value ?? ""))));
+  assert.ok(cells.includes("Level Min → Max   (Tracker date | Suggested date)") && cells.includes("Excess by level   (Tracker | Suggested)"), "the two level columns");
+  const mm = cells.find((c) => c.includes("Exclusive — VAE A: 18 → 35  |  20 → 35")) ?? "";
+  assert.ok(mm.includes("RDP — RDP: 26 → 43  |  28 → 45"), "stock / CSN row: each level's Min → Max on both dates");
+  assert.ok(cells.some((c) => c.includes("Exclusive — VAE A: 0  |  2,269") && c.includes("RDP — RDP: 100  |  0")), "excess by level");
+  assert.ok(cells.some((c) => c.includes("Exclusive — VAE A: 19 → 40 d to plan end + 1,500 KG spare  |  19 → 35")), "projection row: beyond plan shows days to plan end and the spare, never blank");
+  assert.ok(cells.some((c) => c.includes("Exclusive — VAE A: 22 d cover today")), "today's row shows today's cover");
+  await wb.xlsx.writeBuffer();
+});
