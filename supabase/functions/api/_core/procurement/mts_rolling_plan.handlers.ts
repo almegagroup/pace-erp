@@ -292,7 +292,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         if (st.cover < st.min + 1) return `Exactly at Min${suffix}`;
         return `Above Min${suffix}`;
       };
-      const whole = (n: number | null | undefined) => (n === null || n === undefined ? null : Math.round(n));
+      // Owner 2026-11-18: days are whole, rounded DOWN (16.9 d shows 16).
+      const whole = (n: number | null | undefined) => (n === null || n === undefined ? null : Math.floor(n + 1e-9));
       const allocOf = (alloc: typeof fam.alloc_a, ref: string, levelKind: string, destId: string) => alloc.filter((a) => a.ref === ref && a.dest_kind === levelKind && a.dest_id === destId).reduce((sum, a) => sum + a.qty, 0);
       const arrivalByRefMat = new Map(plan.reschedulable_arrivals.map((a) => [`${a.reference}|${a.material_id}`, a]));
       const eventOf = (reference: string, material: string) => events.find((e) => e.reference === reference && e.member === material);
@@ -330,7 +331,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
             kind: "Existing order", ref: `${a.reference}${ev?.csn_id ? "" : ""}`, material: nameOf(a.material_id), supplier: supplierOf(a.reference, ev?.csn_id) ?? "—", status: ev ? (arrivalStatus(ev.kind as never, ev.date_source as never) as string) : "",
             lot_qty: q(a.qty_base), existing_eta: a.recorded, action: cells.action, etd: cells.etd, port: cells.port, plant: cells.plant || a.advised, why: cells.why, absent: cells.absent,
             engine_eta: a.advised, to_level: q(toLevel), pct: a.qty_base > 0 ? toLevel / a.qty_base : null,
-            min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, excess_split: stB?.excess_split ?? null, level_status: statusOf(stB, false), reserve_after: stB?.reserve ?? null,
+            min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, excess_a: stA?.excess ?? null, excess_split: stB?.excess_split ?? null, level_status: statusOf(stB, false), reserve_after: stB?.reserve ?? null,
             arr_note: arr?.shared_note ?? "", rec: recOf(ev?.csn_id),
             prorata_a: proRata(lv, a.recorded ?? null), prorata_b: proRata(lv, a.advised ?? null),
             min_a_before: dayBefore(fam.days_a_pure, lv.level_key, a.recorded ?? null), min_b_before: dayBefore(fam.days_b_pure, lv.level_key, a.advised ?? null),
@@ -358,7 +359,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
             kind: "Projection", ref: "NEW (engine)", po_by: buy?.recommended_po_by ?? null, material: nameOf(lot.material_id), supplier: buy?.vendor_label ?? "—", status: "Projection", lot_qty: q(lot.qty_base), existing_eta: dayA, action,
             etd: lg.import_etd ?? "", port: lg.port_eta ?? "", plant: dayB ?? "", why: buy ? (buy.need_kind === "GROUP" ? `Triggered by group free stock${buy.trigger_group_id ? ` — ${groupLabel.get(buy.trigger_group_id) ?? ""}` : ""}` : "Triggered by its own use") : "", absent: "",
             engine_eta: dayB, to_level: q(toLevel), pct: lot.qty_base > 0 ? toLevel / lot.qty_base : null,
-            min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, excess_split: stB?.excess_split ?? null,
+            min_a: stA?.minD ?? null, max_a: stA?.maxD ?? null, min_b: stB?.minD ?? null, max_b: stB?.maxD ?? null, excess: stB?.excess ?? null, excess_a: stA?.excess ?? null, excess_split: stB?.excess_split ?? null,
             level_status: statusOf(stB, !b), reserve_after: stB?.reserve ?? null, flag,
             prorata_a: proRata(lv, dayA), prorata_b: proRata(lv, dayB),
             // Owner 2026-11-17: the 'before landing' cover of a new order is on the SAME basis as section 2 (stock + recorded orders only, no suggested lot).
