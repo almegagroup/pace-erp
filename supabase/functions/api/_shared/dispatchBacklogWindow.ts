@@ -5,7 +5,10 @@
  * schedule. DEPENDENT_DEPOT PGI and FG STO PGI use the same calendar policy
  * rather than carrying independently-maintained cutoffs.
  */
-export const DISPATCH_BACKLOG_GRACE_PERIOD_END = "2026-11-15";
+// Extended from 2026-11-15 to 2026-11-30 (business owner, 2026-11-18): October MTS
+// dispatches (CMP005 VDC/DD invoice-only DOs awaiting Truck & Dispatch Date) and
+// Dependent Depot / FG STO PGIs still need their real historical dates.
+export const DISPATCH_BACKLOG_GRACE_PERIOD_END = "2026-11-30";
 
 export function isDispatchBacklogGracePeriodOpen(todayIso: string): boolean {
   return todayIso <= DISPATCH_BACKLOG_GRACE_PERIOD_END;
