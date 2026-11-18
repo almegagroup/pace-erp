@@ -45,11 +45,18 @@ export default function GstInclusiveBackfillModal({ visible, onClose }) {
     throw new Error("Still running on the server. Close this window, wait a minute and press Check (dry run) to see what is left.");
   }
 
-  async function check() {
+  // "leg_sync" = the second tool: every Inward QA release/block leg set to its GRN's real rate (landed cost included), one replay
+  // per stock bucket. "stock" = the original GST-inclusive / re-sync check.
+  const [mode, setMode] = useState("stock");
+  const modePayload = (m) => (m === "leg_sync" ? { mode: "leg_sync" } : {});
+
+  async function check(nextMode = mode) {
     setChecking(true);
     setError("");
+    setMode(nextMode);
+    setResults({});
     try {
-      setPlan(await grnGstInclusiveBackfill({}));
+      setPlan(await grnGstInclusiveBackfill({ ...modePayload(nextMode) }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "GST_BACKFILL_FAILED");
     } finally {
@@ -69,10 +76,10 @@ export default function GstInclusiveBackfillModal({ visible, onClose }) {
     setError("");
     try {
       setElapsed(0);
-      const started = await grnGstInclusiveBackfill({ apply: true, material_id: row.material_id });
+      const started = await grnGstInclusiveBackfill({ apply: true, material_id: row.material_id, ...modePayload(mode) });
       const res = await waitForJob(started.job_id);
       setResults((current) => ({ ...current, [row.material_id]: res }));
-      setPlan(await grnGstInclusiveBackfill({}));
+      setPlan(await grnGstInclusiveBackfill({ ...modePayload(mode) }));
     } catch (err) {
       setError(err instanceof Error ? err.message : "GST_BACKFILL_FAILED");
     } finally {
@@ -90,8 +97,11 @@ export default function GstInclusiveBackfillModal({ visible, onClose }) {
       actions={(
         <>
           <button type="button" onClick={onClose} className="border border-slate-300 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700">Close</button>
-          <button type="button" onClick={() => void check()} disabled={checking || Boolean(applyingId)} className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50">
-            {checking ? "Checking..." : "Check (dry run)"}
+          <button type="button" onClick={() => void check("leg_sync")} disabled={checking || Boolean(applyingId)} className="border border-slate-300 bg-white px-3 py-2 text-sm font-semibold text-slate-800 disabled:opacity-50">
+            {checking && mode === "leg_sync" ? "Checking..." : "Check QA release legs"}
+          </button>
+          <button type="button" onClick={() => void check("stock")} disabled={checking || Boolean(applyingId)} className="border border-sky-700 bg-sky-100 px-4 py-2 text-sm font-semibold text-sky-950 disabled:opacity-50">
+            {checking && mode === "stock" ? "Checking..." : "Check (dry run)"}
           </button>
         </>
       )}
@@ -120,7 +130,14 @@ export default function GstInclusiveBackfillModal({ visible, onClose }) {
               <tbody>
                 {materials.map((row) => (
                   <tr key={row.material_id}>
-                    <td className="border border-slate-200 px-2 py-1">{row.material}</td>
+                    <td className="border border-slate-200 px-2 py-1">
+                      {row.material}
+                      {(row.buckets ?? []).map((b) => (
+                        <span key={`${b.company}-${b.location}-${b.stock_type_code}`} className="block text-[11px] text-slate-500">
+                          {b.company} · {b.location} · {b.stock_type_code}: rate {Number(b.old_rate).toFixed(4)} → {Number(b.new_rate).toFixed(4)} ({b.legs} legs)
+                        </span>
+                      ))}
+                    </td>
                     <td className="border border-slate-200 px-2 py-1 text-right" title={(row.grn_numbers ?? []).join(", ")}>{row.grns}</td>
                     <td className="border border-slate-200 px-2 py-1 text-right">{Number(row.quantity_base).toLocaleString("en-IN")} {row.base_uom_code}</td>
                     <td className="border border-slate-200 px-2 py-1 text-right">{money(row.value_change)}</td>
