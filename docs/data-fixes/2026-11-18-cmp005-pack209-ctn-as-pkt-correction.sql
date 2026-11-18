@@ -1,3 +1,11 @@
+-- EXECUTED in PROD on 2026-11-18 through a guarded MCP operational-data transaction.
+-- R-04 classification: business/operational data correction — NOT a schema migration.
+--
+-- The correction was initially (incorrectly) submitted through the migration runner.
+-- Its migration-history record was removed immediately on the business owner's instruction;
+-- the committed CMP005 business data, append-only PGI trail, and archive evidence remain.
+-- Do NOT rerun: the archive-table guard deliberately blocks a second execution.
+--
 -- CMP005 / pack code 209 correction (2026-11-18)
 --
 -- Business fact: CTN fields were populated with PKT counts.  For pack code
