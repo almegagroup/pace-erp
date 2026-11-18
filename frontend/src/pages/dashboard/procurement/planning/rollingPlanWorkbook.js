@@ -256,20 +256,25 @@ function writeFamilyToday(sheet, b) {
 }
 
 /** A suggested lot lands on this day but is never counted in the numbers beside it (owner 2026-11-12): list it in the PO / CSN column. */
-const hasQty = (v) => v !== null && v !== undefined && Number(v) > 0;
-// Inside the recorded orders a lot is only a suggestion (not counted); after them the engine's lot is counted (owner 2026-11-16).
-const suggestedText = (r) => [
-  ...(hasQty(r.suggested_lot) ? ["NEW lot (suggested, not counted)"] : []),
-  ...(hasQty(r.new_lot) ? ["NEW lot (counted in projection)"] : []),
-];
-const suggestedQty = (r, uom) => [
-  ...(hasQty(r.suggested_lot) ? [`${qty(r.suggested_lot)} ${uom ?? ""}`.trim()] : []),
-  ...(hasQty(r.new_lot) ? [`${qty(r.new_lot)} ${uom ?? ""}`.trim()] : []),
-];
+/** The engine's Suggested-date columns; a stand-alone row also says how far below Min it is on the Tracker date (Min Days = the cover before landing). */
+function belowMinWhy(b, r, sections) {
+  const cols = bestColumns(r);
+  if (!sections && (r.references ?? []).length && b.target_days !== null && b.target_days !== undefined && r.min_days !== null && r.min_days !== undefined && Number(r.min_days) < Number(b.target_days)) {
+    const target = Math.floor(Number(b.target_days) + 1e-9);
+    const floor = Math.floor(Number(r.min_days) + 1e-9);
+    cols[4] = [cols[4], `On the Tracker date the cover before landing is ${floor} d: below Min ${target} by ${target - floor} d.`].filter(Boolean).join("\n");
+  }
+  return cols;
+}
 // Family tabs, last two columns (owner 2026-11-18): for every stock / CSN / projection row, each level's Min → Max (cover before → after landing) on the
 // Tracker date and on the Suggested date, and the excess left in each level. All numbers are the engine's own; nothing is estimated here.
 const LEVEL_HEAD = ["Level Min → Max   (Tracker date | Suggested date)", "Excess by level   (Tracker | Suggested)"];
 const levelDays = (v, beyond, u = "") => (v !== null && v !== undefined ? String(Math.floor(Number(v) + 1e-9)) : beyond ? `${beyond.days} d to plan end + ${qty(beyond.left)} ${u} spare`.replace("  ", " ") : "—");
+const belowMinNote = (before, sct) => {
+  if (before === null || before === undefined || sct.target_days === null || sct.target_days === undefined) return "";
+  const gap = Math.floor(Number(sct.target_days) + 1e-9) - Math.floor(Number(before) + 1e-9);
+  return gap > 0 ? `  ⚠ below Min ${Math.floor(Number(sct.target_days) + 1e-9)} by ${gap} d` : "";
+};
 function levelColumns(b, match, isToday = false) {
   const minMax = []; const excess = [];
   for (const sct of b.level_sections ?? []) {
@@ -278,7 +283,7 @@ function levelColumns(b, match, isToday = false) {
     for (const r of rows) {
       const mm = isToday
         ? `${sct.label}: ${levelDays(sct.today_cover)} d cover today`
-        : `${sct.label}: ${levelDays(r.min_a_before, r.min_a_before_x, b.uom ?? "")} → ${levelDays(r.max_a, r.max_a_x, b.uom ?? "")}  |  ${levelDays(r.min_b_before, r.min_b_before_x, b.uom ?? "")} → ${levelDays(r.max_b, r.max_b_x, b.uom ?? "")}`;
+        : `${sct.label}: ${levelDays(r.min_a_before, r.min_a_before_x, b.uom ?? "")} → ${levelDays(r.max_a, r.max_a_x, b.uom ?? "")}${belowMinNote(r.min_a_before, sct)}  |  ${levelDays(r.min_b_before, r.min_b_before_x, b.uom ?? "")} → ${levelDays(r.max_b, r.max_b_x, b.uom ?? "")}${belowMinNote(r.min_b_before, sct)}`;
       const ex = isToday ? `${sct.label}: ${qty(r.excess)}` : `${sct.label}: ${qty(r.excess_a)}  |  ${qty(r.excess)}`;
       if (!minMax.includes(mm)) minMax.push(mm);
       if (!excess.includes(ex)) excess.push(ex);
@@ -326,12 +331,17 @@ function writeBlocks(sheet, companies, kind, { filter = () => true, sections = f
     if (sections) writeFamilyToday(sheet, b);
     styleHeader(sheet.addRow(sections ? [...BLOCK_HEAD, ...LEVEL_HEAD] : BLOCK_HEAD));
     const asOfDay = (b.rows ?? [])[0]?.day ?? "";
-    for (const r of b.rows) {
+    // Owner 2026-11-18: the stock / CSN table holds stock and CSNs only. No new lot (suggested or projected) is put in it: the day table stops at the last
+    // recorded order, and new orders live in their own Projection table below.
+    let lastRecordedIndex = 0;
+    (b.rows ?? []).forEach((r, index) => { if ((r.references ?? []).length > 0) lastRecordedIndex = index; });
+    const dayRows = (b.rows ?? []).filter((r, index) => index <= lastRecordedIndex && (index === 0 || (r.references ?? []).length > 0 || (r.dispatch !== null && r.dispatch !== undefined && Number(r.dispatch) !== 0)));
+    for (const r of dayRows) {
       const row = sheet.addRow([
         day(r.day), num(r.opening), num(r.arrivals) || null, num(r.dispatch), num(r.use), num(r.closing), num(r.excess), coverCell(r.max_days, r.max_days_est, r.closing, b.plan_end), num(r.min_stock), coverCell(r.min_days, r.min_days_est, r.min_stock, b.plan_end),
-        [...r.references, ...suggestedText(r, b.uom)].join("\n"), [...r.qtys, ...suggestedQty(r, b.uom)].join("\n"), [...r.suppliers, ...suggestedText(r, b.uom).map(() => "—")].join("\n"),
-        [...r.statuses.map((s) => STATUS_LABEL[s] ?? s), ...suggestedText(r, b.uom).map(() => "Suggested")].join("\n"),
-        ...bestColumns(r),
+        r.references.join("\n"), r.qtys.join("\n"), r.suppliers.join("\n"),
+        r.statuses.map((s) => STATUS_LABEL[s] ?? s).join("\n"),
+        ...belowMinWhy(b, r, sections),
         (r.rec_cells ?? []).map((rec) => recordedText(rec, null)).filter((t) => t !== "—").join("\n"),
         ...(sections ? levelColumns(b, (x) => x.kind === "Existing order" && x.existing_eta && (String(x.existing_eta).slice(0, 10) === r.day || (String(x.existing_eta).slice(0, 10) < asOfDay && r.day === asOfDay)), r.day === asOfDay && !(r.references ?? []).length) : []),
       ]);
@@ -340,27 +350,46 @@ function writeBlocks(sheet, companies, kind, { filter = () => true, sections = f
       if (b.critical_days !== null && r.min_days !== null && r.min_days < b.critical_days) row.getCell(10).font = { bold: true, color: { argb: RED } };
       else if (b.target_days !== null && r.min_days !== null && r.min_days < b.target_days) row.getCell(10).font = { bold: true, color: { argb: AMBER } };
     }
-    if (b.prediction.length) {
-      const p = sheet.addRow(["Prediction"]);
-      p.getCell(1).font = { bold: true, italic: true };
-      styleHeader(sheet.addRow(sections ? [...PRED_HEAD, "", ...LEVEL_HEAD] : PRED_HEAD));
-      for (const x of b.prediction) {
-        const row = sheet.addRow([
-          x.source === "YOU" ? "Planner" : "Suggested", day(x.import_etd), day(x.port_eta), day(x.date), num(x.qty), coverCell(x.max_days, x.max_days_est, 0, b.plan_end), coverCell(x.min_days, x.min_days_est, 0, b.plan_end), x.material, x.supplier ?? "", day(x.po_by),
-          x.uom ?? "", days(x.trigger_cover_days), days(x.trigger_min_days), triggeredBy(x), [minGapText(x.min_gap), minDipText(x.min_dip)].filter(Boolean).join("\n"), "", "", "", alternativesText(x.alternatives),
-          ...(sections ? ["", ...levelColumns(b, (y) => y.kind === "Projection" && y.material === x.material && (String(y.existing_eta ?? "").slice(0, 10) === day(x.date) || String(y.engine_eta ?? "").slice(0, 10) === day(x.date)))] : []),
-        ]);
-        row.eachCell((cell, i) => { cell.border = BORDER; if (i >= 5 && i <= 7) cell.numFmt = NUM; });
-        row.getCell(14).alignment = { wrapText: true, vertical: "top" };
-        row.getCell(15).alignment = { wrapText: true, vertical: "top" };
-        row.getCell(19).alignment = { wrapText: true, vertical: "top" };
-        if (sections) { row.getCell(21).alignment = { wrapText: true, vertical: "top" }; row.getCell(22).alignment = { wrapText: true, vertical: "top" }; }
+    // Owner 2026-11-18: the existing Prediction table is the projection table (not mixed into the stock / CSN table). It shows the next new orders IF the
+    // not-yet-shipped orders move to their Suggested dates. The engine gives no single family Max / Min for that plan, so those two columns show each level's
+    // Min → Max and excess instead (never blank). Trigger columns come from the same lot in the Tracker-date plan when it exists there.
+    const suggestedLots = Array.isArray(b.projection_total) ? b.projection_total.filter((p) => p.engine_eta).sort((x, y) => String(x.engine_eta).localeCompare(String(y.engine_eta))) : null;
+    if (suggestedLots ? suggestedLots.length : b.prediction.length) {
+      const cap = sheet.addRow([suggestedLots ? "Prediction — the next new orders if the orders move to their Suggested dates" : "Prediction"]);
+      cap.getCell(1).font = { bold: true, italic: true };
+      const head = [...PRED_HEAD];
+      if (suggestedLots) head.push("Family worst Min (Suggested date)");
+      if (suggestedLots) { head[5] = "Level Min → Max (Suggested date)"; head[6] = "Excess by level (Suggested)"; }
+      styleHeader(sheet.addRow(head));
+      const shown = suggestedLots ?? b.prediction;
+      for (const x of shown) {
+        let cells;
+        if (suggestedLots) {
+          const same = (b.prediction ?? []).find((y) => y.material === x.material && day(y.date) === day(x.recorded_eta));
+          let worst = null;
+          const minMax = []; const excess = [];
+          for (const sct of b.level_sections ?? []) {
+            for (const r of (sct.rows ?? []).filter((q) => q.kind === "Projection" && q.material === x.material && String(q.engine_eta ?? "").slice(0, 10) === String(x.engine_eta).slice(0, 10))) {
+              minMax.push(`${sct.label}: ${levelDays(r.min_b_before, r.min_b_before_x, b.uom ?? "")} → ${levelDays(r.max_b, r.max_b_x, b.uom ?? "")}${belowMinNote(r.min_b_before, sct)}`);
+              excess.push(`${sct.label}: ${qty(r.excess)}`);
+              if (r.min_b_before !== null && r.min_b_before !== undefined && (worst === null || Number(r.min_b_before) < worst.value)) worst = { value: Number(r.min_b_before), label: sct.label };
+            }
+          }
+          cells = ["Suggested", day(x.etd), day(x.port), day(x.engine_eta), num(x.qty), [...new Set(minMax)].join("\n") || "—", [...new Set(excess)].join("\n") || "—", x.material, x.supplier ?? "", day(x.po_by),
+            same?.uom ?? b.uom ?? "", same ? days(same.trigger_cover_days) : "", same ? days(same.trigger_min_days) : "", same ? triggeredBy(same) : "", same ? [minGapText(same.min_gap), minDipText(same.min_dip)].filter(Boolean).join("\n") : "", "", "", "", x.alternatives || "—", worst ? `${Math.floor(worst.value + 1e-9)} d (${worst.label})` : "—"];
+        } else {
+          cells = [x.source === "YOU" ? "Planner" : "Suggested", day(x.import_etd), day(x.port_eta), day(x.date), num(x.qty), coverCell(x.max_days, x.max_days_est, 0, b.plan_end), coverCell(x.min_days, x.min_days_est, 0, b.plan_end), x.material, x.supplier ?? "", day(x.po_by),
+            x.uom ?? "", days(x.trigger_cover_days), days(x.trigger_min_days), triggeredBy(x), [minGapText(x.min_gap), minDipText(x.min_dip)].filter(Boolean).join("\n"), "", "", "", alternativesText(x.alternatives)];
+        }
+        const row = sheet.addRow(cells);
+        row.eachCell((cell, i) => { cell.border = BORDER; if (i === 5 || (!suggestedLots && (i === 6 || i === 7))) cell.numFmt = NUM; });
+        for (const c of suggestedLots ? [6, 7, 14, 15, 19, 20] : [14, 15, 19]) row.getCell(c).alignment = { wrapText: true, vertical: "top" };
       }
     }
     sheet.addRow([]);
     sheet.addRow([]);
   }
-  widths(sheet, sections ? [16, 26, 24, 18, 13, 13, 38, 13, 13, 13, 42, 42, 13, 9, 10, 10, 10, 10, 14, 14, 56, 34] : [16, 26, 24, 18, 13, 13, 38, 13, 13, 13, 42, 42, 13, 9, 10, 10, 10, 10, 14, 14, 44, 40]);
+  widths(sheet, sections ? [16, 26, 24, 18, 13, 13, 38, 13, 13, 13, 42, 42, 13, 9, 10, 10, 10, 10, 14, 26, 56, 34] : [16, 26, 24, 18, 13, 13, 38, 13, 13, 13, 42, 42, 13, 9, 10, 10, 10, 10, 14, 14, 44, 40]);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
