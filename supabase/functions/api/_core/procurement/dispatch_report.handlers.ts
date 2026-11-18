@@ -292,6 +292,18 @@ export async function getDispatchReportHandler(
       .select("id, company_name").in("id", chunk));
     const parentById = new Map(parents.map((row) => [textValue(row.id), textValue(row.company_name)]));
 
+    // STO invoices have no Sales Order line, so FG Type would be blank and any
+    // FG Type chip on Page 1 would silently drop every STO row. An FG STO is
+    // always an MTS FG SKU of the sending company (same list sto.handlers.ts
+    // uses to allow FG STO lines), so label those lines MTS.
+    let mtsSkuIds = new Set<string>();
+    if (invoices.some((row) => textValue(row.sto_id))) {
+      const { data: mtsSkuRows, error: mtsSkuError } = await serviceRoleClient
+        .schema("erp_planning").rpc("mts_company_skus", { p_company_id: companyId });
+      if (mtsSkuError) throw new Error("DISPATCH_REPORT_MTS_SKU_LOOKUP_FAILED");
+      mtsSkuIds = new Set(((mtsSkuRows ?? []) as JsonRecord[]).map((row) => textValue(row.sku_material_id)).filter(Boolean));
+    }
+
     const invoiceById = new Map(invoices.map((row) => [textValue(row.id), row]));
     const groups = new Map<string, JsonRecord[]>();
     for (const line of invoiceLines) {
@@ -378,7 +390,8 @@ export async function getDispatchReportHandler(
         vendor_code: joined(lineDetails.map((entry) => vendorCodeById.get(textValue(entry.so.vendor_code_id)))),
         month_year: monthYear(tallyDate),
         type: joined(lineDetails.map((entry) => entry.soLine.line_material_type || material.material_type)),
-        fg_type: joined(lineDetails.map((entry) => entry.soLine.fg_type)),
+        fg_type: joined(lineDetails.map((entry) => entry.soLine.fg_type
+          || (textValue(invoice.sto_id) && mtsSkuIds.has(materialId) ? "MTS" : ""))),
         dispatch_type: joined(lineDetails.map((entry) => entry.so.dispatch_type || (invoice.sto_id ? "STO" : ""))),
         dispatch_category: joined(lineDetails.map((entry) => entry.so.dispatch_category)),
         external_so_number: joined(lineDetails.map((entry) => entry.so.customer_po_number)),
