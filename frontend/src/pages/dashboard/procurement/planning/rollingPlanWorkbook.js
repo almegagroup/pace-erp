@@ -350,27 +350,8 @@ function writeBlocks(sheet, companies, kind, { filter = () => true, sections = f
       if (b.critical_days !== null && r.min_days !== null && r.min_days < b.critical_days) row.getCell(10).font = { bold: true, color: { argb: RED } };
       else if (b.target_days !== null && r.min_days !== null && r.min_days < b.target_days) row.getCell(10).font = { bold: true, color: { argb: AMBER } };
     }
-    // Owner 2026-11-18: the Projection table is separate from the stock / CSN table. It shows the next new orders IF the not-yet-shipped orders move to their
-    // Suggested dates (the engine's Suggested-date plan), each with every level's Min → Max on that date and the excess left in each level.
-    const suggestedLots = Array.isArray(b.projection_total) ? b.projection_total.filter((p) => p.engine_eta).sort((x, y) => String(x.engine_eta).localeCompare(String(y.engine_eta))) : null;
-    if (suggestedLots) {
-      if (suggestedLots.length) {
-        const cap = sheet.addRow(["Projection — the next new orders if the orders move to their Suggested dates"]);
-        cap.getCell(1).font = { bold: true, italic: true };
-        styleHeader(sheet.addRow(["Order by", "Import ETD", "Port ETA", "Plant date (Suggested)", "Quantity", "Material", "Supplier", "Other route (can it still connect?)", "Level Min → Max (Suggested date)", "Excess by level (Suggested)"]));
-        for (const p of suggestedLots) {
-          const minMax = []; const excess = [];
-          for (const sct of b.level_sections ?? []) {
-            for (const r of (sct.rows ?? []).filter((x) => x.kind === "Projection" && x.material === p.material && String(x.engine_eta ?? "").slice(0, 10) === String(p.engine_eta).slice(0, 10))) {
-              minMax.push(`${sct.label}: ${levelDays(r.min_b_before, r.min_b_before_x, b.uom ?? "")} → ${levelDays(r.max_b, r.max_b_x, b.uom ?? "")}${belowMinNote(r.min_b_before, sct)}`);
-              excess.push(`${sct.label}: ${qty(r.excess)}`);
-            }
-          }
-          const row = sheet.addRow([day(p.po_by), day(p.etd), day(p.port), day(p.engine_eta), num(p.qty), p.material, p.supplier ?? "", p.alternatives || "—", [...new Set(minMax)].join("\n"), [...new Set(excess)].join("\n")]);
-          row.eachCell((cell, i) => { cell.border = BORDER; cell.alignment = { vertical: "top", wrapText: true }; if (i === 5) cell.numFmt = NUM; });
-        }
-      }
-    } else if (b.prediction.length) {
+    // Owner 2026-11-18: the existing Prediction table is the projection table; it is kept as it was (no level columns, nothing mixed into the stock / CSN table).
+    if (b.prediction.length) {
 
       const p = sheet.addRow(["Prediction"]);
       p.getCell(1).font = { bold: true, italic: true };

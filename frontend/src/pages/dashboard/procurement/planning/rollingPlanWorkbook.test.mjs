@@ -286,7 +286,7 @@ test("a CSN is never named without its PO in the day table, and the held-CSN tab
   await wb.xlsx.writeBuffer();
 });
 
-test("family tabs: the stock / CSN table has two level columns (Tracker | Suggested, with 'below Min by N d'); the Projection table is separate and uses Suggested dates only", async () => {
+test("family tabs: the stock / CSN table has two level columns (Tracker | Suggested, with 'below Min by N d'); the Prediction table stays separate and unchanged", async () => {
   const base = company("a", "Almeha Coatings");
   const rows = [
     { day: "2026-10-21", opening: 1000, arrivals: 0, dispatch: null, use: 100, closing: 900, max_days: 9, min_stock: 900, min_days: 9, references: [], qtys: [], suppliers: [], statuses: [], best_dates: [] },
@@ -311,9 +311,7 @@ test("family tabs: the stock / CSN table has two level columns (Tracker | Sugges
   assert.ok(mm.includes("18 → 35  ⚠ below Min 20 by 2 d  |  20 → 35") && mm.includes("RDP — RDP: 26 → 43  |  28 → 45"), "each level's Min → Max on both dates, and how far below Min");
   assert.ok(cells.some((c) => c.includes("Exclusive — VAE A: 0  |  2,269") && c.includes("RDP — RDP: 100  |  0")), "excess by level");
   assert.ok(!cells.includes("2026-11-20") && !cells.some((c) => c.includes("counted in projection") || c.includes("suggested, not counted")), "no new lot or suggestion inside the stock / CSN table");
-  assert.ok(cells.some((c) => c.startsWith("Projection — the next new orders if the orders move to their Suggested dates")), "separate Projection table");
-  assert.ok(cells.includes("Plant date (Suggested)") && cells.includes("2026-12-27") && !cells.includes("2027-02-01"), "only the lot that exists on Suggested dates, at its Suggested date");
-  assert.ok(cells.some((c) => c.includes("Exclusive — VAE A: 19 → 40 d to plan end + 1,500 KG spare")), "projection Min → Max; beyond plan is never blank");
-  assert.ok(cells.some((c) => c.includes("LOCAL · VAE A")), "other route");
+  assert.ok(cells.includes("Prediction") && cells.includes("Family Max Days") && cells.includes("Family Min Days"), "the existing Prediction table is still there");
+  assert.ok(!cells.some((c) => c.startsWith("Projection — the next new orders")), "no second projection table");
   await wb.xlsx.writeBuffer();
 });

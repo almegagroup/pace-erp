@@ -632,7 +632,7 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         : `chosen by the system: ${refillChoice.scores.map((x) => `${refillLabel[x.method]} → ${x.days_below_min} level-days below Min, buys ${Math.round(x.buy_qty).toLocaleString("en-US")}`).join(" · ")}`;
       blocks.push({
         kind, together_note: togetherNote,
-        refill_method: refillChoice ? refillLabel[refillChoice.method] : null, refill_method_why: refillWhy, ...(family.is_family ? (sections ?? {}) : sections ? { level_sections: sections.level_sections, projection_total: sections.projection_total } : {}),
+        refill_method: refillChoice ? refillLabel[refillChoice.method] : null, refill_method_why: refillWhy, ...(family.is_family ? (sections ?? {}) : {}),
         waterfall: buildWaterfallView({
           projection, asOf: calendar.asOf, memberSet, groupSet,
           groupLabel: (g) => groupLabel.get(g) ?? "—",
