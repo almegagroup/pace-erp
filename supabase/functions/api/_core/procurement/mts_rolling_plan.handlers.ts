@@ -21,6 +21,7 @@ import { groupCoveredBy, isTransferFed } from "./mts_requirement.logic.ts";
 import { loadBulkMaterialIds } from "./mts_bulk_materials.ts";
 import { memberMattersForGaps } from "./mts_planning.logic.ts";
 import { fail, handleError, type ReqHandlerContext, requireRequirementViewAccess, todayInIndia } from "./mts_requirement.handlers.ts";
+import { addDaysToIso, carryCover, levelRecordUpTo } from "./mts_level_cover.logic.ts";
 import { buildWaterfallView } from "./mts_waterfall_view.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -275,16 +276,18 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
         return { cover: l.cover_days, min: l.min_days, max: l.max_days, minD: whole(l.cover_days), maxD: whole(l.max_cover_days !== null && l.max_days !== null ? Math.min(l.max_cover_days, l.max_days) : l.max_cover_days), beyond: l.max_cover_days === null, reserve: q(l.reserve_qty), excess: q(ownPool.reduce((sum, p) => sum + p.qty, 0)), excess_split: ownPool.map((p) => `${nameOf(p.material_id)}: ${dq(p.material_id, p.qty)} ${uomOf(p.material_id) ?? ""}`.trim()).join("\n") };
       };
       // Owner 2026-11-07: the cover on the evening BEFORE the landing day, so the sheet can show 'before → after' for one order.
-      const dayBefore = (days: typeof fam.days_a, key: string, date: string | null) => {
-        if (!date) return null;
-        // level_days holds only the days something happens: take the latest day strictly before this one.
-        const prior = days.filter((x) => x.day < date && x.levels.some((l) => l.level_key === key)).map((x) => x.day).sort().pop();
-        const cover = prior ? stateAt(days, key, prior)?.minD ?? null : null;
-        if (!prior || cover === null) return null;
-        // No event between: the cover only shrinks one day per day, so the evening before this day = cover at the prior event day minus the quiet days in between.
-        const gap = Math.round((Date.parse(`${date}T00:00:00Z`) - Date.parse(`${prior}T00:00:00Z`)) / 86_400_000) - 1;
-        return Math.max(0, cover - Math.max(0, gap));
+      // Owner 2026-11-18: a level has a day record only on days something happens to IT; on any other date its state is the latest
+      // earlier record carried over the quiet days (cover shrinks one day per day, the free stock stays), so no cell is left blank.
+      const stateNear = (days: typeof fam.days_a, key: string, date: string | null) => {
+        const exact = stateAt(days, key, date);
+        if (exact || !date) return exact;
+        const hit = levelRecordUpTo(days, key, date);
+        const base = hit ? stateAt(days, key, hit.record.day) : null;
+        if (!hit || !base) return null;
+        return { ...base, cover: base.cover === null ? null : Math.max(0, base.cover - hit.gap), minD: carryCover(base.minD, hit.gap), maxD: carryCover(base.maxD, hit.gap) };
       };
+      // The cover on the evening BEFORE the landing day = the state on the day before.
+      const dayBefore = (days: typeof fam.days_a, key: string, date: string | null) => (date ? stateNear(days, key, addDaysToIso(date, -1))?.minD ?? null : null);
       const statusOf = (st: ReturnType<typeof stateAt>, without: boolean) => {
         if (!st || st.cover === null || st.min === null) return "";
         const suffix = without ? ", even without this order" : "";
@@ -323,8 +326,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           const arr = arrivalByRefMat.get(`${a.reference}|${a.material_id}`);
           const cells = ev?.reschedule_key ? bestCells(ev.reschedule_key, a.recorded ?? null, fu as never, uomOf(a.material_id) ?? "KG") : { etd: "", port: "", plant: "", why: "", absent: "", action: "" };
           // Owner 2026-11-12: an existing order's Min / Max count only today's stock and the existing orders (no suggested lot); a suggested lot that lands before it is mentioned, not counted.
-          const stA = stateAt(fam.days_a_pure, lv.level_key, a.recorded);
-          const stB = stateAt(fam.days_b_pure, lv.level_key, a.advised);
+          const stA = stateNear(fam.days_a_pure, lv.level_key, a.recorded);
+          const stB = stateNear(fam.days_b_pure, lv.level_key, a.advised);
           const lotsBefore = (lots: ReadonlyArray<{ day: string; material_id: string; qty_base: number }>, date: string | null) => (date ? lots.filter((l) => l.day >= calendar.asOf && l.day <= date && lv.members.includes(l.material_id)).map((l) => ({ day: l.day, material: nameOf(l.material_id), qty: q(l.qty_base) })) : []);
           const toLevel = allocOf(fam.alloc_b, a.source_key, lv.level_kind, lv.level_id);
           rows.push({
@@ -346,8 +349,8 @@ export async function getMtsRollingPlanHandler(req: Request, ctx: ReqHandlerCont
           const buy = buyOf(ref) ?? advisory.find((x) => x.material_id === lot.material_id);
           const dayA = a?.day ?? null;
           const dayB = b?.day ?? null;
-          const stA = stateAt(fam.days_a, lv.level_key, dayA ?? dayB);
-          const stB = stateAt(fam.days_b, lv.level_key, dayB ?? dayA);
+          const stA = stateNear(fam.days_a, lv.level_key, dayA ?? dayB);
+          const stB = stateNear(fam.days_b, lv.level_key, dayB ?? dayA);
           const toLevel = b ? allocOf(fam.alloc_b, ref, lv.level_kind, lv.level_id) : allocOf(fam.alloc_a, ref, lv.level_kind, lv.level_id);
           const lg = legs(lot.material_id, buy?.vendor_id, dayB ?? dayA);
           const flag = a && b ? (dayA === dayB ? "both" : "both, dates differ") : a ? "recorded dates only" : "engine dates only";

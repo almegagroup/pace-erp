@@ -195,7 +195,7 @@ test("Group tabs: MHEC and RDP families sit on their own tabs; Today, level by l
   assert.ok(cells.some((t) => t.includes("Port 2026-11-23 (ATA, due)") && t.includes("ETD 2026-10-19 (ATD)") && !t.includes("(ATD, due)")), "a port date still ahead of today says due; a past ETD does not");
   assert.ok(cells.some((t) => t.includes("Port 2026-10-10 (ATA)") && !t.includes("2026-10-10 (ATA, due)")), "a past actual date is plain");
   const head = []; sheet.eachRow((row) => { if (String(row.getCell(1).value) === "Tracker date") head.push(row.values.slice(1).map(String)); });
-  assert.deepEqual(head[0], ["Tracker date", "Order", "Lot qty", "Taken by this level", "Cover before (d)", "Cover after (d)", "Excess after (this level's items)", "Suggested date", "Suggested: cover before → after (d)", "Suggested: excess after", "Why this date"], "level table columns");
+  assert.deepEqual(head[0], ["Tracker date", "Order", "Lot qty", "Taken by this level (Suggested plan)", "Cover before (d)", "Cover after (d)", "Excess after (this level's items)", "Suggested date", "Suggested: cover before → after (d)", "Suggested: excess after", "Why this date"], "level table columns");
   assert.ok(!cells.some((t) => /recorded|Recorded|\bEngine date\b|If another order|ONE plan for the whole sheet|NEW lot not counted|POOL DIARY|How to read|Refill method/.test(t) && !t.startsWith("NEW (engine)")), "old wording is gone");
   const amber = []; sheet.eachRow((row) => { const c = row.getCell(8); if (c.fill?.fgColor?.argb === "FFFFF2CC") amber.push(c.address); });
   assert.ok(amber.length >= 1, "a Suggested date that differs from the Tracker date is amber");

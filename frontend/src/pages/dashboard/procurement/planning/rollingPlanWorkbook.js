@@ -299,11 +299,11 @@ function writeLeanFamily(sheet, b, company) {
 
   // ── 1. TODAY — what each level holds
   title("1. TODAY — what each level holds", { size: 12, fillArgb: L_BLUE });
-  span([["Level (narrow first)", 2], ["Min · Max · Critical (days)", 2], ["Stock"], [`Use / day (${u})`], ["Cover today (days)"], ["Note", 4]], { bold: true, fillArgb: L_GREY });
+  span([["Level (narrow first)", 2], ["Min · Max · Critical (days)", 2], ["Held by this level"], [`Use / day (${u})`], ["Cover today (days)"], ["Note", 4]], { bold: true, fillArgb: L_GREY });
   for (const sct of sections) {
     const todayRow = (sct.rows ?? []).find((r) => r.kind === "Stock today");
     const low = sct.today_cover !== null && sct.today_cover !== undefined && sct.target_days !== null && sct.target_days !== undefined && Number(sct.today_cover) < Number(sct.target_days);
-    const out = span([[`${sct.label}\n${(sct.members ?? []).join(" + ")}`, 2], [policyOf(sct), 2], [qty(todayRow?.lot_qty)], [qty(todayRow?.prorata_b)], [wd(sct.today_cover)], [low ? belowMinToday(sct).trim() : "", 4]]);
+    const out = span([[`${sct.label}\n${(sct.members ?? []).join(" + ")}`, 2], [policyOf(sct), 2], [qty(sct.reserve_now ?? todayRow?.lot_qty)], [qty(todayRow?.prorata_b)], [wd(sct.today_cover)], [low ? belowMinToday(sct).trim() : "", 4]]);
     if (low) { out.getCell(7).font = { bold: true, color: { argb: RED } }; out.getCell(8).font = { color: { argb: RED } }; }
   }
   span([["EXCESS POOL\n(no level needs it yet)", 2], [matLines(b.excess_after), 2], ["", 7]], { bold: true, fillArgb: L_GREEN });
@@ -336,9 +336,9 @@ function writeLeanFamily(sheet, b, company) {
   title("2. LEVEL BY LEVEL — every order on its Tracker date (CSN Tracker: ATD / ATA when they exist, else ETD / ETA), the Suggested date beside it", { size: 12, fillArgb: L_BLUE });
   for (const sct of sections) {
     title(`${sct.label} — ${policyOf(sct)} · ${(sct.members ?? []).join(" + ")}`, { size: 11, fillArgb: L_GREY });
-    row(["Tracker date", "Order", "Lot qty", "Taken by this level", "Cover before (d)", "Cover after (d)", "Excess after (this level's items)", "Suggested date", "Suggested: cover before → after (d)", "Suggested: excess after", "Why this date"], { bold: true, fillArgb: L_GREY });
+    row(["Tracker date", "Order", "Lot qty", "Taken by this level (Suggested plan)", "Cover before (d)", "Cover after (d)", "Excess after (this level's items)", "Suggested date", "Suggested: cover before → after (d)", "Suggested: excess after", "Why this date"], { bold: true, fillArgb: L_GREY });
     const today = (sct.rows ?? []).find((r) => r.kind === "Stock today");
-    if (today) row([day(todayIso), `Today's stock\n${(sct.members ?? []).join(" + ")}`, qty(today.lot_qty), qty(today.to_level), "", wd(today.min_a), qty(today.excess), "", "", "", ""]);
+    if (today) row([day(todayIso), `Today's stock\n${(sct.members ?? []).join(" + ")}`, qty(today.lot_qty), qty(sct.reserve_now ?? today.to_level), "", wd(today.min_a), qty(today.excess), "", "", "", ""]);
     const existing = (sct.rows ?? []).filter((r) => r.kind === "Existing order")
       .sort((x, y) => String(x.existing_eta ?? x.engine_eta ?? "").localeCompare(String(y.existing_eta ?? y.engine_eta ?? "")) || String(x.engine_eta ?? "").localeCompare(String(y.engine_eta ?? "")));
     for (const r of existing) {
