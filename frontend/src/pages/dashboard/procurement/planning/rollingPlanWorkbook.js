@@ -259,11 +259,9 @@ function writeFamilyToday(sheet, b) {
 const hasQty = (v) => v !== null && v !== undefined && Number(v) > 0;
 // Inside the recorded orders a lot is only a suggestion (not counted); after them the engine's lot is counted (owner 2026-11-16).
 const suggestedText = (r) => [
-  ...(hasQty(r.suggested_lot) ? ["NEW lot (suggested, not counted)"] : []),
   ...(hasQty(r.new_lot) ? ["NEW lot (counted in projection)"] : []),
 ];
 const suggestedQty = (r, uom) => [
-  ...(hasQty(r.suggested_lot) ? [`${qty(r.suggested_lot)} ${uom ?? ""}`.trim()] : []),
   ...(hasQty(r.new_lot) ? [`${qty(r.new_lot)} ${uom ?? ""}`.trim()] : []),
 ];
 // Family tabs, last two columns (owner 2026-11-18): for every stock / CSN / projection row, each level's Min → Max (cover before → after landing) on the
@@ -326,7 +324,10 @@ function writeBlocks(sheet, companies, kind, { filter = () => true, sections = f
     if (sections) writeFamilyToday(sheet, b);
     styleHeader(sheet.addRow(sections ? [...BLOCK_HEAD, ...LEVEL_HEAD] : BLOCK_HEAD));
     const asOfDay = (b.rows ?? [])[0]?.day ?? "";
-    for (const r of b.rows) {
+    // Owner 2026-11-18: inside the recorded orders the report shows NO new-lot suggestion (the engine's advice there is told per order: "TOO LATE: must be
+    // at plant by ..."); a day that exists only because the advice run put a lot on it is left out. New lots are counted only after the last recorded order.
+    const dayRows = b.rows.filter((r, index) => index === 0 || (r.references ?? []).length > 0 || hasQty(r.new_lot) || !hasQty(r.suggested_lot));
+    for (const r of dayRows) {
       const row = sheet.addRow([
         day(r.day), num(r.opening), num(r.arrivals) || null, num(r.dispatch), num(r.use), num(r.closing), num(r.excess), coverCell(r.max_days, r.max_days_est, r.closing, b.plan_end), num(r.min_stock), coverCell(r.min_days, r.min_days_est, r.min_stock, b.plan_end),
         [...r.references, ...suggestedText(r, b.uom)].join("\n"), [...r.qtys, ...suggestedQty(r, b.uom)].join("\n"), [...r.suppliers, ...suggestedText(r, b.uom).map(() => "—")].join("\n"),
