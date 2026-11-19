@@ -28,6 +28,15 @@ FROM erp_menu.menu_master parent, erp_menu.menu_master child
 WHERE parent.menu_code = 'GRP_ACL_SALES' AND child.menu_code = 'PROC_FG_MOVEMENT_REPORT'
   AND NOT EXISTS (SELECT 1 FROM erp_menu.menu_tree t WHERE t.child_menu_id = child.id);
 
+-- Company Modules: a page that is in no module can never be switched off per company (CMP010 has Procurement off and would still
+-- show SO06). Map SO06 to the same module as SO04 so the two always behave alike.
+INSERT INTO acl.module_resource_map (module_code, resource_code, created_by)
+SELECT r.module_code, 'PROC_FG_MOVEMENT_REPORT', NULL
+FROM acl.module_resource_map r
+WHERE r.resource_code = 'PROC_DISPATCH_REPORT'
+  AND NOT EXISTS (SELECT 1 FROM acl.module_resource_map x WHERE x.resource_code = 'PROC_FG_MOVEMENT_REPORT')
+ON CONFLICT DO NOTHING;
+
 INSERT INTO acl.capability_menu_actions (capability_code, menu_id, action, allowed, menu_visible)
 SELECT 'CAP_EVERYONE_REPORTS', m.id, 'VIEW', true, true
 FROM acl.menu_master m
