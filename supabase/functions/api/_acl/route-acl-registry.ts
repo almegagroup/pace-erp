@@ -311,6 +311,10 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/sales-invoices":              { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "VIEW"  },
   "POST:/api/procurement/sales-invoices":             { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "WRITE" },
   "GET:/api/procurement/dispatch-report":             { skipAcl: false, resourceCode: "PROC_DISPATCH_REPORT", action: "VIEW" },
+  // SO06 FG Movement Report -- everyone with a work context; every handler re-checks each requested company against the caller's own.
+  "GET:/api/procurement/fg-movement-report":          { skipAcl: false, resourceCode: "PROC_FG_MOVEMENT_REPORT", action: "VIEW" },
+  "GET:/api/procurement/fg-movement-report/places":   { skipAcl: false, resourceCode: "PROC_FG_MOVEMENT_REPORT", action: "VIEW" },
+  "GET:/api/procurement/fg-movement-report/options":  { skipAcl: false, resourceCode: "PROC_FG_MOVEMENT_REPORT", action: "VIEW" },
   "GET:/api/procurement/batch-costing-report":        { skipAcl: false, resourceCode: "ACC_BATCH_COSTING_REPORT", action: "VIEW" },
   "GET:/api/procurement/reco-data":                   { skipAcl: false, resourceCode: "ACC_RECO_DATA", action: "VIEW" },
   "GET:/api/procurement/manual-costing-rows":         { skipAcl: false, resourceCode: "ACC_MANUAL_COSTING_RATE", action: "VIEW" },

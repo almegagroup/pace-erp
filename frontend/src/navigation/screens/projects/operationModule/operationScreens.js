@@ -728,6 +728,16 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // SO06 -- FG Movement Report (Opening / Production / PID / Dispatch / Closing / In QA / Blocked per FG SKU, by PO21 Mother and
+  // Child group), Sales menu, visible to everyone; every company is checked against the caller's own on the backend.
+  PROC_FG_MOVEMENT_REPORT: {
+    screen_code: "PROC_FG_MOVEMENT_REPORT",
+    route: "/dashboard/procurement/sales/fg-movement-report",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   // §113.15 -- Stage 3 PGI + Invoice creation flow, entered from SO02
   // (PROC_INV_LIST, now the DO/PGI queue) by picking a CREATED DO.
   PROC_INV_PGI_CREATE: {

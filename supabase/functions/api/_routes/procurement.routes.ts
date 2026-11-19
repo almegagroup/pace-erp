@@ -173,6 +173,11 @@ import {
 } from "../_core/procurement/stock_reports.handlers.ts";
 import { getDispatchReportHandler } from "../_core/procurement/dispatch_report.handlers.ts";
 import {
+  getFgMovementOptionsHandler,
+  getFgMovementPlacesHandler,
+  getFgMovementReportHandler,
+} from "../_core/procurement/fg_movement_report.handlers.ts";
+import {
   listManualCostingRowsHandler,
   getManualCostingRowHandler,
   saveManualCostingRatesHandler,
@@ -975,6 +980,12 @@ export async function dispatchProcurementRoutes(
       return await getCurrentStockMachineWiseHandler(req, ctx);
     case "GET:/api/procurement/dispatch-report":
       return await getDispatchReportHandler(req, ctx);
+    case "GET:/api/procurement/fg-movement-report":
+      return await getFgMovementReportHandler(req, ctx);
+    case "GET:/api/procurement/fg-movement-report/places":
+      return await getFgMovementPlacesHandler(req, ctx);
+    case "GET:/api/procurement/fg-movement-report/options":
+      return await getFgMovementOptionsHandler(req, ctx);
     case "GET:/api/procurement/batch-costing-report":
       return await getBatchCostingReportHandler(req, ctx);
     case "GET:/api/procurement/reco-data":
