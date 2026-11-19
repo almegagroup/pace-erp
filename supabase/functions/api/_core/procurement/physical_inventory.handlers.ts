@@ -263,6 +263,7 @@ async function assertPIDocumentCompanyScope(
   try {
     await assertCompanyScope(ctx, companyId);
   } catch {
+    console.error("[PID] PI_SCOPE_VIOLATION (membership)", JSON.stringify({ target_company_id: companyId, session_company_id: ctx.context.companyId, user: ctx.auth_user_id }));
     throw new Error("PI_SCOPE_VIOLATION");
   }
 }
@@ -292,7 +293,10 @@ async function assertPIDCompanyActionAccess(
   await assertPIDocumentCompanyScope(ctx, companyId);
   if (isCompanyScopeAdminBypass(ctx)) return;
   const allowed = await canMaintainCompanyResource(ctx, companyId, resourceCode, action);
-  if (!allowed) throw new Error("PI_SCOPE_VIOLATION");
+  if (!allowed) {
+    console.error("[PID] PI_SCOPE_VIOLATION", JSON.stringify({ target_company_id: companyId, session_company_id: ctx.context.companyId, resourceCode, action, user: ctx.auth_user_id }));
+    throw new Error("PI_SCOPE_VIOLATION");
+  }
 }
 
 async function assertPIDCompanyEditAccess(ctx: ProcurementHandlerContext, companyId: string): Promise<void> {
