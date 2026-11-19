@@ -1828,13 +1828,42 @@ export async function reverseGRNHandler(
       .schema("erp_procurement").from("inward_qa_document")
       .select("id").eq("grn_id", grnId);
     const qaDocIds = (qaDocs ?? []).map((d: { id: string }) => d.id);
+    const qaReleaseReversals: JsonRecord[] = [];
     if (qaDocIds.length > 0) {
-      const { count: decidedCount } = await serviceRoleClient
+      const { data: decisionLines } = await serviceRoleClient
         .schema("erp_procurement").from("inward_qa_decision_line")
-        .select("id", { count: "exact", head: true }).in("qa_document_id", qaDocIds);
-      if ((decidedCount ?? 0) > 0) {
+        .select("usage_decision, stock_ledger_id").in("qa_document_id", qaDocIds);
+      const decisions = (decisionLines ?? []) as JsonRecord[];
+      // Owner rule (2026-11-19): a wrong GRN is wrong even after QA passed it -- undo a RELEASE in the same
+      // transaction (P322 Unrestricted -> QA, then the P102 below). Other decisions (Block/Reject) still need RTV.
+      if (decisions.some((d) => String(d.usage_decision) !== "RELEASE" || !d.stock_ledger_id)) {
         const blocked = GRN_REVERSE_ERRORS["GRN_REVERSE_QA_DECIDED"];
         return procurementErrorResponse(req, ctx, "GRN_REVERSE_QA_DECIDED", blocked.status, blocked.message);
+      }
+      if (decisions.length > 0) {
+        const legIds = decisions.map((d) => String(d.stock_ledger_id));
+        const { data: legs, error: legsError } = await serviceRoleClient
+          .schema("erp_inventory").from("stock_ledger")
+          .select("id, company_id, storage_location_id, material_id, quantity, base_uom_code, valuation_rate, stock_document_id")
+          .in("id", legIds);
+        if (legsError || (legs ?? []).length !== legIds.length) {
+          return procurementErrorResponse(req, ctx, "GRN_RECEIPT_LEG_NOT_FOUND", 500, "The QA release posting could not be found.");
+        }
+        for (const [i, leg] of (legs as JsonRecord[]).entries()) {
+          const revDoc = await generateMaterialDocNumber(String(grn.company_id));
+          const day = todayIsoDate();
+          const base = {
+            document_number: grn.grn_number, document_date: day, posting_date: day, movement_type_code: "P322",
+            company_id: leg.company_id, storage_location_id: leg.storage_location_id, material_id: leg.material_id,
+            quantity: leg.quantity, base_uom_code: leg.base_uom_code, unit_value: leg.valuation_rate ?? 0,
+            material_doc_number: revDoc.docNumber, material_doc_year: revDoc.docYear,
+            reference_document_number: grn.grn_number,
+          };
+          qaReleaseReversals.push(
+            { ...base, line_ref: `QA_RELEASE_REVERSAL:${i}:OUT`, stock_type_code: "UNRESTRICTED", direction: "OUT" },
+            { ...base, line_ref: `QA_RELEASE_REVERSAL:${i}`, stock_type_code: "QUALITY_INSPECTION", direction: "IN" },
+          );
+        }
       }
     }
 
@@ -1855,7 +1884,7 @@ export async function reverseGRNHandler(
         p_reference_document_type: "GRN",
         p_reference_document_id: grnId,
         p_posted_by: ctx.auth_user_id,
-        p_movements: [{
+        p_movements: [...qaReleaseReversals, {
           line_ref: "GRN_REVERSAL",
           document_number: grn.grn_number,
           document_date: today,
