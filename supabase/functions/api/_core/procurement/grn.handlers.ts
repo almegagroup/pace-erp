@@ -1821,6 +1821,23 @@ export async function reverseGRNHandler(
       return procurementErrorResponse(req, ctx, preCheckCode, blocked.status, blocked.message);
     }
 
+    // QA usage decision already moved the stock out of Quality Inspection: say so
+    // up front. Otherwise the P102 below fails first with a misleading "stock short"
+    // (complete_grn_reverse's own QA_DECIDED check only runs after the movement).
+    const { data: qaDocs } = await serviceRoleClient
+      .schema("erp_procurement").from("inward_qa_document")
+      .select("id").eq("grn_id", grnId);
+    const qaDocIds = (qaDocs ?? []).map((d: { id: string }) => d.id);
+    if (qaDocIds.length > 0) {
+      const { count: decidedCount } = await serviceRoleClient
+        .schema("erp_procurement").from("inward_qa_decision_line")
+        .select("id", { count: "exact", head: true }).in("qa_document_id", qaDocIds);
+      if ((decidedCount ?? 0) > 0) {
+        const blocked = GRN_REVERSE_ERRORS["GRN_REVERSE_QA_DECIDED"];
+        return procurementErrorResponse(req, ctx, "GRN_REVERSE_QA_DECIDED", blocked.status, blocked.message);
+      }
+    }
+
     // Reverse exactly what the receipt posted (base qty/UoM, location, stock
     // type, posted rate) rather than re-deriving it from the GRN's PO-UoM fields.
     const { data: receiptLeg, error: legError } = await serviceRoleClient
