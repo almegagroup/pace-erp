@@ -311,6 +311,10 @@ const EXACT_ROUTE_ACL: Record<string, RouteAclMeta> = {
   "GET:/api/procurement/sales-invoices":              { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "VIEW"  },
   "POST:/api/procurement/sales-invoices":             { skipAcl: false, resourceCode: "PROC_INV_LIST",  action: "WRITE" },
   "GET:/api/procurement/dispatch-report":             { skipAcl: false, resourceCode: "PROC_DISPATCH_REPORT", action: "VIEW" },
+  // PO24 PO Status (Procurement menu, whoever holds Procurement access) and PO23 GRN Receiving Report (Receiving menu, everyone);
+  // both handlers re-check every requested company against the caller's own company scope.
+  "GET:/api/procurement/po-status-report":            { skipAcl: false, resourceCode: "PROC_PO_STATUS_REPORT", action: "VIEW" },
+  "GET:/api/procurement/grn-receiving-report":        { skipAcl: false, resourceCode: "PROC_GRN_RECEIVING_REPORT", action: "VIEW" },
   // SO06 FG Movement Report -- everyone with a work context; every handler re-checks each requested company against the caller's own.
   "GET:/api/procurement/fg-movement-report":          { skipAcl: false, resourceCode: "PROC_FG_MOVEMENT_REPORT", action: "VIEW" },
   "GET:/api/procurement/fg-movement-report/places":   { skipAcl: false, resourceCode: "PROC_FG_MOVEMENT_REPORT", action: "VIEW" },

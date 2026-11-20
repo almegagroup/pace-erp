@@ -178,6 +178,10 @@ import {
   getFgMovementReportHandler,
 } from "../_core/procurement/fg_movement_report.handlers.ts";
 import {
+  getGrnReceivingReportHandler,
+  getPoStatusReportHandler,
+} from "../_core/procurement/po_receiving_reports.handlers.ts";
+import {
   listManualCostingRowsHandler,
   getManualCostingRowHandler,
   saveManualCostingRatesHandler,
@@ -980,6 +984,10 @@ export async function dispatchProcurementRoutes(
       return await getCurrentStockMachineWiseHandler(req, ctx);
     case "GET:/api/procurement/dispatch-report":
       return await getDispatchReportHandler(req, ctx);
+    case "GET:/api/procurement/po-status-report":
+      return await getPoStatusReportHandler(req, ctx);
+    case "GET:/api/procurement/grn-receiving-report":
+      return await getGrnReceivingReportHandler(req, ctx);
     case "GET:/api/procurement/fg-movement-report":
       return await getFgMovementReportHandler(req, ctx);
     case "GET:/api/procurement/fg-movement-report/places":
