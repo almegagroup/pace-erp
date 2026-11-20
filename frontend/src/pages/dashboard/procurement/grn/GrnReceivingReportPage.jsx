@@ -3,7 +3,8 @@
  * Domain: PROCUREMENT / Receiving
  * Purpose: PO23 -- GRN Receiving Report. Page 1 selection (company, gate entry date range), Page 2 grid: per gate entry PO line and
  *          per GRN -- vendor, PO, material, PO qty, PO UoM, PO rate, GE qty, GRN qty, QA Blocked qty, balance after that GRN.
- *          Reversed / cancelled GRNs and pruned gate entries never appear. Visible to everyone, company scoped on the server.
+ *          A second tab on Page 2 consolidates the same rows per vendor / PO / material line and month-year. Excel export follows the
+ *          tab in view. Reversed / cancelled GRNs and pruned gate entries never appear. Visible to everyone, company scoped on the server.
  * Authority: Frontend
  */
 import { useEffect, useMemo, useState } from "react";
@@ -37,6 +38,7 @@ export default function GrnReceivingReportPage() {
   const [error, setError] = useState("");
   const [page, setPage] = useState(1);
   const [exporting, setExporting] = useState(false);
+  const [view, setView] = useState("detail");
 
   const reportQ = useQuery({
     queryKey: ["grn-receiving-report", submitted],
@@ -92,13 +94,65 @@ export default function GrnReceivingReportPage() {
     ];
   }, []);
 
+  // Consolidated view: one row per vendor / PO line / month-year (month of the GRN; a gate entry with no GRN yet counts in its gate entry month).
+  const monthOf = (r) => String(r.grn_date || r.ge_date || "").slice(0, 7);
+  const consolidatedRows = useMemo(() => {
+    const groups = new Map();
+    for (const r of rows) {
+      const month = monthOf(r);
+      const key = [r.vendor_code, r.po_id, r.line_number, month].join("|");
+      let g = groups.get(key);
+      if (!g) {
+        g = { row_key: key, company_code: r.company_code, vendor_code: r.vendor_code, vendor_name: r.vendor_name, po_number: r.po_number,
+          line_number: r.line_number, pace_code: r.pace_code, material_name: r.material_name, po_uom: r.po_uom, po_qty: r.po_qty,
+          po_rate: r.po_rate, month, ges: new Set(), grns: new Set(), grn_qty: 0, blocked_qty: 0, balance_after: null, last: "" };
+        groups.set(key, g);
+      }
+      g.ges.add(r.ge_id);
+      if (r.grn_id) {
+        g.grns.add(r.grn_id);
+        g.grn_qty += Number(r.grn_qty ?? 0);
+        g.blocked_qty += Number(r.blocked_qty ?? 0);
+        const order = `${r.grn_date}|${r.grn_number}`;
+        if (order >= g.last) { g.last = order; g.balance_after = r.balance_after; }
+      }
+    }
+    return [...groups.values()]
+      .map((g) => ({ ...g, ge_count: g.ges.size, grn_count: g.grns.size }))
+      .sort((a, b) => String(a.vendor_name ?? "").localeCompare(String(b.vendor_name ?? "")) || String(a.po_number).localeCompare(String(b.po_number))
+        || a.line_number - b.line_number || a.month.localeCompare(b.month));
+  }, [rows]);
+  const consolidatedColumns = useMemo(() => {
+    const text = (key, label, width, getter) => ({ key, label, width, render: getter, filterValue: getter, excelValue: getter });
+    const num = (key, label, getter, width = "100px") => ({
+      key, label, width, align: "right",
+      render: (r) => qty(getter(r)), filterValue: (r) => qty(getter(r)), excelValue: (r) => (getter(r) === null || getter(r) === undefined ? "" : Number(getter(r))), numFmt: "#,##0.###",
+    });
+    return [
+      text("company_code", "Company", "80px", (r) => r.company_code ?? ""),
+      text("vendor", "Vendor", "190px", (r) => [r.vendor_code, r.vendor_name].filter(Boolean).join(" — ")),
+      text("po_number", "PO", "110px", (r) => `${r.po_number ?? ""}${r.line_number ? ` / ${r.line_number}` : ""}`),
+      text("material", "Material", "250px", (r) => [r.pace_code, r.material_name].filter(Boolean).join(" — ")),
+      text("month", "Month-Year", "100px", (r) => r.month ?? ""),
+      num("po_qty", "PO Qty", (r) => r.po_qty),
+      text("po_uom", "PO UoM", "70px", (r) => r.po_uom ?? ""),
+      num("po_rate", "PO Rate", (r) => r.po_rate, "90px"),
+      num("ge_count", "Gate Entries", (r) => r.ge_count, "90px"),
+      num("grn_count", "GRNs", (r) => r.grn_count, "80px"),
+      num("grn_qty", "GRN Qty", (r) => r.grn_qty),
+      num("blocked_qty", "QA Blocked", (r) => r.blocked_qty),
+      num("balance_after", "Balance at month end", (r) => r.balance_after, "120px"),
+    ];
+  }, []);
+
   async function exportExcel() {
     setExporting(true);
     try {
       const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
       await downloadColoredExcelFile({
-        fileName: `grn_receiving_${dateFrom}_${dateTo}.xlsx`, sheetName: "GRN Receiving",
-        columns, rows,
+        fileName: `grn_receiving_${view === "detail" ? "" : "consolidated_"}${dateFrom}_${dateTo}.xlsx`,
+        sheetName: view === "detail" ? "GRN Receiving" : "Consolidated",
+        columns: view === "detail" ? columns : consolidatedColumns, rows: view === "detail" ? rows : consolidatedRows,
         getCellValue: (row, column) => (typeof column.excelValue === "function" ? column.excelValue(row) : (row?.[column.key] ?? "")),
       });
     } catch (e) {
@@ -152,13 +206,28 @@ export default function GrnReceivingReportPage() {
         </ErpSectionCard>
       ) : (
         <ErpSectionCard eyebrow="Page 2" title={`GRN Receiving (${submitted?.date_from} to ${submitted?.date_to})`}>
-          <div className="mb-2 text-right text-xs text-slate-500">{reportQ.isLoading ? "Loading..." : `${rows.length} row${rows.length === 1 ? "" : "s"}`}</div>
-          <ErpDenseGrid
-            cellNavigate columnFilter searchBar rangeSelect virtualize
-            columns={columns} rows={rows} rowKey={(r) => r.row_key}
-            maxHeight="calc(100vh - 280px)"
-            emptyMessage={reportQ.isLoading ? "Loading..." : "No gate entries for this selection."}
-          />
+          <div className="mb-2 flex items-center gap-1.5">
+            <button type="button" onClick={() => setView("detail")} className={pill(view === "detail")}>Detail (GE / GRN wise)</button>
+            <button type="button" onClick={() => setView("consolidated")} className={pill(view === "consolidated")}>Consolidated (Vendor / PO, month-year)</button>
+            <span className="ml-auto text-xs text-slate-500">
+              {reportQ.isLoading ? "Loading..." : view === "detail" ? `${rows.length} row${rows.length === 1 ? "" : "s"}` : `${consolidatedRows.length} row${consolidatedRows.length === 1 ? "" : "s"}`}
+            </span>
+          </div>
+          {view === "detail" ? (
+            <ErpDenseGrid
+              cellNavigate columnFilter searchBar rangeSelect virtualize
+              columns={columns} rows={rows} rowKey={(r) => r.row_key}
+              maxHeight="calc(100vh - 280px)"
+              emptyMessage={reportQ.isLoading ? "Loading..." : "No gate entries for this selection."}
+            />
+          ) : (
+            <ErpDenseGrid
+              cellNavigate columnFilter searchBar rangeSelect virtualize
+              columns={consolidatedColumns} rows={consolidatedRows} rowKey={(r) => r.row_key}
+              maxHeight="calc(100vh - 280px)"
+              emptyMessage={reportQ.isLoading ? "Loading..." : "No gate entries for this selection."}
+            />
+          )}
         </ErpSectionCard>
       )}
     </ErpScreenScaffold>
