@@ -192,6 +192,21 @@ async function build(ctx: Ctx, p: { companyIds: string[]; from: string; to: stri
     if (text(row.source_po_type)) set.add(text(row.source_po_type).toUpperCase());
     typeSets.set(key, set);
   }
+  // A SKU with no Packing PO of its own in this company (received by STO / GRN, or only ever loaded through Opening Stock) still has its
+  // production type: the one on the Opening Stock document it was loaded under (same rule the Current Stock report uses for MTS FG).
+  const openingDocs = await fetchInChunks<JsonRecord>(p.companyIds, (chunk) => serviceRoleClient.schema("erp_procurement")
+    .from("opening_stock_document").select("id, company_id, po_type").in("company_id", chunk).not("po_type", "is", null));
+  const openingDocById = new Map(openingDocs.map((row) => [text(row.id), row]));
+  const openingLines = await fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient.schema("erp_procurement")
+    .from("opening_stock_line").select("document_id, material_id").in("material_id", chunk));
+  for (const line of openingLines) {
+    const doc = openingDocById.get(text(line.document_id));
+    if (!doc) continue;
+    const key = `${text(doc.company_id)}|${text(line.material_id)}`;
+    const set = typeSets.get(key) ?? new Set<string>();
+    set.add(text(doc.po_type).toUpperCase());
+    typeSets.set(key, set);
+  }
   const bomLines = await fetchInChunks<JsonRecord>(boms.map((row) => text(row.id)), (chunk) => serviceRoleClient.schema("erp_production")
     .from("pack_bom_line").select("pack_bom_id, qty").eq("is_primary_container", true).in("pack_bom_id", chunk));
   const innerByBom = new Map(bomLines.map((row) => [text(row.pack_bom_id), num(row.qty)]));

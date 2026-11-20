@@ -22,9 +22,8 @@ import { useScreenBackInterceptor } from "../../../../hooks/useScreenBackInterce
 import { getFgMovementOptions, getFgMovementPlaces, getFgMovementReport } from "../procurementApi.js";
 import { totalRowProps } from "../planning/mtsPlanGrouping.js";
 
-// "—" = a FG SKU with no Packing PO of its own (received by GRN / STO or traded, e.g. grouts): without this pill a Type choice silently hides it.
-const TYPES = ["MTS", "MTO", "HPS", "MTEST", "—"];
-const typePillLabel = (t) => (t === "—" ? "No production type" : t);
+const TYPES = ["MTS", "MTO", "HPS", "MTEST"];
+const typePillLabel = (t) => t;
 const UNITS = [
   { key: "outer", label: "Outer pack UoM" },
   { key: "inner", label: "Inner pack UoM" },
