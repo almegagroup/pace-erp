@@ -118,17 +118,47 @@ type SkuRow = {
   outer_uom: string | null; base_per_outer: number | null; inner_per_outer: number | null;
   opening: number; production: number; pid: number; other: number; dispatch: number; closing: number; in_qa: number; blocked: number;
   dispatch_by_type: Record<string, number>;
+  other_by: Record<string, number>;
 };
 
-type Built = { rows: SkuRow[]; placeRows: JsonRecord[] };
+type OtherCategory = { key: string; label: string };
+type Built = { rows: SkuRow[]; placeRows: JsonRecord[]; otherCategories: OtherCategory[] };
+
+// "Other" is shown as one column per kind of movement. Known kinds get a plain business name; anything else falls back to the
+// movement type's own name from the master (then its code), so a new kind of posting never disappears into a lump.
+const OTHER_LABELS: Record<string, string> = {
+  P561: "Opening Stock", "P101|GRN": "GRN Receipt", "P102|GRN": "GRN Reversal",
+  P343: "Blocked → Unrestricted", P344: "Unrestricted → Blocked",
+};
 
 async function build(ctx: Ctx, p: { companyIds: string[]; from: string; to: string; mothers: Set<string>; children: Set<string>; types: Set<string> }, withPlaces: boolean): Promise<Built> {
   void ctx;
-  const { data: summary, error: summaryError } = await serviceRoleClient.schema("erp_inventory")
-    .rpc("fg_movement_summary", { p_company_ids: p.companyIds, p_from: p.from, p_to: p.to });
+  const [{ data: summary, error: summaryError }, { data: otherData, error: otherError }] = await Promise.all([
+    serviceRoleClient.schema("erp_inventory").rpc("fg_movement_summary", { p_company_ids: p.companyIds, p_from: p.from, p_to: p.to }),
+    serviceRoleClient.schema("erp_inventory").rpc("fg_movement_other", { p_company_ids: p.companyIds, p_from: p.from, p_to: p.to }),
+  ]);
   if (summaryError) throw new Error("FG_MOVEMENT_SUMMARY_FAILED");
+  if (otherError) throw new Error("FG_MOVEMENT_OTHER_FAILED");
   const summaryRows = (summary ?? []) as JsonRecord[];
-  if (summaryRows.length === 0) return { rows: [], placeRows: [] };
+  if (summaryRows.length === 0) return { rows: [], placeRows: [], otherCategories: [] };
+
+  const otherByKey = new Map<string, Record<string, number>>();
+  const otherCats = new Set<string>();
+  for (const row of (otherData ?? []) as JsonRecord[]) {
+    const key = `${text(row.company_id)}|${text(row.material_id)}`;
+    const bucket = otherByKey.get(key) ?? {};
+    bucket[text(row.cat)] = num(row.qty);
+    otherByKey.set(key, bucket);
+    otherCats.add(text(row.cat));
+  }
+  const movementCodes = [...new Set([...otherCats].map((cat) => cat.split("|")[0]))];
+  const { data: movementNames } = movementCodes.length
+    ? await serviceRoleClient.schema("erp_inventory").from("movement_type_master").select("code, name").in("code", movementCodes)
+    : { data: [] as JsonRecord[] };
+  const movementName = new Map(((movementNames ?? []) as JsonRecord[]).map((row) => [text(row.code), text(row.name)]));
+  const otherCategories: OtherCategory[] = [...otherCats].map((cat) => ({
+    key: cat, label: OTHER_LABELS[cat] ?? (movementName.get(cat.split("|")[0]) || cat.replace("|", " ")),
+  })).sort((a, b) => a.label.localeCompare(b.label));
 
   const materialIds = [...new Set(summaryRows.map((row) => text(row.material_id)))];
   const materials = await fetchInChunks<JsonRecord>(materialIds, (chunk) => serviceRoleClient.schema("erp_master")
@@ -238,6 +268,7 @@ async function build(ctx: Ctx, p: { companyIds: string[]; from: string; to: stri
       opening: num(row.opening), production: num(row.production), pid: num(row.pid), other: num(row.other),
       dispatch: num(row.dispatch), closing: num(row.closing), in_qa: num(row.in_qa), blocked: num(row.blocked),
       dispatch_by_type: dispatchByKey.get(`${companyId}|${materialId}`) ?? {},
+      other_by: otherByKey.get(`${companyId}|${materialId}`) ?? {},
     });
   }
   rows.sort((a, b) => a.company_code.localeCompare(b.company_code) || a.mother_group.localeCompare(b.mother_group)
@@ -298,7 +329,7 @@ async function build(ctx: Ctx, p: { companyIds: string[]; from: string; to: stri
     placeRows.sort((a, b) => text(a.company_code).localeCompare(text(b.company_code)) || text(a.state).localeCompare(text(b.state))
       || text(a.town).localeCompare(text(b.town)) || text(a.month_sort).localeCompare(text(b.month_sort)) || text(a.sku).localeCompare(text(b.sku)));
   }
-  return { rows, placeRows };
+  return { rows, placeRows, otherCategories };
 }
 
 // GET /api/procurement/fg-movement-report?company_ids=&date_from=&date_to=&mother_groups=&child_groups=&types=
@@ -307,7 +338,7 @@ export async function getFgMovementReportHandler(req: Request, ctx: Ctx): Promis
     const params = await resolveParams(req, ctx);
     if ("error" in params) return params.error;
     const built = await build(ctx, params, false);
-    return okResponse({ data: { rows: built.rows, dispatch_types: DISPATCH_TYPES } }, ctx.request_id, req);
+    return okResponse({ data: { rows: built.rows, dispatch_types: DISPATCH_TYPES, other_categories: built.otherCategories } }, ctx.request_id, req);
   } catch (error) {
     const code = error instanceof Error ? error.message : "FG_MOVEMENT_REPORT_FAILED";
     return fail(req, ctx, code, 500, code);

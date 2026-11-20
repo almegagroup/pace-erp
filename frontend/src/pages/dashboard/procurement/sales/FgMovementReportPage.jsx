@@ -29,7 +29,7 @@ const UNITS = [
   { key: "base", label: "Base UoM" },
   { key: "mt", label: "Base UoM in MT" },
 ];
-const SUM_FIELDS = ["opening", "production", "pid", "other", "dispatch", "closing", "in_qa", "blocked"];
+const SUM_FIELDS = ["opening", "production", "pid", "dispatch", "closing", "in_qa", "blocked"];
 const todayIso = () => new Date().toISOString().slice(0, 10);
 const monthStartIso = () => `${todayIso().slice(0, 8)}01`;
 const pill = (on) => `rounded-full border px-2.5 py-1 text-xs font-medium ${on ? "border-sky-500 bg-sky-50 text-sky-700" : "border-slate-200 bg-white text-slate-500 hover:border-slate-300"}`;
@@ -105,6 +105,8 @@ export default function FgMovementReportPage() {
   });
   const rows = useMemo(() => reportQ.data?.rows ?? [], [reportQ.data]);
   const dispatchTypes = useMemo(() => reportQ.data?.dispatch_types ?? [], [reportQ.data]);
+  // "Other" is shown as one column per kind of movement (Opening Stock, GRN Receipt, Blocked → Unrestricted ...), named by what happened.
+  const otherCategories = useMemo(() => reportQ.data?.other_categories ?? [], [reportQ.data]);
   const placeRows = useMemo(() => placesQ.data?.rows ?? [], [placesQ.data]);
 
   function toggleCompany(id) {
@@ -138,6 +140,7 @@ export default function FgMovementReportPage() {
 
   // ---------- Page 2 grid ----------
   const cell = (row, key) => (row.__total ? row.__sums?.[key] ?? null : convert(row, row[key], unit));
+  const otherCell = (row, key) => (row.__total ? row.__sums?.[`o_${key}`] ?? null : convert(row, row.other_by?.[key] ?? 0, unit));
   const typeCell = (row, t) => (row.__total ? row.__sums?.[`t_${t}`] ?? null : convert(row, row.dispatch_by_type?.[t] ?? 0, unit));
   const numCol = (key, label, getter) => ({
     key, label, align: "right", width: "118px",
@@ -158,14 +161,14 @@ export default function FgMovementReportPage() {
     numCol("opening", "Opening", (r) => cell(r, "opening")),
     numCol("production", "Production", (r) => cell(r, "production")),
     numCol("pid", "PID", (r) => cell(r, "pid")),
-    numCol("other", "Other adj.", (r) => cell(r, "other")),
+    ...otherCategories.map((c) => numCol(`o_${c.key}`, c.label, (r) => otherCell(r, c.key))),
     numCol("dispatch", "Total Dispatch", (r) => cell(r, "dispatch")),
     numCol("closing", "Closing", (r) => cell(r, "closing")),
     numCol("in_qa", "In QA", (r) => cell(r, "in_qa")),
     numCol("blocked", "Blocked", (r) => cell(r, "blocked")),
     ...dispatchTypes.map((t) => numCol(`t_${t}`, typeLabel(t), (r) => typeCell(r, t))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  ], [unit, dispatchTypes.join(",")]);
+  ], [unit, dispatchTypes.join(","), otherCategories.map((c) => c.key).join(",")]);
   // Common column picker (visibility + order, up to 3 saved layouts per user), same as Plan Feed.
   const [columnsOpen, setColumnsOpen] = useState(false);
   const layoutMessage = useCallback((message, tone) => pushToast({ message, tone }), []);
@@ -176,8 +179,9 @@ export default function FgMovementReportPage() {
   const decorate = useMemo(() => (visible) => {
     const sorted = [...visible];
     const zero = () => ({ sums: {}, seen: false, sample: null });
-    const keys = [...SUM_FIELDS, ...dispatchTypes.map((t) => `t_${t}`)];
-    const rawValue = (row, key) => (key.startsWith("t_") ? row.dispatch_by_type?.[key.slice(2)] ?? 0 : row[key]);
+    const keys = [...SUM_FIELDS, ...otherCategories.map((c) => `o_${c.key}`), ...dispatchTypes.map((t) => `t_${t}`)];
+    const rawValue = (row, key) => (key.startsWith("t_") ? row.dispatch_by_type?.[key.slice(2)] ?? 0
+      : key.startsWith("o_") ? row.other_by?.[key.slice(2)] ?? 0 : row[key]);
     const add = (acc, row) => {
       acc.sample ??= row;
       for (const key of keys) {
@@ -205,7 +209,7 @@ export default function FgMovementReportPage() {
     flushChild(); flushMother();
     if (grand.sample) out.push(total("GRAND", grand, "Grand Total"));
     return out;
-  }, [unit, dispatchTypes]);
+  }, [unit, dispatchTypes, otherCategories]);
 
   const noFactorCount = useMemo(() => (unit === "outer" || unit === "inner" ? rows.filter((r) => convert(r, 1, unit) === null).length : 0), [rows, unit]);
 
