@@ -82,7 +82,9 @@ async function resolveParams(req: Request, ctx: Ctx): Promise<
   };
 }
 
-// PO21 Mother / Child group of every Prodshade, per company. A SKU belongs to the group of the Prodshade that shares its shade code.
+// PO21 Mother / Child group of every Prodshade, per company. A SKU belongs to the group of its own Prodshade: the SKU's external code
+// is the Prodshade's external code plus the 3-digit pack code (00790908 + 320). NOT the 4-digit shade code -- that one (e.g. 0908) is
+// shared by many different Prodshades (7 in CMP003), so matching on it put every white SKU in whichever group came last.
 async function loadGroupMap(companyIds: string[]): Promise<Map<string, { mother: string; child: string }>> {
   const members = await fetchInChunks<JsonRecord>(companyIds, (chunk) => serviceRoleClient.schema("erp_planning")
     .from("prodshade_group_member").select("company_id, prodshade_material_id, child_group_id").eq("is_active", true).in("company_id", chunk));
@@ -97,8 +99,8 @@ async function loadGroupMap(companyIds: string[]): Promise<Map<string, { mother:
   const childInfo = new Map(children.map((row) => [text(row.id), { child: text(row.group_name), mother: motherName.get(text(row.mother_group_id)) ?? "" }]));
   const prodshadeIds = [...new Set(members.map((row) => text(row.prodshade_material_id)))];
   const prodshades = await fetchInChunks<JsonRecord>(prodshadeIds, (chunk) => serviceRoleClient.schema("erp_master")
-    .from("material_master").select("id, shade_code").in("id", chunk));
-  const shadeByProdshade = new Map(prodshades.map((row) => [text(row.id), text(row.shade_code)]));
+    .from("material_master").select("id, external_code").in("id", chunk));
+  const shadeByProdshade = new Map(prodshades.map((row) => [text(row.id), text(row.external_code)]));
   const result = new Map<string, { mother: string; child: string }>();
   for (const member of members) {
     const shade = shadeByProdshade.get(text(member.prodshade_material_id));
@@ -200,7 +202,8 @@ async function build(ctx: Ctx, p: { companyIds: string[]; from: string; to: stri
   }
 
   const groupOf = (companyId: string, material: JsonRecord | undefined) => {
-    const info = groupMap.get(`${companyId}|${text(material?.shade_code)}`);
+    const externalCode = text(material?.external_code);
+    const info = externalCode.length > 3 ? groupMap.get(`${companyId}|${externalCode.slice(0, -3)}`) : undefined;
     return { mother: info?.mother || NO_GROUP, child: info?.child || NO_GROUP };
   };
   const typeOf = (companyId: string, materialId: string): string => {
