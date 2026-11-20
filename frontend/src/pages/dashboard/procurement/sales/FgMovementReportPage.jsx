@@ -22,7 +22,9 @@ import { useScreenBackInterceptor } from "../../../../hooks/useScreenBackInterce
 import { getFgMovementOptions, getFgMovementPlaces, getFgMovementReport } from "../procurementApi.js";
 import { totalRowProps } from "../planning/mtsPlanGrouping.js";
 
-const TYPES = ["MTS", "MTO", "HPS", "MTEST"];
+// "—" = a FG SKU with no Packing PO of its own (received by GRN / STO or traded, e.g. grouts): without this pill a Type choice silently hides it.
+const TYPES = ["MTS", "MTO", "HPS", "MTEST", "—"];
+const typePillLabel = (t) => (t === "—" ? "No production type" : t);
 const UNITS = [
   { key: "outer", label: "Outer pack UoM" },
   { key: "inner", label: "Inner pack UoM" },
@@ -338,7 +340,7 @@ export default function FgMovementReportPage() {
               <p className="mb-1.5 text-xs text-slate-500">Type:</p>
               <div className="flex flex-wrap gap-1.5">
                 {TYPES.map((t) => (
-                  <button key={t} type="button" onClick={() => setTypes((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]))} className={pill(types.includes(t))}>{t}</button>
+                  <button key={t} type="button" onClick={() => setTypes((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]))} className={pill(types.includes(t))}>{typePillLabel(t)}</button>
                 ))}
               </div>
             </div>
