@@ -8,9 +8,12 @@
  *          switch is done here, so changing it never refetches.
  * Authority: Frontend
  */
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import { layoutDrawerProps, useColumnLayouts } from "../../../../shared/columnLayouts/useColumnLayouts.js";
+import { pushToast } from "../../../../store/uiToast.js";
 import MultiValueFilterField from "../../../../components/inputs/MultiValueFilterField.jsx";
 import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
@@ -163,6 +166,11 @@ export default function FgMovementReportPage() {
     ...dispatchTypes.map((t) => numCol(`t_${t}`, typeLabel(t), (r) => typeCell(r, t))),
     // eslint-disable-next-line react-hooks/exhaustive-deps
   ], [unit, dispatchTypes.join(",")]);
+  // Common column picker (visibility + order, up to 3 saved layouts per user), same as Plan Feed.
+  const [columnsOpen, setColumnsOpen] = useState(false);
+  const layoutMessage = useCallback((message, tone) => pushToast({ message, tone }), []);
+  const layout = useColumnLayouts("SO06_FG_MOVEMENT", columns, layoutMessage);
+  const gridColumns = layout.columns;
 
   // Child / Mother / Grand totals, in the chosen unit, over exactly the rows the grid is showing (after search / filters).
   const decorate = useMemo(() => (visible) => {
@@ -214,7 +222,7 @@ export default function FgMovementReportPage() {
       } else {
         await downloadColoredExcelFile({
           fileName: `fg_movement_${dateFrom}_${dateTo}.xlsx`, sheetName: "FG Movement",
-          columns, rows: decorate(rows),
+          columns: gridColumns, rows: decorate(rows),
           getCellValue: (row, column) => (typeof column.excelValue === "function" ? column.excelValue(row) : (row?.[column.key] ?? "")),
         });
       }
@@ -269,6 +277,7 @@ export default function FgMovementReportPage() {
       ? [
         { key: "back", label: "Back to Filters", onClick: () => setPage(1) },
         { key: "places", label: "Where dispatched", onClick: () => setPage(3) },
+        { key: "columns", label: `Columns${layout.activeLayoutName ? ` · ${layout.activeLayoutName}` : ""}`, onClick: () => setColumnsOpen(true) },
         { key: "export", label: exporting ? "Exporting..." : "Export Excel", onClick: () => void exportExcel("report"), disabled: exporting || rows.length === 0 },
         { key: "again", label: reportQ.isFetching ? "Executing..." : "Execute Again", tone: "primary", onClick: execute, disabled: reportQ.isFetching },
       ]
@@ -350,7 +359,7 @@ export default function FgMovementReportPage() {
           {noFactorCount > 0 ? <p className="mb-2 text-xs text-amber-800">{noFactorCount} SKU(s) have no fixed pack size, so they show — in this unit and are left out of its totals. Use Base UoM for those.</p> : null}
           <ErpDenseGrid
             cellNavigate columnFilter searchBar rangeSelect virtualize
-            columns={columns} rows={rows} decorateRows={decorate} getRowProps={totalRowProps}
+            columns={gridColumns} rows={rows} decorateRows={decorate} getRowProps={totalRowProps}
             rowKey={(r) => r.row_key ?? `${r.company_id}|${r.material_id}`}
             maxHeight="calc(100vh - 300px)"
             emptyMessage={reportQ.isLoading ? "Loading..." : "No FG movement for this selection."}
@@ -371,6 +380,12 @@ export default function FgMovementReportPage() {
           </ErpSectionCard>
         </div>
       )}
+      <ErpColumnVisibilityDrawer
+        visible={columnsOpen}
+        title="FG Movement Columns"
+        {...layoutDrawerProps(layout)}
+        onClose={() => setColumnsOpen(false)}
+      />
     </ErpScreenScaffold>
   );
 }

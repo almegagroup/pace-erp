@@ -7,9 +7,12 @@
  *          that reuse the existing PO actions (same backend rules and access as the PO detail page).
  * Authority: Frontend
  */
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
+import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import { layoutDrawerProps, useColumnLayouts } from "../../../../shared/columnLayouts/useColumnLayouts.js";
+import { pushToast } from "../../../../store/uiToast.js";
 import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
@@ -151,7 +154,7 @@ export default function PoStatusReportPage() {
       text("blocked_pct", "Blocked %", "80px", (r) => pct(r.blocked_qty, r.delivered)),
       text("line_status", "Status", "130px", (r) => String(r.line_status ?? "").replace(/_/g, " ")),
       {
-        key: "actions", label: "Action", width: "190px",
+        key: "actions", label: "Action", width: "190px", pinned: true,
         render: (r) => (r.row_kind === "LINE" && ACTIVE_LINE.has(r.line_status) && r.po_status === "CONFIRMED" ? (
           <span className="flex gap-1">
             <button type="button" disabled={busy} onClick={(e) => { e.stopPropagation(); void knockOffLine(r); }}
@@ -167,6 +170,11 @@ export default function PoStatusReportPage() {
     ];
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [busy]);
+  // Common column picker (visibility + order, up to 3 saved layouts per user), same as Plan Feed. The Action column stays fixed.
+  const [columnsOpen, setColumnsOpen] = useState(false);
+  const layoutMessage = useCallback((message, tone) => pushToast({ message, tone }), []);
+  const layout = useColumnLayouts("PO24_STATUS", columns, layoutMessage);
+  const gridColumns = layout.columns;
 
   async function exportExcel() {
     setExporting(true);
@@ -174,7 +182,7 @@ export default function PoStatusReportPage() {
       const { downloadColoredExcelFile } = await import("../../../../shared/downloadColoredExcelFile.js");
       await downloadColoredExcelFile({
         fileName: `po_status_${submitted?.date_from}_${submitted?.date_to}.xlsx`, sheetName: "PO Status",
-        columns: columns.filter((c) => c.key !== "actions"), rows,
+        columns: gridColumns.filter((c) => c.key !== "actions"), rows,
         getCellValue: (row, column) => (typeof column.excelValue === "function" ? column.excelValue(row) : (row?.[column.key] ?? "")),
       });
     } catch (e) {
@@ -193,6 +201,7 @@ export default function PoStatusReportPage() {
     ? [{ key: "execute", label: "Execute", tone: "primary", onClick: execute }]
     : [
       { key: "back", label: "Back to Filters", onClick: () => setPage(1) },
+      { key: "columns", label: `Columns${layout.activeLayoutName ? ` · ${layout.activeLayoutName}` : ""}`, onClick: () => setColumnsOpen(true) },
       { key: "export", label: exporting ? "Exporting..." : "Export Excel", onClick: () => void exportExcel(), disabled: exporting || rows.length === 0 },
       { key: "again", label: reportQ.isFetching ? "Executing..." : "Execute Again", tone: "primary", onClick: execute, disabled: reportQ.isFetching },
     ];
@@ -238,12 +247,18 @@ export default function PoStatusReportPage() {
           <div className="mb-2 text-right text-xs text-slate-500">{reportQ.isLoading ? "Loading..." : `${rows.length} PO line${rows.length === 1 ? "" : "s"}`}</div>
           <ErpDenseGrid
             cellNavigate columnFilter searchBar rangeSelect virtualize
-            columns={columns} rows={rows} rowKey={(r) => r.row_key}
+            columns={gridColumns} rows={rows} rowKey={(r) => r.row_key}
             maxHeight="calc(100vh - 280px)"
             emptyMessage={reportQ.isLoading ? "Loading..." : "No PO lines for this selection."}
           />
         </ErpSectionCard>
       )}
+      <ErpColumnVisibilityDrawer
+        visible={columnsOpen}
+        title="PO Status Columns"
+        {...layoutDrawerProps(layout)}
+        onClose={() => setColumnsOpen(false)}
+      />
     </ErpScreenScaffold>
   );
 }

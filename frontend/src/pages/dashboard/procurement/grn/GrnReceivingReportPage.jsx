@@ -7,9 +7,12 @@
  *          tab in view. Reversed / cancelled GRNs and pruned gate entries never appear. Visible to everyone, company scoped on the server.
  * Authority: Frontend
  */
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import { layoutDrawerProps, useColumnLayouts } from "../../../../shared/columnLayouts/useColumnLayouts.js";
+import { pushToast } from "../../../../store/uiToast.js";
 import { buildTransactionCompanyList, resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
 import ErpScreenScaffold, { ErpSectionCard } from "../../../../components/templates/ErpScreenScaffold.jsx";
 import { useMenu } from "../../../../context/useMenu.js";
@@ -150,6 +153,12 @@ export default function GrnReceivingReportPage() {
       num("lot_balance_after", "Lot balance at month end", (r) => r.lot_balance_after, "130px"),
     ];
   }, []);
+  // Common column picker (visibility + order, up to 3 saved layouts per user), same as Plan Feed. One layout set per tab.
+  const [columnsOpen, setColumnsOpen] = useState(false);
+  const layoutMessage = useCallback((message, tone) => pushToast({ message, tone }), []);
+  const detailLayout = useColumnLayouts("PO23_DETAIL", columns, layoutMessage);
+  const consolidatedLayout = useColumnLayouts("PO23_CONSOLIDATED", consolidatedColumns, layoutMessage);
+  const activeLayout = view === "detail" ? detailLayout : consolidatedLayout;
 
   async function exportExcel() {
     setExporting(true);
@@ -158,7 +167,7 @@ export default function GrnReceivingReportPage() {
       await downloadColoredExcelFile({
         fileName: `grn_receiving_${view === "detail" ? "" : "consolidated_"}${dateFrom}_${dateTo}.xlsx`,
         sheetName: view === "detail" ? "GRN Receiving" : "Consolidated",
-        columns: view === "detail" ? columns : consolidatedColumns, rows: view === "detail" ? rows : consolidatedRows,
+        columns: activeLayout.columns, rows: view === "detail" ? rows : consolidatedRows,
         getCellValue: (row, column) => (typeof column.excelValue === "function" ? column.excelValue(row) : (row?.[column.key] ?? "")),
       });
     } catch (e) {
@@ -173,6 +182,7 @@ export default function GrnReceivingReportPage() {
     ? [{ key: "execute", label: "Execute", tone: "primary", onClick: execute }]
     : [
       { key: "back", label: "Back to Filters", onClick: () => setPage(1) },
+      { key: "columns", label: `Columns${activeLayout.activeLayoutName ? ` · ${activeLayout.activeLayoutName}` : ""}`, onClick: () => setColumnsOpen(true) },
       { key: "export", label: exporting ? "Exporting..." : "Export Excel", onClick: () => void exportExcel(), disabled: exporting || rows.length === 0 },
       { key: "again", label: reportQ.isFetching ? "Executing..." : "Execute Again", tone: "primary", onClick: execute, disabled: reportQ.isFetching },
     ];
@@ -222,20 +232,26 @@ export default function GrnReceivingReportPage() {
           {view === "detail" ? (
             <ErpDenseGrid
               cellNavigate columnFilter searchBar rangeSelect virtualize
-              columns={columns} rows={rows} rowKey={(r) => r.row_key}
+              columns={detailLayout.columns} rows={rows} rowKey={(r) => r.row_key}
               maxHeight="calc(100vh - 280px)"
               emptyMessage={reportQ.isLoading ? "Loading..." : "No gate entries for this selection."}
             />
           ) : (
             <ErpDenseGrid
               cellNavigate columnFilter searchBar rangeSelect virtualize
-              columns={consolidatedColumns} rows={consolidatedRows} rowKey={(r) => r.row_key}
+              columns={consolidatedLayout.columns} rows={consolidatedRows} rowKey={(r) => r.row_key}
               maxHeight="calc(100vh - 280px)"
               emptyMessage={reportQ.isLoading ? "Loading..." : "No gate entries for this selection."}
             />
           )}
         </ErpSectionCard>
       )}
+      <ErpColumnVisibilityDrawer
+        visible={columnsOpen}
+        title={view === "detail" ? "GRN Receiving Columns (Detail)" : "GRN Receiving Columns (Consolidated)"}
+        {...layoutDrawerProps(activeLayout)}
+        onClose={() => setColumnsOpen(false)}
+      />
     </ErpScreenScaffold>
   );
 }
