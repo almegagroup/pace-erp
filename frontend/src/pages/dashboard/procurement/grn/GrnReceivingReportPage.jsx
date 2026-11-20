@@ -81,9 +81,11 @@ export default function GrnReceivingReportPage() {
       text("vendor", "Vendor", "190px", (r) => [r.vendor_code, r.vendor_name].filter(Boolean).join(" — ")),
       text("po_number", "PO", "110px", (r) => `${r.po_number ?? ""}${r.line_number ? ` / ${r.line_number}` : ""}`),
       text("material", "Material", "250px", (r) => [r.pace_code, r.material_name].filter(Boolean).join(" — ")),
+      text("lot_number", "Lot", "70px", (r) => r.lot_number ?? ""),
       num("po_qty", "PO Qty", (r) => r.po_qty),
       text("po_uom", "PO UoM", "70px", (r) => r.po_uom ?? ""),
       num("po_rate", "PO Rate", (r) => r.po_rate, "90px"),
+      num("lot_qty", "Lot Qty", (r) => r.lot_qty, "90px"),
       num("ge_qty", "GE Qty", (r) => r.ge_qty),
       num("grn_count", "GRNs in this GE line", (r) => r.grn_count, "90px"),
       text("grn_number", "GRN", "110px", (r) => r.grn_number ?? ""),
@@ -91,6 +93,7 @@ export default function GrnReceivingReportPage() {
       num("grn_qty", "GRN Qty", (r) => r.grn_qty),
       num("blocked_qty", "QA Blocked", (r) => (r.grn_id ? r.blocked_qty : null)),
       num("balance_after", "Balance after this GRN", (r) => r.balance_after, "120px"),
+      num("lot_balance_after", "Lot balance after this GRN", (r) => r.lot_balance_after, "130px"),
     ];
   }, []);
 
@@ -100,11 +103,11 @@ export default function GrnReceivingReportPage() {
     const groups = new Map();
     for (const r of rows) {
       const month = monthOf(r);
-      const key = [r.vendor_code, r.po_id, r.line_number, month].join("|");
+      const key = [r.vendor_code, r.po_id, r.line_number, r.lot_number ?? "", month].join("|");
       let g = groups.get(key);
       if (!g) {
         g = { row_key: key, company_code: r.company_code, vendor_code: r.vendor_code, vendor_name: r.vendor_name, po_number: r.po_number,
-          line_number: r.line_number, pace_code: r.pace_code, material_name: r.material_name, po_uom: r.po_uom, po_qty: r.po_qty,
+          line_number: r.line_number, lot_number: r.lot_number, lot_qty: r.lot_qty, lot_balance_after: null, pace_code: r.pace_code, material_name: r.material_name, po_uom: r.po_uom, po_qty: r.po_qty,
           po_rate: r.po_rate, month, ges: new Set(), grns: new Set(), grn_qty: 0, blocked_qty: 0, balance_after: null, last: "" };
         groups.set(key, g);
       }
@@ -114,13 +117,13 @@ export default function GrnReceivingReportPage() {
         g.grn_qty += Number(r.grn_qty ?? 0);
         g.blocked_qty += Number(r.blocked_qty ?? 0);
         const order = `${r.grn_date}|${r.grn_number}`;
-        if (order >= g.last) { g.last = order; g.balance_after = r.balance_after; }
+        if (order >= g.last) { g.last = order; g.balance_after = r.balance_after; g.lot_balance_after = r.lot_balance_after; }
       }
     }
     return [...groups.values()]
       .map((g) => ({ ...g, ge_count: g.ges.size, grn_count: g.grns.size }))
       .sort((a, b) => String(a.vendor_name ?? "").localeCompare(String(b.vendor_name ?? "")) || String(a.po_number).localeCompare(String(b.po_number))
-        || a.line_number - b.line_number || a.month.localeCompare(b.month));
+        || a.line_number - b.line_number || String(a.lot_number ?? "").localeCompare(String(b.lot_number ?? "")) || a.month.localeCompare(b.month));
   }, [rows]);
   const consolidatedColumns = useMemo(() => {
     const text = (key, label, width, getter) => ({ key, label, width, render: getter, filterValue: getter, excelValue: getter });
@@ -133,8 +136,10 @@ export default function GrnReceivingReportPage() {
       text("vendor", "Vendor", "190px", (r) => [r.vendor_code, r.vendor_name].filter(Boolean).join(" — ")),
       text("po_number", "PO", "110px", (r) => `${r.po_number ?? ""}${r.line_number ? ` / ${r.line_number}` : ""}`),
       text("material", "Material", "250px", (r) => [r.pace_code, r.material_name].filter(Boolean).join(" — ")),
+      text("lot_number", "Lot", "70px", (r) => r.lot_number ?? ""),
       text("month", "Month-Year", "100px", (r) => r.month ?? ""),
       num("po_qty", "PO Qty", (r) => r.po_qty),
+      num("lot_qty", "Lot Qty", (r) => r.lot_qty, "90px"),
       text("po_uom", "PO UoM", "70px", (r) => r.po_uom ?? ""),
       num("po_rate", "PO Rate", (r) => r.po_rate, "90px"),
       num("ge_count", "Gate Entries", (r) => r.ge_count, "90px"),
@@ -142,6 +147,7 @@ export default function GrnReceivingReportPage() {
       num("grn_qty", "GRN Qty", (r) => r.grn_qty),
       num("blocked_qty", "QA Blocked", (r) => r.blocked_qty),
       num("balance_after", "Balance at month end", (r) => r.balance_after, "120px"),
+      num("lot_balance_after", "Lot balance at month end", (r) => r.lot_balance_after, "130px"),
     ];
   }, []);
 
