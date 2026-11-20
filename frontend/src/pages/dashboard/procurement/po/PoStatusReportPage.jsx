@@ -3,6 +3,7 @@
  * Domain: PROCUREMENT
  * Purpose: PO24 -- PO Status. Page 1 selection (company, PO date range, open only / all), Page 2 grid per vendor / PO / material
  *          line: PO qty, PO UoM, Delivered, In-transit, Open, Knocked off, QA Blocked, plus Knock-off (line) and Cancel PO buttons
+ *          (a PO line split into lots also gets one row per lot under it: lot qty, received against that lot, open, blocked)
  *          that reuse the existing PO actions (same backend rules and access as the PO detail page).
  * Authority: Frontend
  */
@@ -53,7 +54,7 @@ export default function PoStatusReportPage() {
     select: (data) => data?.data ?? data ?? {},
   });
   const rows = useMemo(
-    () => (reportQ.data?.rows ?? []).map((r) => ({ ...r, row_key: r.line_id })),
+    () => (reportQ.data?.rows ?? []).map((r) => ({ ...r, row_key: `${r.line_id}|${r.lot_number ?? ""}` })),
     [reportQ.data],
   );
 
@@ -138,6 +139,8 @@ export default function PoStatusReportPage() {
       text("po_number", "PO", "110px", (r) => `${r.po_number ?? ""}${r.line_number ? ` / ${r.line_number}` : ""}`),
       text("po_date", "PO Date", "100px", (r) => r.po_date ?? ""),
       text("material", "Material", "250px", (r) => [r.pace_code, r.material_name].filter(Boolean).join(" — ")),
+      text("lot_number", "Lot", "70px", (r) => r.lot_number ?? ""),
+      text("lot_delivery_date", "Lot Delivery", "100px", (r) => r.lot_delivery_date ?? ""),
       num("po_qty", "PO Qty", (r) => r.po_qty),
       text("po_uom", "PO UoM", "70px", (r) => r.po_uom ?? ""),
       num("delivered", "Delivered", (r) => r.delivered),
@@ -149,7 +152,7 @@ export default function PoStatusReportPage() {
       text("line_status", "Status", "130px", (r) => String(r.line_status ?? "").replace(/_/g, " ")),
       {
         key: "actions", label: "Action", width: "190px",
-        render: (r) => (ACTIVE_LINE.has(r.line_status) && r.po_status === "CONFIRMED" ? (
+        render: (r) => (r.row_kind === "LINE" && ACTIVE_LINE.has(r.line_status) && r.po_status === "CONFIRMED" ? (
           <span className="flex gap-1">
             <button type="button" disabled={busy} onClick={(e) => { e.stopPropagation(); void knockOffLine(r); }}
               className="rounded border border-amber-400 bg-amber-50 px-2 py-0.5 text-xs font-medium text-amber-800 hover:bg-amber-100 disabled:opacity-50">Knock-off</button>
