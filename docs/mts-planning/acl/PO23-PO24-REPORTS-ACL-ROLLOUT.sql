@@ -13,8 +13,8 @@ WHERE v.is_active;
 INSERT INTO erp_menu.menu_master (menu_code, resource_code, title, description, route_path, menu_type, universe, is_system, display_order, is_active, created_by, tx_code)
 SELECT x.code, x.code, x.title, x.descr, x.route, 'PAGE', 'ACL', false, x.ord, true, 'system', x.tx
 FROM (VALUES
-  ('PROC_PO_STATUS_REPORT', 'PO Status', 'PO24 -- per vendor / PO / material: PO qty, delivered, in-transit, open, knocked off, QA blocked; knock-off and cancel PO', '/dashboard/procurement/po-status', 20, 'PO24'),
-  ('PROC_GRN_RECEIVING_REPORT', 'GRN Receiving Report', 'PO23 -- per gate entry PO line and GRN: PO qty, PO rate, GRN qty, QA blocked, balance after the GRN', '/dashboard/procurement/grn-receiving-report', 4, 'PO23')
+  ('PROC_PO_STATUS_REPORT', 'PO Status', 'PO24 -- per vendor / PO / material: PO qty, delivered, in-transit, open, knocked off, QA blocked; knock-off and cancel PO', '/dashboard/procurement/po-status', 23, 'PO24'),
+  ('PROC_GRN_RECEIVING_REPORT', 'GRN Receiving Report', 'PO23 -- per gate entry PO line and GRN: PO qty, PO rate, GRN qty, QA blocked, balance after the GRN', '/dashboard/procurement/grn-receiving-report', 5, 'PO23')
 ) AS x(code, title, descr, route, ord, tx)
 WHERE NOT EXISTS (SELECT 1 FROM erp_menu.menu_master m WHERE m.menu_code = x.code);
 
@@ -28,7 +28,7 @@ WHERE NOT EXISTS (SELECT 1 FROM acl.menu_master m WHERE m.menu_code = x.code);
 
 INSERT INTO erp_menu.menu_tree (parent_menu_id, child_menu_id, display_order, created_by)
 SELECT parent.id, child.id, x.ord, 'system'
-FROM (VALUES ('GRP_ACL_PROCUREMENT', 'PROC_PO_STATUS_REPORT', 20), ('GRP_ACL_RECEIVING', 'PROC_GRN_RECEIVING_REPORT', 4)) AS x(grp, code, ord)
+FROM (VALUES ('GRP_ACL_PROCUREMENT', 'PROC_PO_STATUS_REPORT', 23), ('GRP_ACL_RECEIVING', 'PROC_GRN_RECEIVING_REPORT', 5)) AS x(grp, code, ord)
 JOIN erp_menu.menu_master parent ON parent.menu_code = x.grp
 JOIN erp_menu.menu_master child ON child.menu_code = x.code
 WHERE NOT EXISTS (SELECT 1 FROM erp_menu.menu_tree t WHERE t.child_menu_id = child.id);
@@ -50,7 +50,7 @@ JOIN erp_menu.menu_master child ON child.id = t.child_menu_id AND child.menu_typ
 JOIN acl.menu_master am ON am.menu_code = child.menu_code
 JOIN acl.capability_menu_actions cma ON cma.menu_id = am.id AND cma.action = 'VIEW' AND cma.allowed
 JOIN acl.menu_master po24 ON po24.menu_code = 'PROC_PO_STATUS_REPORT'
-WHERE grp.menu_code = 'GRP_ACL_PROCUREMENT' AND child.menu_code <> 'PROC_PO_STATUS_REPORT'
+WHERE grp.menu_code = 'GRP_ACL_PROCUREMENT' AND child.menu_code <> 'PROC_PO_STATUS_REPORT' AND cma.capability_code <> 'CAP_EVERYONE_REPORTS'
   AND NOT EXISTS (SELECT 1 FROM acl.capability_menu_actions x WHERE x.capability_code = cma.capability_code AND x.menu_id = po24.id AND x.action = 'VIEW');
 
 -- PO23: everyone (company-scoped reports capability).
