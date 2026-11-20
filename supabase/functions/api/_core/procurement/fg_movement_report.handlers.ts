@@ -207,6 +207,31 @@ async function build(ctx: Ctx, p: { companyIds: string[]; from: string; to: stri
     set.add(text(doc.po_type).toUpperCase());
     typeSets.set(key, set);
   }
+  // Still no type in this company (e.g. received by GRN / STO from another company, never produced or opened here): the SKU is the
+  // same product everywhere, so take the production type it has in any other company (Packing PO first, then Opening Stock).
+  const typedHere = new Set([...typeSets.keys()].map((key) => key.split("|")[1]));
+  const untypedIds = materialIds.filter((id) => !typedHere.has(id));
+  const anyTypeByMaterial = new Map<string, Set<string>>();
+  if (untypedIds.length > 0) {
+    const [otherPos, otherLines] = await Promise.all([
+      fetchInChunks<JsonRecord>(untypedIds, (chunk) => serviceRoleClient.schema("erp_production").from("packing_order")
+        .select("material_id, source_po_type").in("material_id", chunk)),
+      fetchInChunks<JsonRecord>(untypedIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("opening_stock_line")
+        .select("document_id, material_id").in("material_id", chunk)),
+    ]);
+    const addAny = (materialId: string, type: string) => {
+      if (!type) return;
+      const set = anyTypeByMaterial.get(materialId) ?? new Set<string>();
+      set.add(type.toUpperCase());
+      anyTypeByMaterial.set(materialId, set);
+    };
+    for (const row of otherPos) addAny(text(row.material_id), text(row.source_po_type));
+    const docIds = [...new Set(otherLines.map((row) => text(row.document_id)))];
+    const docs = await fetchInChunks<JsonRecord>(docIds, (chunk) => serviceRoleClient.schema("erp_procurement")
+      .from("opening_stock_document").select("id, po_type").in("id", chunk));
+    const poTypeByDoc = new Map(docs.map((row) => [text(row.id), text(row.po_type)]));
+    for (const row of otherLines) addAny(text(row.material_id), poTypeByDoc.get(text(row.document_id)) ?? "");
+  }
   const bomLines = await fetchInChunks<JsonRecord>(boms.map((row) => text(row.id)), (chunk) => serviceRoleClient.schema("erp_production")
     .from("pack_bom_line").select("pack_bom_id, qty").eq("is_primary_container", true).in("pack_bom_id", chunk));
   const innerByBom = new Map(bomLines.map((row) => [text(row.pack_bom_id), num(row.qty)]));
@@ -252,7 +277,7 @@ async function build(ctx: Ctx, p: { companyIds: string[]; from: string; to: stri
     return { mother: info?.mother || NO_GROUP, child: info?.child || NO_GROUP };
   };
   const typeOf = (companyId: string, materialId: string): string => {
-    const set = typeSets.get(`${companyId}|${materialId}`);
+    const set = typeSets.get(`${companyId}|${materialId}`) ?? anyTypeByMaterial.get(materialId);
     if (!set || set.size === 0) return "—";
     const nonTest = TYPE_PRIORITY.find((t) => t !== "MTEST" && set.has(t));
     return nonTest ?? (set.has("MTEST") ? "MTEST" : [...set][0]);
