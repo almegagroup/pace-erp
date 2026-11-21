@@ -13,10 +13,6 @@ Claude সবসময় **`agent/claude`**-এ কাজ করবে (session
 `HEAD`/`origin/dev`/`origin/main` তিনটে SHA এক কিনা যাচাই। Force-push, reset,
 নতুন feature branch — নিষিদ্ধ। পূর্ণ নিয়ম ও কমান্ড: `docs/BRANCH-WORKFLOW.md`।
 
-## Code map (auto-generated) — পড়ো আগে, পুরো repo crawl করার আগে
-
-`docs/ai/ERP-CODEMAP.md` — পুরো ERP-র (backend domains, routes, frontend pages, shared hub files, DB schemas, কোন change-এ কোন file) ছোট map, graphify code graph থেকে বানানো। নতুন session/Superpowers task-এ **আগে এটা পড়ো**, তারপর শুধু যে 3-6 file দরকার সেগুলো খোলো। নির্দিষ্ট cross-file প্রশ্নে `graphify query "..."` / `graphify path A B` / `graphify explain X`। Map আর কোড না মিললে কোডই সত্য, `bash scripts/update-codemap.sh` চালাও (graphify AST update, LLM/খরচ নেই, ~১-২ মিনিট)। Commit-এর পর local post-commit hook (`bash scripts/install-codemap-hook.sh`, প্রতি machine-এ একবার) background-এ নিজে থেকেই map refresh করে; বদলানো `docs/ai/ERP-CODEMAP.md` পরের commit-এ সাথে দাও। Visual: `graphify-out/jarvis.html` (HUD-style map, local, gitignored)।
-
 ## Working preferences
 
 - Report and page screens must be self-explanatory and simple: keep on-screen text minimal (short labels, at most one short hint line), no long explanatory paragraphs or footnotes. If a number could look inconsistent, show it with a clear label or column instead of writing a paragraph. (business owner, 2026-11-10)
