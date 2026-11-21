@@ -338,40 +338,52 @@ async function getMaterialInfo(materialIds: string[]): Promise<Map<string, JsonR
     return new Map();
   }
 
-  const { data, error } = await serviceRoleClient
-    .schema("erp_master")
-    .from("material_master")
-    .select("id, material_type, base_uom_code, material_name, pace_code")
-    .in("id", materialIds);
-
-  if (error) {
+  let data: JsonRecord[];
+  try {
+    data = await fetchInChunks<JsonRecord>(materialIds, (chunk) =>
+      serviceRoleClient
+        .schema("erp_master")
+        .from("material_master")
+        .select("id, material_type, base_uom_code, material_name, pace_code")
+        .in("id", chunk));
+  } catch {
     throw new Error("PI_MATERIAL_LOOKUP_FAILED");
   }
 
-  return new Map(((data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+  return new Map(data.map((row) => [String(row.id), row]));
 }
 
 // §119.7 — for a batch_number, resolve its owning Process PO's po_type (SFG grain decision).
 async function getProcessOrderPoTypeByBatch(batchNumbers: string[]): Promise<Map<string, JsonRecord>> {
   if (batchNumbers.length === 0) return new Map();
-  const { data, error } = await serviceRoleClient
-    .schema("erp_production")
-    .from("process_order")
-    .select("id, batch_number, po_type, actual_qty, company_id")
-    .in("batch_number", batchNumbers);
-  if (error) throw new Error("PI_PROCESS_ORDER_LOOKUP_FAILED");
-  return new Map(((data ?? []) as JsonRecord[]).map((row) => [String(row.batch_number), row]));
+  let data: JsonRecord[];
+  try {
+    data = await fetchInChunks<JsonRecord>(batchNumbers, (chunk) =>
+      serviceRoleClient
+        .schema("erp_production")
+        .from("process_order")
+        .select("id, batch_number, po_type, actual_qty, company_id")
+        .in("batch_number", chunk));
+  } catch {
+    throw new Error("PI_PROCESS_ORDER_LOOKUP_FAILED");
+  }
+  return new Map(data.map((row) => [String(row.batch_number), row]));
 }
 
 async function getPackingOrdersByIds(packingOrderIds: string[]): Promise<Map<string, JsonRecord>> {
   if (packingOrderIds.length === 0) return new Map();
-  const { data, error } = await serviceRoleClient
-    .schema("erp_production")
-    .from("packing_order")
-    .select("id, po_number, batch_number, actual_qty_kg, process_order_id, company_id")
-    .in("id", packingOrderIds);
-  if (error) throw new Error("PI_PACKING_ORDER_LOOKUP_FAILED");
-  return new Map(((data ?? []) as JsonRecord[]).map((row) => [String(row.id), row]));
+  let data: JsonRecord[];
+  try {
+    data = await fetchInChunks<JsonRecord>(packingOrderIds, (chunk) =>
+      serviceRoleClient
+        .schema("erp_production")
+        .from("packing_order")
+        .select("id, po_number, batch_number, actual_qty_kg, process_order_id, company_id")
+        .in("id", chunk));
+  } catch {
+    throw new Error("PI_PACKING_ORDER_LOOKUP_FAILED");
+  }
+  return new Map(data.map((row) => [String(row.id), row]));
 }
 
 // A legacy Opening Stock / stock-status-change row can carry a real MTO/HPS/MTEST
@@ -502,12 +514,17 @@ async function getBookSnapshotsForMaterial(
   if (materialType === "FG" && !isBlended) {
     const docIds = [...new Set(rows.map((r) => toTrimmedString(r.stock_document_id)).filter(Boolean))];
     if (docIds.length > 0) {
-      const { data: docRows, error: docErr } = await serviceRoleClient
-        .schema("erp_inventory")
-        .from("stock_document")
-        .select("id, reference_document_type, reference_document_id")
-        .in("id", docIds);
-      if (docErr) throw new Error("PI_STOCK_DOCUMENT_LOOKUP_FAILED");
+      let docRows: JsonRecord[];
+      try {
+        docRows = await fetchInChunks<JsonRecord>(docIds, (chunk) =>
+          serviceRoleClient
+            .schema("erp_inventory")
+            .from("stock_document")
+            .select("id, reference_document_type, reference_document_id")
+            .in("id", chunk));
+      } catch {
+        throw new Error("PI_STOCK_DOCUMENT_LOOKUP_FAILED");
+      }
       pkoByDocId = new Map(
         ((docRows ?? []) as JsonRecord[])
           .filter((d) => toTrimmedString(d.reference_document_type) === "PACK_PO")
@@ -528,14 +545,19 @@ async function getBookSnapshotsForMaterial(
           .filter(Boolean),
       )];
       if (openingDocumentIds.length > 0) {
-        const { data: openingLines, error: openingLinesError } = await serviceRoleClient
-          .schema("erp_procurement")
-          .from("opening_stock_line")
-          .select("document_id, batch_number, packing_order_id")
-          .in("document_id", openingDocumentIds)
-          .eq("material_id", materialId)
-          .not("packing_order_id", "is", null);
-        if (openingLinesError) throw new Error("PI_OPENING_STOCK_LOOKUP_FAILED");
+        let openingLines: JsonRecord[];
+        try {
+          openingLines = await fetchInChunks<JsonRecord>(openingDocumentIds, (chunk) =>
+            serviceRoleClient
+              .schema("erp_procurement")
+              .from("opening_stock_line")
+              .select("document_id, batch_number, packing_order_id")
+              .in("document_id", chunk)
+              .eq("material_id", materialId)
+              .not("packing_order_id", "is", null));
+        } catch {
+          throw new Error("PI_OPENING_STOCK_LOOKUP_FAILED");
+        }
         const openingPkoByDocumentBatchKey = new Map(
           ((openingLines ?? []) as JsonRecord[]).map((line) => [
             `${toTrimmedString(line.document_id)}::${toTrimmedString(line.batch_number)}`,
@@ -2742,7 +2764,9 @@ export async function listPIDifferencesHandler(
     // or being read for another's rows.
     const [postedLedgerRows, ...pendingRateMapsByCompany] = await Promise.all([
       postedDocIds.length
-        ? serviceRoleClient.schema("erp_inventory").from("stock_ledger").select("stock_document_id, valuation_rate").in("stock_document_id", postedDocIds)
+        ? fetchInChunks<JsonRecord>(postedDocIds, (chunk) =>
+          serviceRoleClient.schema("erp_inventory").from("stock_ledger").select("stock_document_id, valuation_rate").in("stock_document_id", chunk))
+          .then((rows) => ({ data: rows }))
         : Promise.resolve({ data: [] as JsonRecord[] }),
       ...companyIds.map((cid) =>
         fetchCurrentValuationRates(
