@@ -185,6 +185,8 @@ function POCopy({ po, from, to, portsById }) {
   const revisedOn = revised
     ? (po.amendment_log.map((entry) => String(entry.amended_at || "")).filter(Boolean).sort().pop() || null)
     : null;
+  // A revised PO prints its latest revision date as the PO Date.
+  const printedPoDate = revisedOn || po?.po_date;
   // Found live 2026-08-19 (business owner): Rate/Amount had no currency
   // indicator at all -- an Import PO's USD rate looked identical to a
   // Domestic PO's INR rate. currency_code lives per-line (purchase_order_line),
@@ -192,7 +194,7 @@ function POCopy({ po, from, to, portsById }) {
   const currencyCode = String(line?.currency_code || "").trim().toUpperCase() || "INR";
   const qrPayload = buildQrPayload({
     docNumber: po?.po_number,
-    date: fmtDate(po?.po_date),
+    date: fmtDate(printedPoDate),
     counterpartCode: to?.vendor_code,
     approverCode: resolveApproverCode(po?.approval_log),
     issuerCode: from?.company_code,
@@ -220,8 +222,7 @@ function POCopy({ po, from, to, portsById }) {
           <table className="doc-id-table">
             <tbody>
               <tr><td className="k">PO No.</td><td className="v">{po?.po_number}</td></tr>
-              <tr><td className="k">PO Date</td><td className="v">{fmtDate(po?.po_date)}</td></tr>
-              {isLotOrder && revisedOn ? <tr><td className="k">Revised On</td><td className="v">{fmtDate(revisedOn)}</td></tr> : null}
+              <tr><td className="k">PO Date</td><td className="v">{fmtDate(printedPoDate)}</td></tr>
             </tbody>
           </table>
         </div>
