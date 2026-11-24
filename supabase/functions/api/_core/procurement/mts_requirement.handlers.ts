@@ -666,10 +666,13 @@ async function loadSubCsnTransfers(companyId: string, materials: Map<string, Mat
       continue;
     }
     if (receiver === companyId && sender !== companyId) {
-      result.events.push({ material_id: materialId, qty: qtyBase, date, kind: "SUB_CSN_PLANNED", date_source: date ? "SUB_CSN_ETA" : "NONE", reference: `${ref} (planned transfer from another company)`,
+      // Owner 2026-11-24: a Sub-CSN share whose Mother CSN (or itself) is in transit HAS shipped: it is an In-transit piece like any other, never "NOT SHIPPED"
+      // and never advised a new date (a shipped piece cannot be moved). Only a Sub-CSN still being planned stays a planned, movable share.
+      const shipped = motherInTransit.has(text(sub.mother_csn_id)) || text(sub.status) === "TRN";
+      result.events.push({ material_id: materialId, qty: qtyBase, date, kind: shipped ? "IN_TRANSIT" : "SUB_CSN_PLANNED", date_source: date ? "SUB_CSN_ETA" : "NONE", reference: `${ref} (planned transfer from another company)`,
         // Owner 2026-10-30: the user (not the system) distributes the shipment; each receiving company's plan judges its own share like any lot.
-        csn_id: text(sub.id), reschedule_key: `SUB_CSN|${text(sub.id)}`, ...(sharedNoteOf(sub) ? { shared_note: sharedNoteOf(sub) } : {}),
-        ...(motherInTransit.has(text(sub.mother_csn_id)) || text(sub.status) === "TRN" ? { mother_in_transit: true } : {}) });
+        csn_id: text(sub.id),
+        ...(shipped ? { mother_in_transit: true } : { reschedule_key: `SUB_CSN|${text(sub.id)}`, ...(sharedNoteOf(sub) ? { shared_note: sharedNoteOf(sub) } : {}) }) });
     } else if (sender === companyId && receiver !== companyId) {
       const key = text(sub.po_line_id) || `stock:${text(sub.id)}`;
       const entry = committedPerLine.get(key) ?? { materialId, qty: 0 };
