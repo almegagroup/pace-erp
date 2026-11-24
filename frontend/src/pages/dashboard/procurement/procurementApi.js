@@ -1518,6 +1518,26 @@ export function getDispatchReport(params) {
   return fetchProcurement("GET", "/api/procurement/dispatch-report", undefined, params);
 }
 
+export function getPoStatusReport(params) {
+  return fetchProcurement("GET", "/api/procurement/po-status-report", undefined, params);
+}
+
+export function getGrnReceivingReport(params) {
+  return fetchProcurement("GET", "/api/procurement/grn-receiving-report", undefined, params);
+}
+
+export function getFgMovementReport(params) {
+  return fetchProcurement("GET", "/api/procurement/fg-movement-report", undefined, params);
+}
+
+export function getFgMovementPlaces(params) {
+  return fetchProcurement("GET", "/api/procurement/fg-movement-report/places", undefined, params);
+}
+
+export function getFgMovementOptions(params) {
+  return fetchProcurement("GET", "/api/procurement/fg-movement-report/options", undefined, params);
+}
+
 // AC09 -- Batch Costing Report
 export function getBatchCostingReport(params) {
   return fetchProcurement("GET", "/api/procurement/batch-costing-report", undefined, params);

@@ -206,6 +206,9 @@ import DODetailPage from "../pages/dashboard/procurement/sales/DODetailPage.jsx"
 import SalesInvoiceListPage from "../pages/dashboard/procurement/sales/SalesInvoiceListPage.jsx";
 import SalesInvoiceDetailPage from "../pages/dashboard/procurement/sales/SalesInvoiceDetailPage.jsx";
 import DispatchReportPage from "../pages/dashboard/procurement/sales/DispatchReportPage.jsx";
+import PoStatusReportPage from "../pages/dashboard/procurement/po/PoStatusReportPage.jsx";
+import GrnReceivingReportPage from "../pages/dashboard/procurement/grn/GrnReceivingReportPage.jsx";
+import FgMovementReportPage from "../pages/dashboard/procurement/sales/FgMovementReportPage.jsx";
 import PIDocumentListPage from "../pages/dashboard/procurement/inventory/PIDocumentListPage.jsx";
 import PIDocumentCreatePage from "../pages/dashboard/procurement/inventory/PIDocumentCreatePage.jsx";
 import PIDocumentDetailPage from "../pages/dashboard/procurement/inventory/PIDocumentDetailPage.jsx";
@@ -955,6 +958,18 @@ export default function AppRouter() {
                   <Route
                     path="procurement/sales/dispatch-report"
                     element={<DispatchReportPage />}
+                  />
+                  <Route
+                    path="procurement/po-status"
+                    element={<PoStatusReportPage />}
+                  />
+                  <Route
+                    path="procurement/grn-receiving-report"
+                    element={<GrnReceivingReportPage />}
+                  />
+                  <Route
+                    path="procurement/sales/fg-movement-report"
+                    element={<FgMovementReportPage />}
                   />
                   <Route
                     path="procurement/opening-stock"

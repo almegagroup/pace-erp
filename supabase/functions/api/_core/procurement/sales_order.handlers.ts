@@ -3468,19 +3468,20 @@ export async function reviewExcelUploadBatchHandler(req: Request, ctx: Procureme
       previews.push(buildExcelUploadRowPreview(row, so, skipReason, resolvedMaterial, ac05Rate, companyStateName));
     }
 
-    // Duplicate detection: Vendor Code (from the row's own resolved SO) + SKU + Qty + Rate.
+    // Duplicate detection: SO + Vendor Code (from the row's own resolved SO) + SKU + Qty + Rate. The SO number is part
+    // of the key: the same SKU / qty / rate on two different SOs (e.g. two customer orders) is two real lines, not a repeat.
     const dupCounts = new Map<string, number>();
     for (const preview of previews) {
       if (preview.skip_reason) continue;
       const so = soByNumber.get(toTrimmedString(preview.so_number));
-      const key = [toTrimmedString(so?.vendor_code_id), toTrimmedString(preview.sku).toUpperCase(),
+      const key = [toTrimmedString(preview.so_number), toTrimmedString(so?.vendor_code_id), toTrimmedString(preview.sku).toUpperCase(),
         preview.pack_qty, preview.rate].join("|");
       dupCounts.set(key, (dupCounts.get(key) ?? 0) + 1);
     }
     for (const preview of previews) {
       if (preview.skip_reason) continue;
       const so = soByNumber.get(toTrimmedString(preview.so_number));
-      const key = [toTrimmedString(so?.vendor_code_id), toTrimmedString(preview.sku).toUpperCase(),
+      const key = [toTrimmedString(preview.so_number), toTrimmedString(so?.vendor_code_id), toTrimmedString(preview.sku).toUpperCase(),
         preview.pack_qty, preview.rate].join("|");
       preview.is_duplicate = (dupCounts.get(key) ?? 0) > 1;
     }

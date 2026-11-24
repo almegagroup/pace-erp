@@ -1821,6 +1821,52 @@ export async function reverseGRNHandler(
       return procurementErrorResponse(req, ctx, preCheckCode, blocked.status, blocked.message);
     }
 
+    // QA usage decision already moved the stock out of Quality Inspection: say so
+    // up front. Otherwise the P102 below fails first with a misleading "stock short"
+    // (complete_grn_reverse's own QA_DECIDED check only runs after the movement).
+    const { data: qaDocs } = await serviceRoleClient
+      .schema("erp_procurement").from("inward_qa_document")
+      .select("id").eq("grn_id", grnId);
+    const qaDocIds = (qaDocs ?? []).map((d: { id: string }) => d.id);
+    const qaReleaseReversals: JsonRecord[] = [];
+    if (qaDocIds.length > 0) {
+      const { data: decisionLines } = await serviceRoleClient
+        .schema("erp_procurement").from("inward_qa_decision_line")
+        .select("usage_decision, stock_ledger_id").in("qa_document_id", qaDocIds);
+      const decisions = (decisionLines ?? []) as JsonRecord[];
+      // Owner rule (2026-11-19): a wrong GRN is wrong even after QA passed it -- undo a RELEASE in the same
+      // transaction (P322 Unrestricted -> QA, then the P102 below). Other decisions (Block/Reject) still need RTV.
+      if (decisions.some((d) => String(d.usage_decision) !== "RELEASE" || !d.stock_ledger_id)) {
+        const blocked = GRN_REVERSE_ERRORS["GRN_REVERSE_QA_DECIDED"];
+        return procurementErrorResponse(req, ctx, "GRN_REVERSE_QA_DECIDED", blocked.status, blocked.message);
+      }
+      if (decisions.length > 0) {
+        const legIds = decisions.map((d) => String(d.stock_ledger_id));
+        const { data: legs, error: legsError } = await serviceRoleClient
+          .schema("erp_inventory").from("stock_ledger")
+          .select("id, company_id, storage_location_id, material_id, quantity, base_uom_code, valuation_rate, stock_document_id")
+          .in("id", legIds);
+        if (legsError || (legs ?? []).length !== legIds.length) {
+          return procurementErrorResponse(req, ctx, "GRN_RECEIPT_LEG_NOT_FOUND", 500, "The QA release posting could not be found.");
+        }
+        for (const [i, leg] of (legs as JsonRecord[]).entries()) {
+          const revDoc = await generateMaterialDocNumber(String(grn.company_id));
+          const day = todayIsoDate();
+          const base = {
+            document_number: grn.grn_number, document_date: day, posting_date: day, movement_type_code: "P322",
+            company_id: leg.company_id, storage_location_id: leg.storage_location_id, material_id: leg.material_id,
+            quantity: leg.quantity, base_uom_code: leg.base_uom_code, unit_value: leg.valuation_rate ?? 0,
+            material_doc_number: revDoc.docNumber, material_doc_year: revDoc.docYear,
+            reference_document_number: grn.grn_number,
+          };
+          qaReleaseReversals.push(
+            { ...base, line_ref: `QA_RELEASE_REVERSAL:${i}:OUT`, stock_type_code: "UNRESTRICTED", direction: "OUT" },
+            { ...base, line_ref: `QA_RELEASE_REVERSAL:${i}`, stock_type_code: "QUALITY_INSPECTION", direction: "IN" },
+          );
+        }
+      }
+    }
+
     // Reverse exactly what the receipt posted (base qty/UoM, location, stock
     // type, posted rate) rather than re-deriving it from the GRN's PO-UoM fields.
     const { data: receiptLeg, error: legError } = await serviceRoleClient
@@ -1838,7 +1884,7 @@ export async function reverseGRNHandler(
         p_reference_document_type: "GRN",
         p_reference_document_id: grnId,
         p_posted_by: ctx.auth_user_id,
-        p_movements: [{
+        p_movements: [...qaReleaseReversals, {
           line_ref: "GRN_REVERSAL",
           document_number: grn.grn_number,
           document_date: today,
@@ -2073,6 +2119,7 @@ export async function listGrnInvoiceMappingCandidatesHandler(
         vendor_name: vendor ? `${vendor.vendor_code} — ${vendor.vendor_name}` : null,
         material_name: material ? `${material.pace_code} — ${material.material_name}` : null,
         received_qty: g.received_qty,
+        uom_code: g.uom_code ?? null,
         po_number: po?.po_number ?? null,
         sto_number: sto?.sto_number ?? null,
         vehicle_number: gateEntry?.vehicle_number ?? null,
@@ -2191,6 +2238,10 @@ export async function mapGrnInvoiceHandler(
       serviceRoleClient.schema("erp_procurement").from("goods_receipt").select("*").in("id", idChunk));
     if (grns.length !== grnIds.length) {
       return procurementErrorResponse(req, ctx, "GRN_MAPPING_GRN_NOT_FOUND", 404, "One or more selected GRNs were not found.");
+    }
+    for (const grn of grns) {
+      const rateUnitError = invoiceRateUnitError(grn, invoiceRate);
+      if (rateUnitError) return procurementErrorResponse(req, ctx, "GRN_INVOICE_RATE_UOM_MISMATCH", 400, rateUnitError);
     }
     const selectedGrnQty = grns.reduce((total, grn) => total + Number(grn.received_qty ?? 0), 0);
     // This is a hard business gate, not merely the UI cross-check: callers
@@ -2411,6 +2462,19 @@ function splitProportionally(totalValue: number, slices: { quantity: number }[],
   return shares;
 }
 
+// Found live 2026-11-19 (CMP003 Fine Sand, GRN UoM MT / base KG): the vendor invoice quotes the rate per KG (3.2),
+// but invoice_rate/confirmed_rate are per the GRN's own UoM (per MT, e.g. 3200). Typing 3.2 was then divided by
+// per_pack_qty again (AC01 landed cost, stock revaluation) -> 1000x too low. A rate that is within 5x of the
+// per-BASE-unit PO rate while the GRN UoM is a pack of > 1 base units is that mistake; reject it with the fix.
+function invoiceRateUnitError(grn: JsonRecord, rate: number): string | null {
+  const perPackQty = grn.per_pack_qty != null ? Number(grn.per_pack_qty) : 0;
+  const poRate = grn.po_rate != null ? Number(grn.po_rate) : 0;
+  if (!(perPackQty > 1) || !(poRate > 0) || !(rate > 0)) return null;
+  if (rate > (poRate / perPackQty) * 5) return null;
+  const uom = toTrimmedString(grn.uom_code) || "pack UoM";
+  return `Rate ${rate} looks like a per-base-unit rate. Enter the rate per ${uom} (the PO rate is ${poRate} per ${uom}).`;
+}
+
 export async function splitGrnHandler(
   req: Request,
   ctx: ProcurementHandlerContext,
@@ -2462,6 +2526,10 @@ export async function splitGrnHandler(
       .select("*").eq("id", grnId).single();
     if (grnError || !grn) {
       return procurementErrorResponse(req, ctx, "GRN_NOT_FOUND", 404, "GRN not found.");
+    }
+    for (const slice of slices) {
+      const rateUnitError = invoiceRateUnitError(grn as JsonRecord, slice.invoiceRate);
+      if (rateUnitError) return procurementErrorResponse(req, ctx, "GRN_INVOICE_RATE_UOM_MISMATCH", 400, rateUnitError);
     }
     if (toUpperTrimmedString(grn.status) !== "POSTED") {
       return procurementErrorResponse(req, ctx, "GRN_NOT_POSTED", 400, "Only POSTED GRNs can be split.");

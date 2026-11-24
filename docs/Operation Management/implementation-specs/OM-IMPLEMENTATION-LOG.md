@@ -6947,6 +6947,20 @@ Open / blocked: Google Sheets not reachable (legacy formulas UNRESOLVED for Pror
 
 ---
 
+## 2026-11-18 — CMP005 pack-209 CTN-as-PKT operational correction — PROD COMPLETE
+
+**R-04 classification:** operational business-data repair, executed as one guarded Production MCP transaction; **not a migration**. An initial mistaken migration-runner record was removed from `supabase_migrations.schema_migrations` immediately on the business owner's instruction. The correction data and its audit evidence were retained; no business row, PGI row, stock ledger row, or archive row was removed during this R-04 cleanup.
+
+**Scope:** only CMP005 MTS FG lines whose material pack code is `209`. The entered CTN values were PKT counts (`1 CTN = 20 PKT = 20 KG`). Exactly 40 SO lines, 29 dependent DO/SO-allocation/invoice lines and 13 DO/invoice headers were corrected by the factor of 20; all other companies, pack codes and adjacent invoice SKUs were excluded.
+
+**PGI:** two actual pack-209 P601 items were corrected append-only: P602 reversals for `4,000` and `2,000` KG, followed by corrected P601 issues for `200` and `100` KG. Before-images of 158 rows were retained in `erp_history.cmp005_pack209_ctn_as_pkt_correction_20261118`.
+
+**Verification:** all 13 invoice headers reconcile to their complete line sets; all 13 DO net weights reconcile. CMP005's affected unrestricted stock snapshot and its ledger balance both equal `6,120 KG` after the correction.
+
+**2026-11-19 follow-up:** two dependent reservations (`RESV00026626`, `RESV00026661`) had retained the pre-correction `800 KG` requirement even though each linked DO and allocation was `40 KG`; they were guardedly aligned to `40 KG`. Separate from that data-shape correction, the owner authorised a real CMP005 opening-stock increase for SKU `54298253209`: `2 CTN = 80 KG` at the original `₹10/KG` and `2026-09-27` cut-off date. New OS `6000000034` line 5 links to append-only P561 Material Document `00001561/2026-27`; stock snapshot and ledger both reconcile to `80 KG` / `₹800`. No existing stock ledger row or guard was altered.
+
+---
+
 ### 2026-10-28 — PO22 Order-UoM stock/display parity (Codex) — IMPLEMENTED ON AGENT BRANCH
 
 - **Reported symptom:** PO22 could show a stock quantity in the material's base UoM while the

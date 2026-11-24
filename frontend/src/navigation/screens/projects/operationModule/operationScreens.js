@@ -728,6 +728,34 @@ export const OPERATION_SCREENS = Object.freeze({
     keepAlive: false,
   },
 
+  // PO24 -- PO Status (Procurement menu): per vendor / PO / material line, with Knock-off and Cancel PO.
+  PROC_PO_STATUS_REPORT: {
+    screen_code: "PROC_PO_STATUS_REPORT",
+    route: "/dashboard/procurement/po-status",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  // PO23 -- GRN Receiving Report (Receiving menu): per gate entry PO line and GRN, visible to everyone (company scoped).
+  PROC_GRN_RECEIVING_REPORT: {
+    screen_code: "PROC_GRN_RECEIVING_REPORT",
+    route: "/dashboard/procurement/grn-receiving-report",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
+  // SO06 -- FG Movement Report (Opening / Production / PID / Dispatch / Closing / In QA / Blocked per FG SKU, by PO21 Mother and
+  // Child group), Sales menu, visible to everyone; every company is checked against the caller's own on the backend.
+  PROC_FG_MOVEMENT_REPORT: {
+    screen_code: "PROC_FG_MOVEMENT_REPORT",
+    route: "/dashboard/procurement/sales/fg-movement-report",
+    universe: "ACL",
+    type: SCREEN_TYPE.FULL,
+    keepAlive: false,
+  },
+
   // §113.15 -- Stage 3 PGI + Invoice creation flow, entered from SO02
   // (PROC_INV_LIST, now the DO/PGI queue) by picking a CREATED DO.
   PROC_INV_PGI_CREATE: {

@@ -9386,6 +9386,36 @@
     ]
   },
   {
+    "page": "frontend/src/pages/dashboard/procurement/sales/FgMovementReportPage.jsx",
+    "dependencyCount": 3,
+    "deps": [
+      {
+        "fn": "getFgMovementOptions",
+        "method": "GET",
+        "path": "/api/procurement/fg-movement-report/options",
+        "resourceCode": "PROC_FG_MOVEMENT_REPORT",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "getFgMovementPlaces",
+        "method": "GET",
+        "path": "/api/procurement/fg-movement-report/places",
+        "resourceCode": "PROC_FG_MOVEMENT_REPORT",
+        "action": "VIEW",
+        "skipAcl": false
+      },
+      {
+        "fn": "getFgMovementReport",
+        "method": "GET",
+        "path": "/api/procurement/fg-movement-report",
+        "resourceCode": "PROC_FG_MOVEMENT_REPORT",
+        "action": "VIEW",
+        "skipAcl": false
+      }
+    ]
+  },
+  {
     "page": "frontend/src/pages/dashboard/procurement/accounts/ManualCostingRatePage.jsx",
     "dependencyCount": 0,
     "deps": []

@@ -39,7 +39,8 @@ type Candidate = {
   // INCLUSIVE = net GST out of a gross PO rate (also stores the net grn_rate); RESYNC = leg rate differs from the commercial rate.
   // QA_RATE = an Inward QA decision leg (QI -> Unrestricted/Blocked/...) posted at a rate that is not the GRN leg's own rate
   //           (the PO-UoM rate was used on a base-UoM quantity: MT rate on kg = 1000x).
-  kind: "INCLUSIVE" | "RESYNC" | "QA_RATE";
+  // LEG_SYNC = (separate "leg_sync" mode) an Inward QA IN leg set to its GRN's real base-UoM rate incl. landed cost.
+  kind: "INCLUSIVE" | "RESYNC" | "QA_RATE" | "LEG_SYNC";
   grn_id: string;
   grn_number: string;
   company_id: string;
@@ -50,6 +51,8 @@ type Candidate = {
   quantity_base: number;
   old_leg_rate: number;
   new_leg_rate: number;
+  storage_location_id?: string;
+  stock_type_code?: string;
 };
 
 async function findCandidates(ctx: Ctx, materialId: string): Promise<{ candidates: Candidate[]; skipped: JsonRecord[] }> {
@@ -140,7 +143,111 @@ async function findInclusiveCandidates(ctx: Ctx, materialId: string): Promise<{ 
   return { candidates, skipped };
 }
 
-const RESYNC_REASON = "GRN valuation re-sync (receipt leg rate vs commercial rate)";
+const LEG_SYNC_REASON = "Release-leg rate re-sync (every Inward QA leg at its GRN's real rate)";
+const LEG_SYNC_TOLERANCE = 0.005; // 0.5 %
+
+// "leg_sync" mode. Found live 2026-11-19 (CMP003 Fine Sand): old valuation corrections were logged without the per-leg rate, so
+// every later bucket replay dropped them, and split parents' release legs were never corrected -- the Unrestricted WAR sat at
+// 2.04 while a replay with every QA leg at its GRN's real rate gives ~2.95. The cure is ONE replay per bucket carrying EVERY
+// leg's real rate (the engine now stores it as the leg's memory, so this cannot recur). Real rate per GRN comes from
+// derive_grn_leg_rates(): commercial rate per base unit + that GRN's own landed cost per base unit (split parent = its children).
+// A GRN whose rate is not known yet (invoice-later, no invoice) yields NULL and is left at its ledger rate.
+async function findLegSyncCandidates(ctx: Ctx, materialId: string): Promise<{ candidates: Candidate[]; skipped: JsonRecord[]; buckets: JsonRecord[] }> {
+  const skipped: JsonRecord[] = [];
+  const qaDocs: JsonRecord[] = [];
+  for (let from = 0; ; from += 1000) {
+    let query = serviceRoleClient.schema("erp_procurement").from("inward_qa_document")
+      .select("id, grn_id, material_id, company_id").not("grn_id", "is", null)
+      .order("id", { ascending: true }).range(from, from + 999);
+    if (materialId) query = query.eq("material_id", materialId);
+    const { data, error } = await query;
+    if (error) throw new Error("GST_BACKFILL_LOOKUP_FAILED");
+    qaDocs.push(...((data ?? []) as JsonRecord[]));
+    if ((data ?? []).length < 1000) break;
+  }
+  if (qaDocs.length === 0) return { candidates: [], skipped, buckets: [] };
+  const qaById = new Map(qaDocs.map((q) => [text(q.id), q]));
+  const stockDocs = await fetchInChunks<JsonRecord>([...qaById.keys()], (chunk) => serviceRoleClient.schema("erp_inventory").from("stock_document")
+    .select("id, reference_document_id").eq("reference_document_type", "QA").in("reference_document_id", chunk).order("id", { ascending: true }));
+  const qaByStockDoc = new Map(stockDocs.map((d) => [text(d.id), text(d.reference_document_id)]));
+  const legs = await fetchInChunks<JsonRecord>([...qaByStockDoc.keys()], (chunk) => serviceRoleClient.schema("erp_inventory").from("stock_ledger")
+    .select("id, stock_document_id, quantity, valuation_rate, company_id, material_id, storage_location_id, stock_type_code")
+    .eq("direction", "IN").in("stock_document_id", chunk).order("id", { ascending: true }));
+
+  const grnIds = [...new Set(qaDocs.map((q) => text(q.grn_id)))];
+  const grnRows = await fetchInChunks<JsonRecord>(grnIds, (chunk) => serviceRoleClient.schema("erp_procurement").from("goods_receipt")
+    .select("id, grn_number, status").in("id", chunk).order("id", { ascending: true }));
+  const grnById = new Map(grnRows.map((g) => [text(g.id), g]));
+  const derivedByGrn = new Map<string, number | null>();
+  for (let i = 0; i < grnIds.length; i += 200) {
+    const { data, error } = await serviceRoleClient.schema("erp_procurement").rpc("derive_grn_leg_rates", { p_grn_ids: grnIds.slice(i, i + 200) });
+    if (error) throw new Error("LEG_SYNC_DERIVE_FAILED");
+    for (const row of (data ?? []) as JsonRecord[]) {
+      derivedByGrn.set(text(row.grn_id), row.leg_rate == null ? null : Number(row.leg_rate));
+    }
+  }
+
+  const scoped = new Set<string>();
+  const candidates: Candidate[] = [];
+  for (const leg of legs) {
+    const qa = qaById.get(qaByStockDoc.get(text(leg.stock_document_id)) ?? "");
+    const grn = qa ? grnById.get(text(qa.grn_id)) : null;
+    if (!qa || !grn) continue;
+    const status = text(grn.status);
+    if (status !== "POSTED" && status !== "SPLIT") continue; // REVERSED etc.: nothing to value
+    const target = derivedByGrn.get(text(grn.id));
+    if (target == null || !(target > 0)) {
+      skipped.push({ grn_number: grn.grn_number, reason: "rate not known yet (no invoice) - left at its ledger rate" });
+      continue;
+    }
+    const quantity = Number(leg.quantity ?? 0);
+    const oldRate = Number(leg.valuation_rate ?? 0);
+    if (!(quantity > 0) || Math.abs(oldRate - target) <= LEG_SYNC_TOLERANCE * Math.max(target, 0.01)) continue;
+    const companyId = text(leg.company_id);
+    if (!scoped.has(companyId)) { await assertCompanyScope(ctx, companyId); scoped.add(companyId); }
+    candidates.push({
+      kind: "LEG_SYNC",
+      grn_id: text(grn.id),
+      grn_number: text(grn.grn_number),
+      company_id: companyId,
+      material_id: text(leg.material_id),
+      ledger_id: text(leg.id),
+      target_grn_rate: target,
+      old_grn_rate: oldRate,
+      quantity_base: quantity,
+      old_leg_rate: oldRate,
+      new_leg_rate: target,
+      storage_location_id: text(leg.storage_location_id),
+      stock_type_code: text(leg.stock_type_code),
+    });
+  }
+
+  // Dry-run view: per snapshot bucket, the WAR now and the WAR after ONE replay carrying every leg's real rate.
+  const byBucket = new Map<string, Candidate[]>();
+  for (const c of candidates) {
+    const key = `${c.company_id}|${c.material_id}|${c.storage_location_id}|${c.stock_type_code}`;
+    byBucket.set(key, [...(byBucket.get(key) ?? []), c]);
+  }
+  const buckets: JsonRecord[] = [];
+  for (const rows of byBucket.values()) {
+    const { data, error } = await serviceRoleClient.schema("erp_inventory")
+      .rpc("simulate_valuation_at_rows", { p_corrections: rows.map((r) => ({ stock_ledger_id: r.ledger_id, new_rate: r.new_leg_rate })) });
+    if (error || !data) { skipped.push({ grn_number: rows[0].grn_number, reason: "bucket cannot be simulated" }); continue; }
+    const sim = data as JsonRecord;
+    buckets.push({
+      company_id: rows[0].company_id,
+      material_id: rows[0].material_id,
+      storage_location_id: rows[0].storage_location_id,
+      stock_type_code: rows[0].stock_type_code,
+      legs: rows.length,
+      quantity_base: Number(rows.reduce((sum, r) => sum + r.quantity_base, 0).toFixed(3)),
+      old_rate: Number(sim.old_rate ?? 0),
+      new_rate: Number(sim.new_rate ?? 0),
+      quantity_on_hand: Number(sim.quantity_on_hand ?? 0),
+    });
+  }
+  return { candidates, skipped, buckets };
+}
 const QA_RATE_REASON = "Inward QA leg rate set to the GRN leg rate (UoM mix-up)";
 const QA_RATE_TOLERANCE = 0.005; // 0.5 %
 
@@ -340,9 +447,35 @@ async function materialLabelFor(materialIds: string[]): Promise<(id: string) => 
 }
 
 // The actual correction of one material (what the old synchronous apply did). Returns the payload the screen shows.
-async function applyMaterial(ctx: Ctx, materialId: string, reason: string): Promise<JsonRecord> {
-  const { candidates, skipped } = await findCandidates(ctx, materialId);
+async function applyMaterial(ctx: Ctx, materialId: string, reason: string, legSync = false): Promise<JsonRecord> {
   const label = await materialLabelFor([materialId]);
+  if (legSync) {
+    const found = await findLegSyncCandidates(ctx, materialId);
+    if (found.candidates.length === 0) return { dry_run: false, corrected: 0, failed: 0, material: label(materialId), skipped: dedupeSkipped(found.skipped) };
+    // ONE cascade carrying every leg of every bucket: the replay of a bucket needs all its legs' real rates together.
+    const legResults = await cascadeRecalculate(
+      found.candidates.map((c) => ({ ledgerId: c.ledger_id, newRate: c.new_leg_rate })),
+      ctx.auth_user_id,
+      LEG_SYNC_REASON,
+    );
+    const okLegs = new Set(legResults.filter((r) => r.ok).map((r) => r.ledgerId));
+    const doneLegs = found.candidates.filter((c) => okLegs.has(c.ledger_id));
+    const failedLegs = found.candidates.filter((c) => !okLegs.has(c.ledger_id)).map((c) => c.grn_number);
+    return {
+      dry_run: false,
+      material: label(materialId),
+      corrected: new Set(doneLegs.map((c) => c.grn_number)).size,
+      failed: new Set(failedLegs).size,
+      failed_grns: [...new Set(failedLegs)],
+      cascade_steps: legResults.length,
+      cascade_errors: legResults.filter((r) => !r.ok).map((r) => ({ ledger_id: r.ledgerId, error: r.error })),
+      skipped: dedupeSkipped(found.skipped),
+      grns: new Set(doneLegs.map((c) => c.grn_number)).size,
+      quantity_base: Number(doneLegs.reduce((sum, c) => sum + c.quantity_base, 0).toFixed(3)),
+      value_change: Number(found.buckets.reduce((sum, b) => sum + (Number(b.new_rate) - Number(b.old_rate)) * Number(b.quantity_on_hand), 0).toFixed(2)),
+    };
+  }
+  const { candidates, skipped } = await findCandidates(ctx, materialId);
   if (candidates.length === 0) {
     return { dry_run: false, corrected: 0, failed: 0, material: label(materialId), skipped };
   }
@@ -375,10 +508,24 @@ async function applyMaterial(ctx: Ctx, materialId: string, reason: string): Prom
   };
 }
 
-async function runJob(jobId: string, ctx: Ctx, materialId: string, reason: string): Promise<void> {
+// One line per GRN, capped: the same GRN can own several legs and the list is only a hint on screen.
+function dedupeSkipped(skipped: JsonRecord[]): JsonRecord[] {
+  const seen = new Set<string>();
+  const out: JsonRecord[] = [];
+  for (const row of skipped) {
+    const key = `${text(row.grn_number)}|${text(row.reason)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(row);
+    if (out.length >= 50) break;
+  }
+  return out;
+}
+
+async function runJob(jobId: string, ctx: Ctx, materialId: string, reason: string, legSync = false): Promise<void> {
   const jobs = serviceRoleClient.schema("erp_procurement").from("grn_gst_backfill_job");
   try {
-    const result = await applyMaterial(ctx, materialId, reason);
+    const result = await applyMaterial(ctx, materialId, reason, legSync);
     await jobs.update({ status: "DONE", result, finished_at: new Date().toISOString() }).eq("id", jobId);
   } catch (error) {
     const code = error instanceof Error ? error.message : "GST_BACKFILL_FAILED";
@@ -391,6 +538,7 @@ export async function grnGstInclusiveBackfillHandler(req: Request, ctx: Ctx): Pr
     const body = await req.json().catch(() => ({} as JsonRecord)) as JsonRecord;
     const apply = body.apply === true;
     const materialId = text(body.material_id);
+    const legSync = text(body.mode) === "leg_sync";
     if (apply && !materialId) return fail(req, ctx, "GST_BACKFILL_MATERIAL_REQUIRED", 400, "Apply one material at a time.");
     const reason = text(body.reason) || "GST-inclusive PO rate netted of GST (backfill)";
 
@@ -413,8 +561,65 @@ export async function grnGstInclusiveBackfillHandler(req: Request, ctx: Ctx): Pr
         throw new Error("GST_BACKFILL_JOB_CREATE_FAILED");
       }
       // Fire and forget: the process keeps running after the response (Render's long-lived Node server).
-      void runJob(String(job.id), ctx, materialId, reason);
+      void runJob(String(job.id), ctx, materialId, reason, legSync);
       return okResponse({ data: { job_id: job.id, status: "RUNNING" } }, ctx.request_id, req);
+    }
+
+    if (legSync) {
+      const found = await findLegSyncCandidates(ctx, materialId);
+      const ids = [...new Set(found.candidates.map((c) => c.material_id))];
+      const legLabel = await materialLabelFor(ids);
+      const legBaseUom = new Map<string, string>();
+      if (ids.length > 0) {
+        const uomRows = await fetchInChunks<JsonRecord>(ids, (chunk) =>
+          serviceRoleClient.schema("erp_master").from("material_master").select("id, base_uom_code").in("id", chunk).order("id", { ascending: true }),
+        ).catch(() => [] as JsonRecord[]);
+        for (const row of uomRows) legBaseUom.set(text(row.id), text(row.base_uom_code));
+      }
+      const companies = await fetchInChunks<JsonRecord>([...new Set(found.candidates.map((c) => c.company_id))], (chunk) =>
+        serviceRoleClient.schema("erp_master").from("companies").select("id, company_code").in("id", chunk).order("id", { ascending: true }),
+      ).catch(() => [] as JsonRecord[]);
+      const companyCode = new Map(companies.map((row) => [text(row.id), text(row.company_code)]));
+      const locationIds = [...new Set(found.candidates.map((c) => c.storage_location_id ?? "").filter(Boolean))];
+      const locations = await fetchInChunks<JsonRecord>(locationIds, (chunk) =>
+        serviceRoleClient.schema("erp_inventory").from("storage_location_master").select("id, code").in("id", chunk).order("id", { ascending: true }),
+      ).catch(() => [] as JsonRecord[]);
+      const locationCode = new Map(locations.map((row) => [text(row.id), text(row.code)]));
+      const legMaterials = ids.map((id) => {
+        const rows = found.candidates.filter((c) => c.material_id === id);
+        const mBuckets = found.buckets.filter((b) => b.material_id === id);
+        return {
+          material_id: id,
+          material: legLabel(id),
+          base_uom_code: legBaseUom.get(id) || "—",
+          grns: new Set(rows.map((r) => r.grn_number)).size,
+          quantity_base: Number(rows.reduce((sum, r) => sum + r.quantity_base, 0).toFixed(3)),
+          value_change: Number(mBuckets.reduce((sum, b) => sum + (Number(b.new_rate) - Number(b.old_rate)) * Number(b.quantity_on_hand), 0).toFixed(2)),
+          grn_numbers: [...new Set(rows.map((r) => r.grn_number))],
+          buckets: mBuckets.map((b) => ({
+            company: companyCode.get(text(b.company_id)) || "—",
+            location: locationCode.get(text(b.storage_location_id)) || "—",
+            stock_type_code: b.stock_type_code,
+            legs: b.legs,
+            quantity_on_hand: b.quantity_on_hand,
+            old_rate: b.old_rate,
+            new_rate: b.new_rate,
+          })),
+        };
+      });
+      return okResponse({
+        data: {
+          dry_run: true,
+          mode: "leg_sync",
+          materials: legMaterials,
+          skipped: dedupeSkipped(found.skipped),
+          total: {
+            grns: legMaterials.reduce((sum, m) => sum + m.grns, 0),
+            quantity_base: Number(legMaterials.reduce((sum, m) => sum + m.quantity_base, 0).toFixed(3)),
+            value_change: Number(legMaterials.reduce((sum, m) => sum + m.value_change, 0).toFixed(2)),
+          },
+        },
+      }, ctx.request_id, req);
     }
 
     const { candidates, skipped } = await findCandidates(ctx, materialId);

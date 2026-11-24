@@ -44,6 +44,7 @@ import {
   dotFontArgb,
   paymentDotStatus,
   ac01SplitSummary,
+  ratePerBaseUom,
 } from "./ac01GridColumns.jsx";
 
 const DATE_FIELD_OPTIONS = [
@@ -392,8 +393,8 @@ function buildColumns(components) {
     { key: "split_source_grn_number", label: "Split From GRN", width: "110px", render: (row) => row.split_source_grn_number || "—" },
     { key: "item_name", label: "Item Name", width: "160px" },
     { key: "external_code", label: "External Code", width: "110px" },
-    { key: "grn_qty_base", label: "GRN Qty", width: "90px", align: "right", render: (row) => formatNumberOrBlank(row.grn_qty_base) },
-    { key: "invoice_qty_base", label: "Invoice Qty", width: "90px", align: "right", render: (row) => formatNumberOrBlank(row.invoice_qty_base) },
+    { key: "grn_qty_base", label: "GRN Qty (Base UoM)", width: "110px", align: "right", render: (row) => formatNumberOrBlank(row.grn_qty_base) },
+    { key: "invoice_qty_base", label: "Invoice Qty (Base UoM)", width: "120px", align: "right", render: (row) => formatNumberOrBlank(row.invoice_qty_base) },
     // Section 145 -- Bulk "Order in LOT": the lot this GRN was received against, plus the live balance
     // left on that lot and on the PO. Blank for any GRN that is not against an Order in LOT PO.
     { key: "lot_number", label: "Lot Number", width: "90px", render: (row) => row.lot_number || "—" },
@@ -401,9 +402,11 @@ function buildColumns(components) {
     { key: "po_balance_qty", label: "PO Balance", width: "100px", align: "right", render: (row) => (row.lot_number ? formatNumberOrBlank(row.po_balance_qty) : "—"), copyValue: (row) => (row.lot_number ? String(row.po_balance_qty ?? "") : "") },
     { key: "base_uom_code", label: "Base UoM", width: "80px" },
     { key: "pack_uom_code", label: "Pack UoM", width: "80px" },
-    { key: "purchase_rate", label: "Purchase Rate", width: "100px", align: "right", render: (row) => formatNumberOrBlank(row.purchase_rate) },
+    // Rates stay in the receipt's own (Pack/PO) UoM, e.g. per MT, while the quantities
+    // above are in the Base UoM (e.g. KG) -- "Rate / Base UoM" below is the like-for-like rate.
+    { key: "purchase_rate", label: "Purchase Rate (per Pack UoM)", width: "130px", align: "right", render: (row) => formatNumberOrBlank(row.purchase_rate) },
     {
-      key: "invoice_rate", label: "Invoice Rate", width: "110px", align: "right",
+      key: "invoice_rate", label: "Invoice Rate (per Pack UoM)", width: "130px", align: "right",
       render: (row) => (
         <span>
           {formatNumberOrBlank(row.invoice_rate)}
@@ -415,7 +418,14 @@ function buildColumns(components) {
       excelValue: (row) => excelNumberOrBlank(row.invoice_rate),
       numFmt: "#,##0.0000",
     },
-    { key: "confirmed_rate", label: "Confirmed Rate", width: "100px", align: "right", render: (row) => formatNumberOrBlank(row.confirmed_rate) },
+    { key: "confirmed_rate", label: "Confirmed Rate (per Pack UoM)", width: "140px", align: "right", render: (row) => formatNumberOrBlank(row.confirmed_rate) },
+    {
+      key: "rate_per_base_uom", label: "Rate / Base UoM", width: "110px", align: "right",
+      render: (row) => formatNumberOrBlank(ratePerBaseUom(row)),
+      copyValue: (row) => formatNumberOrBlank(ratePerBaseUom(row)),
+      excelValue: (row) => excelNumberOrBlank(ratePerBaseUom(row)),
+      numFmt: "#,##0.0000",
+    },
     { key: "currency", label: "Currency", width: "70px" },
     { key: "gst_pct", label: "GST %", width: "70px", align: "right", render: (row) => formatNumberOrBlank(row.gst_pct) },
     { key: "taxable_value", label: "Taxable Value", width: "110px", align: "right", render: (row) => formatNumberOrBlank(row.taxable_value) },

@@ -12,9 +12,12 @@
  * Authority: Frontend
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import ErpColumnVisibilityDrawer from "../../../../components/ErpColumnVisibilityDrawer.jsx";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
+import { layoutDrawerProps, useColumnLayouts } from "../../../../shared/columnLayouts/useColumnLayouts.js";
+import { pushToast } from "../../../../store/uiToast.js";
 import MultiValueFilterField from "../../../../components/inputs/MultiValueFilterField.jsx";
 import TransactionCompanySelector from "../../../../components/inputs/TransactionCompanySelector.jsx";
 import { resolveDefaultTransactionCompanyId } from "../../../../components/inputs/transactionCompanyRuntime.js";
@@ -193,6 +196,11 @@ export default function DispatchReportPage() {
   // Page 1 (Filters) and Page 2 (Output Grid) are separate full-page views,
   // never both visible at once -- same pattern as IN02/PR24.
   const [page, setPage] = useState(1);
+  // Common column picker (visibility + order, up to 3 saved layouts per user), same as Plan Feed.
+  const [columnsOpen, setColumnsOpen] = useState(false);
+  const layoutMessage = useCallback((message, tone) => pushToast({ message, tone }), []);
+  const layout = useColumnLayouts("SO04_DISPATCH", GRID_COLUMNS, layoutMessage);
+  const gridColumns = layout.columns;
 
   const materialsQuery = useMaterialOptionsQuery(
     { status: "ACTIVE", limit: MASTER_PICKER_FETCH_LIMIT, company_id: effectiveCompanyId },
@@ -320,7 +328,7 @@ export default function DispatchReportPage() {
       await downloadColoredExcelFile({
         fileName: `dispatch_report_${filters.dateFrom}_${filters.dateTo}.xlsx`,
         sheetName: "Dispatch Report",
-        columns: GRID_COLUMNS,
+        columns: gridColumns,
         // Exports whatever the search box currently shows, matching ordinary
         // spreadsheet expectations ("export what I see") -- same as PR24.
         rows: filteredRows,
@@ -360,6 +368,7 @@ export default function DispatchReportPage() {
             ]
           : [
               { key: "back", label: "Back to Filters", hint: "Esc", onClick: () => setPage(1) },
+              { key: "columns", label: `Columns${layout.activeLayoutName ? ` · ${layout.activeLayoutName}` : ""}`, onClick: () => setColumnsOpen(true) },
               { key: "export", label: exporting ? "Exporting..." : "Export Excel", onClick: () => void handleExport(), disabled: exporting || filteredRows.length === 0 },
               {
                 key: "execute",
@@ -496,7 +505,7 @@ export default function DispatchReportPage() {
             <ErpDenseGrid
               cellNavigate
               columnFilter
-              columns={GRID_COLUMNS}
+              columns={gridColumns}
               rows={filteredRows}
               rowKey={(row) => row.row_key}
               virtualize
@@ -513,6 +522,12 @@ export default function DispatchReportPage() {
           </ErpSectionCard>
         </div>
       )}
+      <ErpColumnVisibilityDrawer
+        visible={columnsOpen}
+        title="Dispatch Report Columns"
+        {...layoutDrawerProps(layout)}
+        onClose={() => setColumnsOpen(false)}
+      />
     </ErpScreenScaffold>
   );
 }

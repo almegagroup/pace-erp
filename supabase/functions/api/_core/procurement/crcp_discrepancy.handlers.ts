@@ -236,6 +236,12 @@ function buildDiscrepancyRow(
     // 2. Quantity
     grn_qty: grnQtyBase,
     base_uom_code: material?.base_uom_code ?? null,
+    // The receipt's own quantity + UoM (e.g. 32.5 MT). The Settlement Invoice is raised in
+    // this UoM -- create_settlement_invoice() matches Invoice Quantity to sum(received_qty)
+    // and the print multiplies received_qty x rate -- so the Settlement page must use these,
+    // not the base-UoM display quantity above.
+    grn_qty_txn: Number(grn.received_qty ?? 0),
+    txn_uom_code: transactionUom || baseUom || null,
     // 3. Identification
     grn_number: grn.grn_number,
     grn_date: grn.grn_date,

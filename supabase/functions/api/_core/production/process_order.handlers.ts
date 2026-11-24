@@ -3338,6 +3338,25 @@ export async function buildMtsMaterialPlanGroupsForOrder(
     loadGroupUsageOrders(companyId, todayIso()),
   ]);
 
+  // Found live 2026-11-18 (CMP003, VINNAPAS 5010-N @ S002): machine_stock_log said
+  // 2664.17 but the real stock was 14.17 (a 2650 transfer-out never reduced the
+  // bucket), so Page 4 passed and the create then failed PROD_MTS_INSUFFICIENT_STOCK.
+  // The create RPC checks real stock less open reservations, so cap every bucket
+  // balance to that same figure -- the shortage is then shown on Page 4 itself.
+  if (machineStorageLocationId && machineCandidateIds.size > 0) {
+    const probe = new Map<string, AvailabilityNeed>();
+    for (const materialId of machineCandidateIds) {
+      probe.set(buildAvailabilityKey(materialId, machineStorageLocationId), { materialId, storageLocationId: machineStorageLocationId, qty: 1 });
+    }
+    const physicalRows = await computeAvailabilityRows(companyId, probe);
+    const physicalByMaterial = new Map(physicalRows.map((row) => [row.material_id, row.available_qty]));
+    for (const materialId of machineCandidateIds) {
+      const cap = Math.max(0, physicalByMaterial.get(materialId) ?? 0);
+      const bucket = bucketBalances.get(materialId);
+      if (bucket !== undefined && bucket > cap) bucketBalances.set(materialId, Number(cap.toFixed(6)));
+    }
+  }
+
   const groups: MtsPlanGroup[] = [];
   for (const line of machineTrackedLines) {
     const strokeLineId = String(line.id);

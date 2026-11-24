@@ -53,6 +53,22 @@ export function formatNumberOrBlank(value) {
   return Number.isFinite(num) ? num.toLocaleString("en-IN", { maximumFractionDigits: 4 }) : "";
 }
 
+// GRN quantities show in the material's BASE UoM (e.g. KG) while the PO / invoice /
+// confirmed rates stay in the receipt's own (Pack/PO) UoM (e.g. per MT). A reader
+// multiplying the displayed qty by the displayed rate therefore gets a figure 1000x off
+// the real Taxable Value. This is the real per-BASE-UoM rate (Taxable Value divided by
+// the considered qty in base UoM) so the two can be compared like for like.
+// `grn_qty_base / grn_qty` is the receipt's own captured conversion factor.
+export function ratePerBaseUom(row) {
+  const considered = Number(row?.considered_qty);
+  const taxable = Number(row?.taxable_value);
+  if (!(considered > 0) || !Number.isFinite(taxable)) return null;
+  const qtyPack = Number(row?.grn_qty);
+  const qtyBase = Number(row?.grn_qty_base);
+  const factor = qtyPack > 0 && qtyBase > 0 ? qtyBase / qtyPack : 1;
+  return taxable / (considered * factor);
+}
+
 // Excel export counterpart to formatNumberOrBlank -- same blank-on-missing
 // behavior, but returns the raw number (ExcelJS writes a string-valued cell
 // as text, which breaks SUM()/AutoSum in the exported file).
@@ -214,13 +230,15 @@ export function buildColumns(components) {
     { key: "split_source_grn_number", label: "Split From GRN", width: "110px", render: (row) => row.split_source_grn_number || "—" },
     { key: "item_name", label: "Item Name", width: "160px" },
     { key: "external_code", label: "External Code", width: "110px" },
-    { key: "grn_qty", label: "GRN Qty", width: "90px", align: "right", render: (row) => formatNumberOrBlank(row.grn_qty) },
-    { key: "invoice_qty", label: "Invoice Qty", width: "90px", align: "right", render: (row) => formatNumberOrBlank(row.invoice_qty) },
+    // Quantities are shown in the BASE UoM (matches the "Base UoM" column next to them);
+    // the raw transaction-UoM quantity stays available as grn_qty / invoice_qty.
+    { key: "grn_qty_base", label: "GRN Qty (Base UoM)", width: "110px", align: "right", render: (row) => formatNumberOrBlank(row.grn_qty_base ?? row.grn_qty) },
+    { key: "invoice_qty_base", label: "Invoice Qty (Base UoM)", width: "120px", align: "right", render: (row) => formatNumberOrBlank(row.invoice_qty_base ?? row.invoice_qty) },
     { key: "base_uom_code", label: "Base UoM", width: "80px" },
     { key: "pack_uom_code", label: "Pack UoM", width: "80px" },
-    { key: "purchase_rate", label: "Purchase Rate", width: "100px", align: "right", render: (row) => formatNumberOrBlank(row.purchase_rate) },
+    { key: "purchase_rate", label: "Purchase Rate (per Pack UoM)", width: "130px", align: "right", render: (row) => formatNumberOrBlank(row.purchase_rate) },
     {
-      key: "invoice_rate", label: "Invoice Rate", width: "110px", align: "right",
+      key: "invoice_rate", label: "Invoice Rate (per Pack UoM)", width: "130px", align: "right",
       render: (row) => (
         <span>
           {formatNumberOrBlank(row.invoice_rate)}
@@ -232,7 +250,14 @@ export function buildColumns(components) {
       excelValue: (row) => excelNumberOrBlank(row.invoice_rate),
       numFmt: "#,##0.0000",
     },
-    { key: "confirmed_rate", label: "Confirmed Rate", width: "100px", align: "right", render: (row) => formatNumberOrBlank(row.confirmed_rate) },
+    { key: "confirmed_rate", label: "Confirmed Rate (per Pack UoM)", width: "140px", align: "right", render: (row) => formatNumberOrBlank(row.confirmed_rate) },
+    {
+      key: "rate_per_base_uom", label: "Rate / Base UoM", width: "110px", align: "right",
+      render: (row) => formatNumberOrBlank(ratePerBaseUom(row)),
+      copyValue: (row) => formatNumberOrBlank(ratePerBaseUom(row)),
+      excelValue: (row) => excelNumberOrBlank(ratePerBaseUom(row)),
+      numFmt: "#,##0.0000",
+    },
     { key: "currency", label: "Currency", width: "70px" },
     { key: "gst_pct", label: "GST %", width: "70px", align: "right", render: (row) => formatNumberOrBlank(row.gst_pct) },
     { key: "taxable_value", label: "Taxable Value", width: "110px", align: "right", render: (row) => formatNumberOrBlank(row.taxable_value) },

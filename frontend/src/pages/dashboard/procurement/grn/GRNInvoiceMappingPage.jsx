@@ -435,7 +435,7 @@ export default function GRNInvoiceMappingPage() {
                 />
               </ErpDenseFormRow>
             ) : null}
-            <ErpDenseFormRow label={<>Rate <span className="text-red-500">*</span></>}>
+            <ErpDenseFormRow label={<>Rate{selectedRows[0]?.uom_code ? ` / ${selectedRows[0].uom_code}` : ""} <span className="text-red-500">*</span></>}>
               <input
                 type="number"
                 min="0"
@@ -587,7 +587,7 @@ export default function GRNInvoiceMappingPage() {
                   <tr>
                     <th className="px-3 py-2 text-left">Invoice Number</th>
                     <th className="px-3 py-2 text-left">Invoice Date</th>
-                    <th className="px-3 py-2 text-right">Rate</th>
+                    <th className="px-3 py-2 text-right">Rate{splitTarget?.uom_code ? ` / ${splitTarget.uom_code}` : ""}</th>
                     <th className="px-3 py-2 text-right">GST %</th>
                     <th className="px-3 py-2 text-right">Invoice Qty</th>
                     <th className="px-3 py-2 text-right">Received Qty</th>

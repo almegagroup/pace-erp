@@ -178,6 +178,15 @@ function POCopy({ po, from, to, portsById }) {
     (max, lot) => (lot.amendment_number != null ? Math.max(max, Number(lot.amendment_number)) : max),
     0,
   );
+  // Lot order: the header expected_delivery_date only tracks lot 0001, so a lot added by an
+  // amendment never moved it. Print the LAST lot's date, and show when the PO was last revised.
+  const lotDeliveryDates = printLots.map((lot) => String(lot.delivery_date || "")).filter(Boolean).sort();
+  const lotOrderDeliveryDate = lotDeliveryDates.length > 0 ? lotDeliveryDates[lotDeliveryDates.length - 1] : null;
+  const revisedOn = revised
+    ? (po.amendment_log.map((entry) => String(entry.amended_at || "")).filter(Boolean).sort().pop() || null)
+    : null;
+  // A revised PO prints its latest revision date as the PO Date.
+  const printedPoDate = revisedOn || po?.po_date;
   // Found live 2026-08-19 (business owner): Rate/Amount had no currency
   // indicator at all -- an Import PO's USD rate looked identical to a
   // Domestic PO's INR rate. currency_code lives per-line (purchase_order_line),
@@ -185,7 +194,7 @@ function POCopy({ po, from, to, portsById }) {
   const currencyCode = String(line?.currency_code || "").trim().toUpperCase() || "INR";
   const qrPayload = buildQrPayload({
     docNumber: po?.po_number,
-    date: fmtDate(po?.po_date),
+    date: fmtDate(printedPoDate),
     counterpartCode: to?.vendor_code,
     approverCode: resolveApproverCode(po?.approval_log),
     issuerCode: from?.company_code,
@@ -213,7 +222,7 @@ function POCopy({ po, from, to, portsById }) {
           <table className="doc-id-table">
             <tbody>
               <tr><td className="k">PO No.</td><td className="v">{po?.po_number}</td></tr>
-              <tr><td className="k">PO Date</td><td className="v">{fmtDate(po?.po_date)}</td></tr>
+              <tr><td className="k">PO Date</td><td className="v">{fmtDate(printedPoDate)}</td></tr>
             </tbody>
           </table>
         </div>
@@ -249,6 +258,7 @@ function POCopy({ po, from, to, portsById }) {
                       <th>Lot No.</th>
                       <th className="num">Qty</th>
                       <th>Delivery Date</th>
+                      <th>Invoice Ref.</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -260,6 +270,7 @@ function POCopy({ po, from, to, portsById }) {
                         </td>
                         <td className="num">{fmtNumber(lot.lot_qty)}</td>
                         <td>{lot.delivery_date ? fmtDate(lot.delivery_date) : "--"}</td>
+                        <td>{po?.po_number}/{lot.lot_number}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -272,7 +283,7 @@ function POCopy({ po, from, to, portsById }) {
 
       {isLotOrder ? (
         <p className="lot-invoice-note">
-          Please mention Purchase Order Number &amp; &quot;/&quot; &amp; Lot number in invoice (e.g. {po?.po_number}/0001).
+          Please mention Purchase Order Number &amp; &quot;/&quot; &amp; Lot number in invoice (e.g. {po?.po_number}/{printLots[printLots.length - 1]?.lot_number || "0001"}).
         </p>
       ) : null}
 
@@ -284,7 +295,7 @@ function POCopy({ po, from, to, portsById }) {
              buyer types it directly at PO create, same field just relabeled
              per vendor type -- same field POCreatePage/PODetailPage already
              label this way); Domestic keeps calling it Delivery Date. */}
-          <div className="row"><span className="lbl">{isImport ? "ETA to Port" : "Delivery Date"}</span><span>{po?.expected_delivery_date ? fmtDate(po.expected_delivery_date) : DELIVERY_FALLBACK}</span></div>
+          <div className="row"><span className="lbl">{isImport ? "ETA to Port" : "Delivery Date"}</span><span>{(isLotOrder && lotOrderDeliveryDate) || po?.expected_delivery_date ? fmtDate((isLotOrder && lotOrderDeliveryDate) || po.expected_delivery_date) : DELIVERY_FALLBACK}</span></div>
           <div className="row"><span className="lbl">Freight</span><span>{po?.freight_term || "--"}</span></div>
           <div className="row"><span className="lbl">GST</span><span>{po?.gst_terms === "INCLUSIVE" ? "Inclusive" : po?.gst_terms === "EXCLUSIVE" ? "Exclusive" : "--"}</span></div>
           {po?.has_rebate ? (
