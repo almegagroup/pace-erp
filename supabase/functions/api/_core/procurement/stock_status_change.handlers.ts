@@ -216,6 +216,28 @@ async function hasVerifiedMtsAggregateSkuStock(params: {
     .eq("status", "POSTED")
     .limit(500);
   if (documentError) throw new Error("SSC_MTS_SOURCE_LOOKUP_FAILED");
+  // MTS aggregate SKU stock can also originate from a posted MTS Opening Stock
+  // line (no Process PO exists for it) — found live 2026-11-25, CMP003 FG-00432.
+  const { data: openingLines, error: openingError } = await serviceRoleClient
+    .schema("erp_procurement")
+    .from("opening_stock_line")
+    .select("document_id")
+    .eq("material_id", params.materialId)
+    .limit(200);
+  if (openingError) throw new Error("SSC_MTS_SOURCE_LOOKUP_FAILED");
+  const openingDocIds = [...new Set(((openingLines ?? []) as JsonRecord[]).map((row) => toTrimmedString(row.document_id)).filter(Boolean))];
+  if (openingDocIds.length > 0) {
+    const { data: mtsOpeningDocs, error: openingDocError } = await serviceRoleClient
+      .schema("erp_procurement")
+      .from("opening_stock_document")
+      .select("id")
+      .eq("company_id", params.companyId)
+      .eq("po_type", "MTS")
+      .eq("status", "POSTED")
+      .in("id", openingDocIds);
+    if (openingDocError) throw new Error("SSC_MTS_SOURCE_LOOKUP_FAILED");
+    if ((mtsOpeningDocs ?? []).length > 0) return true;
+  }
   const processOrderIds = [...new Set((documents ?? []).map((row) => toTrimmedString((row as JsonRecord).reference_document_id)).filter(Boolean))];
   if (processOrderIds.length === 0) return false;
   const { data: processOrders, error: processOrderError } = await serviceRoleClient
