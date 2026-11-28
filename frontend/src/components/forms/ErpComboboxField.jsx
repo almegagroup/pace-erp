@@ -99,6 +99,9 @@ export default function ErpComboboxField({
   // coordinates — otherwise any ancestor with `overflow-hidden` (e.g.
   // ErpSectionCard) silently clips it, hiding all but the first row or two.
   const [panelRect, setPanelRect] = useState(null);
+  // Optional per-option "info" popover (opt.info = string): an ⓘ icon beside
+  // the label shows the text on hover / click without selecting the option.
+  const [infoPopover, setInfoPopover] = useState(null);
 
   const wrapperRef = useRef(null);
   const listRef = useRef(null);
@@ -126,7 +129,6 @@ export default function ErpComboboxField({
 
   useEffect(() => { onSearchChange?.(query); }, [query, onSearchChange]);
   useEffect(() => { onOpenChange?.(open); }, [open, onOpenChange]);
-
   const panelReady = Boolean(panelRect);
 
   // Local pickers may fill a short panel automatically. Remote searches wait
@@ -203,9 +205,20 @@ export default function ErpComboboxField({
     };
   }, [open]);
 
+  function showInfo(anchor, text, pin) {
+    const rect = anchor.getBoundingClientRect();
+    const width = 300;
+    const margin = 8;
+    const left = Math.max(margin, Math.min(rect.right - width, window.innerWidth - width - margin));
+    setInfoPopover((prev) => (pin && prev?.pinned && prev.text === text ? null : {
+      text, top: rect.bottom + 4, left, width, pinned: pin,
+    }));
+  }
+
   function openDropdown() {
     if (disabled) return;
     setQuery("");
+    setInfoPopover(null);
     setHighlightIndex(
       Math.max(
         allOptions.findIndex((opt) => opt.value === value),
@@ -343,11 +356,36 @@ export default function ErpComboboxField({
               >
                 <div className="flex items-center justify-between gap-3">
                   <span className="min-w-0 truncate" title={opt.label}>{opt.label}</span>
-                  {opt.badge ? (
-                    <span className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${optionBadgeClass(opt, idx === highlightIndex)}`}>
-                      {opt.badge}
-                    </span>
-                  ) : null}
+                  <span className="flex shrink-0 items-center gap-2">
+                    {opt.badge ? (
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${optionBadgeClass(opt, idx === highlightIndex)}`}>
+                        {opt.badge}
+                      </span>
+                    ) : null}
+                    {opt.info ? (
+                      <button
+                        type="button"
+                        tabIndex={-1}
+                        aria-label="Show details"
+                        onPointerDown={(event) => {
+                          // Never select the option when the icon is used.
+                          event.preventDefault();
+                          event.stopPropagation();
+                        }}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          showInfo(event.currentTarget, opt.info, true);
+                        }}
+                        onMouseEnter={(event) => showInfo(event.currentTarget, opt.info, false)}
+                        onMouseLeave={() => setInfoPopover((prev) => (prev?.pinned ? prev : null))}
+                        className={`flex h-4 w-4 items-center justify-center rounded-full border text-[10px] font-bold leading-none ${
+                          idx === highlightIndex ? "border-white text-white" : "border-sky-500 text-sky-600"
+                        }`}
+                      >
+                        i
+                      </button>
+                    ) : null}
+                  </span>
                 </div>
               </li>
             ))}
@@ -357,6 +395,17 @@ export default function ErpComboboxField({
               </li>
             )}
           </ul>,
+          document.body,
+        )}
+      {open && infoPopover &&
+        createPortal(
+          <div
+            role="tooltip"
+            style={{ position: "fixed", top: infoPopover.top, left: infoPopover.left, width: infoPopover.width, zIndex: dropdownZIndex + 1 }}
+            className="whitespace-pre-line break-words border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-slate-800 shadow-lg"
+          >
+            {infoPopover.text}
+          </div>,
           document.body,
         )}
       {open && panelRect && filtered.length === 0 &&
