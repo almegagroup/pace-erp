@@ -56,6 +56,8 @@ const DATE_RANGE_COLUMNS = [
   { key: "scheduled_delivery_date", label: "Del. Date" },
   { key: "order_confirmation_date", label: "Order Confirmation Date" },
   { key: "formula_confirmation_date", label: "Formula Confirmation Date" },
+  { key: "mapped_batch_po_dates", label: "Batch PO Date" },
+  { key: "mapped_batch_verify_dates", label: "Batch Verify Date" },
   { key: "delivery_order_dates", label: "DO Date" },
   { key: "dispatch_dates", label: "Dispatch Date" },
 ];
@@ -71,6 +73,9 @@ function extractRowDatesForColumn(row, columnKey) {
       return (row.delivery_orders ?? []).map((entry) => entry.dc_date).filter(Boolean);
     case "dispatch_dates":
       return (row.dispatch_dates ?? []).filter(Boolean);
+    case "mapped_batch_po_dates":
+    case "mapped_batch_verify_dates":
+      return (row[columnKey] ?? []).filter(Boolean);
     default:
       return [];
   }
@@ -287,6 +292,18 @@ function summaryGroupedLines(values, groupSize = 3) {
   const lines = [];
   for (let i = 0; i < list.length; i += groupSize) lines.push(list.slice(i, i + groupSize).join(", "));
   return lines.map((line, index) => <div key={index}>{line}</div>);
+}
+// Batch PO / Verify dates run parallel to mapped_batch_numbers. One mapped
+// batch shows just the date; several show "batch: date" so each is traceable,
+// and a batch not verified yet shows "Pending" (Verify column only).
+function batchDateTexts(row, field) {
+  const batches = row?.mapped_batch_numbers ?? [];
+  const dates = row?.[field] ?? [];
+  if (batches.length === 0) return [];
+  return batches.map((batch, index) => {
+    const date = dates[index] || (field === "mapped_batch_verify_dates" ? "Pending" : "--");
+    return batches.length > 1 ? `${batch}: ${date}` : date;
+  });
 }
 function gridCellValue(row, column) {
   return String(typeof column.copyValue === "function" ? column.copyValue(row) : row?.[column.key] ?? "");
@@ -938,6 +955,10 @@ export default function PlanFeedPage() {
     { key: "fo_customer_type", label: "PO Type", width: "100px", copyValue: (r) => foCustomerTypeLabel(r.fo_customer_type), render: (r) => foCustomerTypeLabel(r.fo_customer_type) },
     { key: "party_name", label: "Party", width: "180px" },
     { key: "party_town", label: "Town", width: "100px" },
+    { key: "customer_site_name", label: "Customer Site Name", width: "150px", render: (r) => r.customer_site_name || "--" },
+    { key: "customer_address", label: "Customer Address", width: "260px", render: (r) => r.customer_address || "--" },
+    { key: "company_code", label: "Company Code", width: "100px", render: (r) => <span className="font-mono">{r.company_code || "--"}</span> },
+    { key: "company_name", label: "Company Name", width: "190px", render: (r) => r.company_name || "--" },
     { key: "sku", label: "SKU", width: "110px", render: (r) => <span className="font-mono">{r.sku || "--"}</span> },
     // Business owner ask (2026-09-05) -- the material's own Document Name
     // (already saved as plan_feed.description at Create time, auto-filled
@@ -953,6 +974,8 @@ export default function PlanFeedPage() {
     { key: "pack_qty", label: "Pack Qty", width: "75px", align: "right", copyValue: (r) => r.pack_qty ?? "--", excelValue: (r) => (r.pack_qty ?? "" ) === "" ? "" : Number(r.pack_qty), render: (r) => <span className="font-mono">{r.pack_qty ?? "--"}</span> },
     { key: "allocated_qty_kg", label: "Mapped KG", width: "95px", align: "right", copyValue: (r) => fmt(r.allocated_qty_kg), excelValue: (r) => Number(r.allocated_qty_kg ?? 0), numFmt: "#,##0.000", render: (r) => <span className="font-mono">{fmt(r.allocated_qty_kg)}</span> },
     { key: "mapped_batches", label: "Mapped Batch No(s)", width: "190px", copyValue: (r) => summaryListText(r.mapped_batch_numbers), render: (r) => <span className="font-mono">{summaryListText(r.mapped_batch_numbers) || "--"}</span> },
+    { key: "mapped_batch_po_dates", label: "Batch PO Date", width: "130px", copyValue: (r) => summaryListText(batchDateTexts(r, "mapped_batch_po_dates")), render: (r) => batchDateTexts(r, "mapped_batch_po_dates").length ? <span className="font-mono leading-5">{summaryGroupedLines(batchDateTexts(r, "mapped_batch_po_dates"), 1)}</span> : "--" },
+    { key: "mapped_batch_verify_dates", label: "Batch Verify Date", width: "130px", copyValue: (r) => summaryListText(batchDateTexts(r, "mapped_batch_verify_dates")), render: (r) => batchDateTexts(r, "mapped_batch_verify_dates").length ? <span className="font-mono leading-5">{summaryGroupedLines(batchDateTexts(r, "mapped_batch_verify_dates"), 1)}</span> : "--" },
     { key: "production_status", label: "Production", width: "120px", copyValue: (r) => r.production_status?.replaceAll("_", " ") ?? "--", render: (r) => <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${productionStatusTone(r.production_status)}`}>{r.production_status?.replaceAll("_", " ")}</span> },
     { key: "dispatched_qty_kg", label: "Dispatched KG", width: "100px", align: "right", copyValue: (r) => fmt(r.dispatched_qty_kg), excelValue: (r) => Number(r.dispatched_qty_kg ?? 0), numFmt: "#,##0.000", render: (r) => <span className="font-mono text-emerald-700">{fmt(r.dispatched_qty_kg)}</span> },
     { key: "dispatch_status", label: "Dispatch", width: "130px", copyValue: (r) => r.dispatch_status?.replaceAll("_", " ") ?? "--", render: (r) => <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase ${dispatchStatusTone(r.dispatch_status)}`}>{r.dispatch_status?.replaceAll("_", " ")}</span> },
