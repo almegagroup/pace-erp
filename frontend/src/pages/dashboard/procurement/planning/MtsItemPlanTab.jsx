@@ -13,7 +13,7 @@
  * Authority: Frontend (numbers come from the backend engine only)
  */
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import ErpDenseGrid from "../../../../components/data/ErpDenseGrid.jsx";
 import { copyTableRowsWithHeaders } from "../../../../components/data/tableClipboard.js";
@@ -22,6 +22,7 @@ import { pushToast } from "../../../../store/uiToast.js";
 import { getMtsItemPlan, getMtsItemPlanOtherCompanies, getMtsPlanning, listMtsItemPlanScenarios, reviewMtsItemPlanWithAi, saveMtsInboundReschedule, saveMtsItemPlanScenario, simulateMtsItemPlan } from "../procurementApi.js";
 import { TargetWhatIf, VendorDateCompare } from "./MtsItemPlanWhatIf.jsx";
 import { lotVendorFlags } from "./mtsItemPlanLots.js";
+import { applySheetDeltas, typedToDeltas } from "./mtsSheetGrid.js";
 import { makeDisplayUnits, orderQtyText, qtyInDisplayUnit } from "./mtsOrderUnit.js";
 import { PO22_LIVE_QUERY } from "./mtsLiveQuery.js";
 import MtsWaterfallPanel, { WaterfallVerdict } from "./MtsWaterfallPanel.jsx";
@@ -104,6 +105,9 @@ export default function MtsItemPlanTab({ companyId, companyText, planMonth, asOf
   const effMonth = effAsOf ? effAsOf.slice(0, 7) : planMonth;
   // P4: the user's own lots (draft while editing; null = not editing), AI review result.
   const [lotDraft, setLotDraft] = useState(null);
+  // Owner 2026-11-28: what the user typed in Quantity to Dispatch (base UoM, may be negative); the table recalculates from it at once.
+  const [typedLots, setTypedLots] = useState({});
+  useEffect(() => { if (lotDraft === null) setTypedLots({}); }, [lotDraft]);
   const [question, setQuestion] = useState("");
   const [aiResult, setAiResult] = useState(null);
   const [aiBusy, setAiBusy] = useState(false);
@@ -266,8 +270,21 @@ export default function MtsItemPlanTab({ companyId, companyText, planMonth, asOf
     const vendorId = base.find(same)?.vendor_id ?? null;
     const next = [...base.filter((l) => !same(l)), ...(qty > 0 ? [{ material_id: materialId, plant_eta: day, qty_base: qty, vendor_id: vendorId }] : [])];
     setLotDraft(next);
-    void runPreview({ lots: next, label: "Quantity to Dispatch changed" });
+    setTypedLots((current) => ({ ...current, [day]: qty }));
+    // The table recalculates instantly (sheet rules). The engine check is a separate, explicit click.
   }
+  // Saved own lots per day: the saved grid already contains them, so only the change is added on top.
+  const savedOwnByDay = useMemo(() => {
+    const map = {};
+    for (const l of plan?.scenario?.manual_lots ?? []) {
+      if (l.material_id === materialId && Number(l.qty_base) > 0) map[l.plant_eta] = (map[l.plant_eta] ?? 0) + Number(l.qty_base);
+    }
+    return map;
+  }, [plan, materialId]);
+  const sheetGrid = useMemo(
+    () => applySheetDeltas(view?.grid ?? [], typedToDeltas(typedLots, savedOwnByDay, Boolean(preview))),
+    [view, typedLots, savedOwnByDay, preview],
+  );
 
   const predictionColumns = [
     { key: "source", label: "", width: "60px", render: (p) => (p.source === "YOU" ? <span className="bg-sky-100 px-1.5 py-0.5 text-xs font-semibold text-sky-800">You</span> : <span className="bg-slate-100 px-1.5 py-0.5 text-xs text-slate-700">Engine</span>), copyValue: (p) => (p.source === "YOU" ? "You" : "Engine") },
@@ -294,7 +311,7 @@ export default function MtsItemPlanTab({ companyId, companyText, planMonth, asOf
       // Sheet PLANNING "Quantity to Dispatch": the engine's lots, overwritten by typing your own.
       key: "planned_lot", label: `Quantity to Dispatch (${selUom})`, width: "180px", align: "right", filterable: false,
       render: (r) => {
-        const own = ownDispatch.get(r.day);
+        const own = typedLots[r.day] !== undefined ? typedLots[r.day] : ownDispatch.get(r.day);
         const baseShown = own ?? (r.planned_lot || "");
         // Typed and shown in the selected item's display unit; stored in base UoM.
         const shown = baseShown === "" ? "" : Math.round((Number(baseShown) / selFactor) * 1000) / 1000;
@@ -302,7 +319,6 @@ export default function MtsItemPlanTab({ companyId, companyText, planMonth, asOf
           <input
             key={`${r.day}|${shown}`}
             type="number"
-            min="0"
             defaultValue={shown}
             title={own !== undefined ? "Your quantity (not saved until you Save)" : r.planned_lot ? "Engine lot — type to change" : "Type a quantity to dispatch on this day"}
             onBlur={(event) => { if (String(event.target.value) !== String(shown)) setDispatchQty(r.day, event.target.value === "" ? 0 : Number(event.target.value) * selFactor); }}
@@ -713,7 +729,7 @@ export default function MtsItemPlanTab({ companyId, companyText, planMonth, asOf
             <button type="button" onClick={() => void runPreview()} disabled={previewBusy || (pending.length === 0 && lotDraft === null)} title="Moved arrival dates and your lots draft — see the effect before saving" className="h-7 border border-indigo-600 bg-indigo-600 px-2 text-xs font-semibold text-white hover:bg-indigo-700 disabled:opacity-50">
               {previewBusy ? "Engine is calculating…" : "Preview changes"}
             </button>
-            <span className="text-xs text-slate-500">Move an arrival date, change your lots or try other Safety days, then Preview: Closing, Min days and Max days are recalculated. Nothing is saved.</span>
+            <span className="text-xs text-slate-500">Move an arrival date, change your lots or try other Safety days, then Preview. Typing a Quantity to Dispatch updates the table at once; Preview runs the full engine. Nothing is saved.</span>
           </div>
           {preview ? (
             <div className="grid gap-1 border-2 border-indigo-400 bg-indigo-50 p-2 text-xs">
@@ -777,7 +793,7 @@ export default function MtsItemPlanTab({ companyId, companyText, planMonth, asOf
               <ErpDenseGrid
                 {...GRID_PROPS}
                 columns={gridColumns}
-                rows={view.grid}
+                rows={sheetGrid}
                 rowKey={(r) => r.day}
                 renderExpandedRow={(r) => (openDay === r.day ? (
                   <div className="grid gap-1 bg-slate-50 p-2 text-xs">
