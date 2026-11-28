@@ -19,6 +19,9 @@ type ProcurementHandlerContext = {
 };
 
 const PRINTABLE_STATUSES = new Set(["CONFIRMED", "CANCELLED"]);
+// STO never has a CONFIRMED status (its lifecycle is DRAFT -> PENDING_APPROVAL -> CREATED -> DISPATCHED ->
+// RECEIVED -> CLOSED, or CANCELLED). CREATED is the approved/final state, the equivalent of a PO's CONFIRMED.
+const STO_PRINTABLE_STATUSES = new Set(["CREATED", "DISPATCHED", "RECEIVED", "CLOSED", "CANCELLED"]);
 
 function toTrimmedString(value: unknown): string {
   return typeof value === "string" ? value.trim() : value == null ? "" : String(value).trim();
@@ -300,7 +303,7 @@ export async function lookupPrintGroupHandler(req: Request, ctx: ProcurementHand
             from_name: sendingCompany?.company_name ?? "--",
             to_name: receivingCompany?.company_name ?? "--",
             date: row.sto_date || row.created_at,
-            count: PRINTABLE_STATUSES.has(status) ? 1 : 0,
+            count: STO_PRINTABLE_STATUSES.has(status) ? 1 : 0,
             revised: revisedStoIds.has(toTrimmedString(row.id)),
           };
         }).filter((row) => row.group_number),
@@ -417,8 +420,8 @@ export async function lookupPrintGroupHandler(req: Request, ctx: ProcurementHand
         from: companyBlocks.get(sendingCompanyId) ?? { company_code: null, company_name: sendingCompanyId },
         to: companyBlocks.get(receivingCompanyId) ?? { company_code: null, company_name: receivingCompanyId },
         date: (sto as Record<string, unknown>).sto_date,
-        count: PRINTABLE_STATUSES.has(status) ? 1 : 0,
-        documents: PRINTABLE_STATUSES.has(status)
+        count: STO_PRINTABLE_STATUSES.has(status) ? 1 : 0,
+        documents: STO_PRINTABLE_STATUSES.has(status)
           ? [
             {
               id: stoId,

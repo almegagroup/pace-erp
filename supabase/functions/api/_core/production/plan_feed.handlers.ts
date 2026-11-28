@@ -312,12 +312,24 @@ async function fetchAllocationsForFo(planFeedId: string): Promise<JsonRecord[]> 
 
   const capacityByPo = await fetchPackingOrderFoCapacities((pos ?? []) as Array<JsonRecord & { id: string }>);
 
+  // The part of this FO's allocation that SO Map has already committed can never be unmapped
+  // (see upsertFoAllocation's floor check). Surface it per row so Edit FO can show how much
+  // is still unmappable and offer a partial unmap instead of an all-or-nothing one.
+  const soMapConsumedQty = await getFoSoMapConsumedQty(planFeedId);
+  const totalAllocatedQty = rows.reduce((sum, row) => sum + (Number(row.allocated_qty_kg) || 0), 0);
+
   return rows.map((row) => {
     const po = poMap.get(String(row.packing_order_id)) ?? null;
     const procInfo = po ? strokeByProcessOrder.get(String((po as JsonRecord).process_order_id ?? "")) ?? null : null;
     const capacity = capacityByPo.get(String(row.packing_order_id));
+    const rowQty = Number(row.allocated_qty_kg) || 0;
+    // Minimum this row must keep so the FO total stays >= SO Map consumed, with every other row unchanged.
+    const minAllocatedQty = Math.min(rowQty, Math.max(0, soMapConsumedQty - (totalAllocatedQty - rowQty)));
     return {
       ...row,
+      so_map_consumed_qty_kg: soMapConsumedQty,
+      min_allocated_qty_kg: minAllocatedQty,
+      unmappable_qty_kg: Math.max(0, rowQty - minAllocatedQty),
       plan_feed_item: itemById.get(toTrimmedString(row.plan_feed_item_id)) ?? null,
       packing_order: po ? {
         ...(po as JsonRecord),
@@ -1545,7 +1557,7 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
     let foQuery = serviceRoleClient
       .schema("erp_production").from("plan_feed")
       .select(`
-        id, company_id, fo_number, original_fo_number, order_serial_number, party_id, party_name, sku, description, material_id,
+        id, company_id, fo_number, original_fo_number, order_serial_number, party_id, party_name, customer_address_id, sku, description, material_id,
         ordered_qty_kg, pack_qty, order_date, scheduled_delivery_date, status,
         ordered_stroke_number, order_confirmation_date, formula_confirmation_date, dispatch_lr_entries,
         priority_date, priority_number, site_contact_person, site_contact_number
@@ -1581,7 +1593,11 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
     // separate sequential round-trip groups. Batched into one parallel round;
     // the more FOs/parties a company has (CMP006 far more than CMP003), the
     // more round trips this collapses.
-    const [townRows, [prodshadeMap, skuProdshadeMap], allocsResult, foAllocationResult] = await Promise.all([
+    // Ship-To site + address and the FO's company are likewise resolved live
+    // (never denormalized), so a later address/company-name edit shows at once.
+    const addressIds = [...new Set((fos as JsonRecord[]).map((f) => toTrimmedString(f.customer_address_id)).filter(Boolean))];
+    const companyIds = [...new Set((fos as JsonRecord[]).map((f) => toTrimmedString(f.company_id)).filter(Boolean))];
+    const [townRows, [prodshadeMap, skuProdshadeMap], allocsResult, foAllocationResult, addressRows, companyRows] = await Promise.all([
       fetchInChunks<JsonRecord>(partyIds, (idChunk) =>
         serviceRoleClient.schema("erp_master").from("customer_master").select("id, town, fo_customer_type").in("id", idChunk)),
       Promise.all([
@@ -1601,7 +1617,15 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
           .schema("erp_procurement").from("sales_order_map_allocation")
           .select("id, fo_id")
           .in("fo_id", chunk)),
+      fetchInChunks<JsonRecord>(addressIds, (chunk) =>
+        serviceRoleClient.schema("erp_master").from("customer_address")
+          .select("id, site_name, address_line, town, state, pin_code").in("id", chunk)),
+      fetchInChunks<JsonRecord>(companyIds, (chunk) =>
+        serviceRoleClient.schema("erp_master").from("companies")
+          .select("id, company_code, company_name").in("id", chunk)),
     ]);
+    const addressById = new Map(addressRows.map((row) => [String(row.id), row]));
+    const companyById = new Map(companyRows.map((row) => [String(row.id), row]));
 
     const townByPartyId = new Map<string, string | null>();
     // §131.5 item #4 -- the FO's PO Type isn't stored on plan_feed itself, it's always
@@ -1723,7 +1747,18 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
     }
 
     const poIds = [...new Set(allocs.map((row) => String(row.packing_order_id ?? "")).filter(Boolean))];
-    type BatchInfo = { batch_number: string; prodshade_name: string | null; stroke_number: string | null };
+    type BatchInfo = {
+      batch_number: string; prodshade_name: string | null; stroke_number: string | null;
+      po_date: string | null; verify_date: string | null;
+    };
+    // Calendar date as the business sees it (IST), not the UTC date of the timestamp.
+    const istDate = (value: unknown): string | null => {
+      const raw = toTrimmedString(value);
+      if (!raw) return null;
+      const parsed = new Date(raw);
+      if (Number.isNaN(parsed.getTime())) return null;
+      return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata" }).format(parsed);
+    };
     const batchByPoId = new Map<string, BatchInfo>();
     if (poIds.length > 0) {
       const packingOrders = await fetchInChunks<JsonRecord>(poIds, (chunk) =>
@@ -1733,12 +1768,12 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
           .in("id", chunk));
 
       const processOrderIds = [...new Set(packingOrders.map((row) => String(row.process_order_id ?? "")).filter(Boolean))];
-      const batchByProcessOrderId = new Map<string, { batch_number: string; stroke_master_id: string | null }>();
+      const batchByProcessOrderId = new Map<string, { batch_number: string; stroke_master_id: string | null; po_date: string | null; verify_date: string | null }>();
       if (processOrderIds.length > 0) {
         const processOrders = await fetchInChunks<JsonRecord>(processOrderIds, (chunk) =>
           serviceRoleClient
             .schema("erp_production").from("process_order")
-            .select("id, batch_number, stroke_master_id")
+            .select("id, batch_number, stroke_master_id, created_at, verified_at")
             .in("id", chunk));
         for (const row of processOrders) {
           const batchNumber = toTrimmedString(row.batch_number);
@@ -1746,6 +1781,8 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
             batchByProcessOrderId.set(String(row.id), {
               batch_number: batchNumber,
               stroke_master_id: toTrimmedString(row.stroke_master_id) || null,
+              po_date: istDate(row.created_at),
+              verify_date: istDate(row.verified_at),
             });
           }
         }
@@ -1784,6 +1821,8 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
             batch_number: info.batch_number,
             prodshade_name: strokeInfo?.prodshade_name ?? null,
             stroke_number: strokeInfo?.stroke_number ?? null,
+            po_date: info.po_date,
+            verify_date: info.verify_date,
           });
         }
       }
@@ -1808,8 +1847,13 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
         const info = foAllocs
           .map((a) => batchByPoId.get(String(a.packing_order_id ?? "")))
           .find((i) => i?.batch_number === batchNumber);
-        return { batch_number: batchNumber, prodshade_name: info?.prodshade_name ?? null, stroke_number: info?.stroke_number ?? null };
+        return {
+          batch_number: batchNumber, prodshade_name: info?.prodshade_name ?? null, stroke_number: info?.stroke_number ?? null,
+          po_date: info?.po_date ?? null, verify_date: info?.verify_date ?? null,
+        };
       });
+      const address = addressById.get(toTrimmedString(fo.customer_address_id));
+      const company = companyById.get(toTrimmedString(fo.company_id));
       const orderedKg = Number(fo.ordered_qty_kg) || 0;
       const dispatchedKg = Number((dispatchedByFo.get(foId) ?? 0).toFixed(6));
       const strokeNumber = toTrimmedString(fo.ordered_stroke_number);
@@ -1853,6 +1897,11 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
         formula_confirmation_date: fo.formula_confirmation_date,
         party_name: fo.party_name,
         party_town: fo.party_id ? (townByPartyId.get(toTrimmedString(fo.party_id)) ?? null) : null,
+        customer_site_name: toTrimmedString(address?.site_name) || null,
+        customer_address: [address?.address_line, address?.town, address?.state, address?.pin_code]
+          .map((part) => toTrimmedString(part)).filter(Boolean).join(", ") || null,
+        company_code: toTrimmedString(company?.company_code) || null,
+        company_name: toTrimmedString(company?.company_name) || null,
         fo_customer_type: fo.party_id ? (foTypeByPartyId.get(toTrimmedString(fo.party_id)) ?? null) : null,
         sku: fo.sku,
         description: fo.description,
@@ -1868,6 +1917,9 @@ export async function planFeedSummaryHandler(req: Request, ctx: ProdHandlerConte
         packing_po_count: foAllocs.length,
         mapped_batch_numbers: mappedBatchNumbers,
         mapped_batch_details: mappedBatchDetails,
+        // One entry per mapped batch, same order as mapped_batch_numbers.
+        mapped_batch_po_dates: mappedBatchDetails.map((b) => b.po_date),
+        mapped_batch_verify_dates: mappedBatchDetails.map((b) => b.verify_date),
         production_status: computeProductionStatus(orderedKg, allocatedKg),
         dispatched_qty_kg: dispatchedKg,
         dispatch_status: dispatchedKg <= QTY_TOL ? "UNDISPATCHED" : dispatchedKg >= allocatedKg - QTY_TOL ? "FULLY_DISPATCHED" : "PARTIALLY_DISPATCHED",

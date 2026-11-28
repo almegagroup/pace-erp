@@ -12,6 +12,18 @@ function customerLabel(customer) {
   return customer.display_code || [customer.customer_code, customer.customer_name].filter(Boolean).join(" - ");
 }
 
+// Same-name parties are told apart only by address, so each option carries
+// its full address behind an ⓘ icon (hover or click) — no need to select a
+// party just to see which one it is.
+function customerInfo(customer) {
+  const lines = [
+    customer.billing_address || customer.delivery_address,
+    customer.billing_state ? `State: ${customer.billing_state}` : "",
+    customer.gst_number ? `GST: ${customer.gst_number}` : "",
+  ].filter((line) => String(line ?? "").trim());
+  return lines.length > 0 ? lines.join("\n") : "No address on file";
+}
+
 function foCustomerTypeFilter(value) {
   // MTEST uses the same real customer relationship as other FO types.
   return value && value !== "MTEST" ? value : undefined;
@@ -80,7 +92,7 @@ export default function PlanFeedCustomerPicker({
     <ErpComboboxField
       value={value}
       onChange={selectCustomer}
-      options={customers.map((customer) => ({ value: customer.id, label: customerLabel(customer) }))}
+      options={customers.map((customer) => ({ value: customer.id, label: customerLabel(customer), info: customerInfo(customer) }))}
       selectedOptionLabel={customerLabel(selectedCustomer)}
       placeholder="-- Select party --"
       blankLabel="Select party"
