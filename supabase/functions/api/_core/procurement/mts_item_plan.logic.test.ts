@@ -106,6 +106,7 @@ Deno.test("activeDemandCoverDays: a standalone grid does not turn a no-PO21 mont
   const grid = familyDayGrid(uses.map((_, index) => `D${index + 1}`), rows, new Map(), { activeDemandCoverage: true });
   assertEqual([grid[0].max_days, grid[0].min_days], [9, 9], "PO22 table and Excel use active demand, not zero-demand calendar days");
   assertEqual(grid[0].prorata_max_days, 9, "the side audit column is closing divided by this row's pro-rata");
+  assertEqual(grid[0].prorata_min_days, 9, "sheet MIN DAYS is Min Stock divided by this row's pro-rata");
   assertEqual([grid[3].carry_forward_days, grid[3].next_demand_day], [4, null], "the no-demand carry-forward is shown separately, through the horizon");
 });
 

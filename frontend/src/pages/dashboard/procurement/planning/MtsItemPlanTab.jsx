@@ -288,15 +288,6 @@ export default function MtsItemPlanTab({ companyId, companyText, planMonth, asOf
       <button type="button" onClick={() => setOpenDay((d) => (d === r.day ? "" : r.day))} className="text-left text-sky-800 hover:underline">{r.day}</button>
     ), copyValue: (r) => r.day },
     { key: "cc", label: "CC", width: "40px", render: (r) => (r.day === plan?.calendar?.as_of ? <span className="font-semibold text-emerald-700">CC</span> : ""), copyValue: (r) => (r.day === plan?.calendar?.as_of ? "CC" : "") },
-    { key: "source", label: "Demand", width: "100px", render: (r) => demandSourceLabel(monthSource.get(r.day.slice(0, 7))), copyValue: (r) => demandSourceLabel(monthSource.get(r.day.slice(0, 7))) },
-    {
-      key: "carry_forward", label: "Stock carry-forward", width: "190px",
-      render: (r) => {
-        const label = carryForwardLabel(r);
-        return label ? <span className="text-xs text-violet-800" title="No approved demand: stock stays physically available, but these days are not counted as active-demand coverage.">{label}</span> : "";
-      },
-      copyValue: (r) => carryForwardLabel(r),
-    },
     { key: "opening", label: `Opening (${familyUom})`, width: "120px", align: "right", render: (r) => fq(r.opening), copyValue: (r) => fq(r.opening) },
     { key: "arrivals", label: `ETA to Plant (${familyUom})`, width: "130px", align: "right", render: (r) => (r.arrivals ? fq(r.arrivals) : ""), copyValue: (r) => (r.arrivals ? fq(r.arrivals) : "") },
     {
@@ -331,17 +322,18 @@ export default function MtsItemPlanTab({ companyId, companyText, planMonth, asOf
       copyValue: (r) => (r.planned_lot ? mqn(r.planned_lot, materialId) : ""),
     },
     { key: "use", label: `Pro-rata Use (${familyUom})`, width: "130px", align: "right", render: (r) => fq(r.use), copyValue: (r) => fq(r.use) },
-    // Group demand that no member's stock could carry that day (shortage of the whole group).
-    { key: "unmet_group", label: "Group shortfall", width: "110px", align: "right", render: (r) => (r.unmet_group >= 0.001 ? <span className="font-semibold text-rose-700" title="Group demand no member had stock for">{fq(r.unmet_group)}</span> : ""), copyValue: (r) => (r.unmet_group >= 0.001 ? fq(r.unmet_group) : "") },
     { key: "closing", label: `Closing (${familyUom})`, width: "120px", align: "right", render: (r) => <span className={r.closing < 0 ? "font-semibold text-rose-700" : ""}>{fq(r.closing)}</span>, copyValue: (r) => fq(r.closing) },
-    { key: "max_days", label: "Max Days", width: "80px", align: "right", render: (r) => fmtDays(r.max_days), copyValue: (r) => r.max_days ?? "" },
     {
-      key: "prorata_max_days", label: "Prorata Max Days", width: "130px", align: "right",
-      render: (r) => <span title="Closing stock ÷ this row's Pro-rata Use. This is an audit value; engine Max Days still follows future approved demand.">{fmtDays(r.prorata_max_days)}</span>,
+      key: "prorata_max_days", label: "Max Days", width: "130px", align: "right",
+      render: (r) => <span title="Closing stock ÷ this row's Pro-rata Use. Same as the Google sheet MAX DAYS. The Engine Max Days column follows future approved demand.">{fmtDays(r.prorata_max_days)}</span>,
       copyValue: (r) => r.prorata_max_days ?? "",
     },
     { key: "min_stock", label: `Min Stock (${familyUom})`, width: "120px", align: "right", render: (r) => fq(r.min_stock), copyValue: (r) => fq(r.min_stock) },
-    { key: "min_days", label: "Min Days", width: "80px", align: "right", render: (r) => fmtDays(r.min_days), copyValue: (r) => r.min_days ?? "" },
+    {
+      key: "prorata_min_days", label: "Min Days", width: "130px", align: "right",
+      render: (r) => <span title="Min Stock ÷ this row's Pro-rata Use. Same as the Google sheet MIN DAYS. The Engine Min Days column follows future approved demand.">{fmtDays(r.prorata_min_days)}</span>,
+      copyValue: (r) => r.prorata_min_days ?? "",
+    },
     {
       // Owner 2026-10-22: what arrives this day, from where, in what state, for what and why.
       key: "events", label: "What arrives — member · consignment · vendor · status · for · why", width: "560px", filterable: false,
@@ -365,6 +357,20 @@ export default function MtsItemPlanTab({ companyId, companyText, planMonth, asOf
       )),
       copyValue: (r) => (r.events ?? []).map((e) => [e.kind, e.member, e.qty, e.reference, e.vendor, e.status, e.covers, e.why].filter(Boolean).join(" | ")).join("\n"),
     },
+
+    { key: "max_days", label: "Engine Max Days", width: "80px", align: "right", render: (r) => fmtDays(r.max_days), copyValue: (r) => r.max_days ?? "" },
+    { key: "min_days", label: "Engine Min Days", width: "80px", align: "right", render: (r) => fmtDays(r.min_days), copyValue: (r) => r.min_days ?? "" },
+    { key: "source", label: "Demand", width: "100px", render: (r) => demandSourceLabel(monthSource.get(r.day.slice(0, 7))), copyValue: (r) => demandSourceLabel(monthSource.get(r.day.slice(0, 7))) },
+    {
+      key: "carry_forward", label: "Stock carry-forward", width: "190px",
+      render: (r) => {
+        const label = carryForwardLabel(r);
+        return label ? <span className="text-xs text-violet-800" title="No approved demand: stock stays physically available, but these days are not counted as active-demand coverage.">{label}</span> : "";
+      },
+      copyValue: (r) => carryForwardLabel(r),
+    },
+    // Group demand that no member's stock could carry that day (shortage of the whole group).
+    { key: "unmet_group", label: "Group shortfall", width: "110px", align: "right", render: (r) => (r.unmet_group >= 0.001 ? <span className="font-semibold text-rose-700" title="Group demand no member had stock for">{fq(r.unmet_group)}</span> : ""), copyValue: (r) => (r.unmet_group >= 0.001 ? fq(r.unmet_group) : "") },
   ];
 
   const memberColumns = [

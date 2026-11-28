@@ -146,6 +146,8 @@ export type FamilyDayRow = {
    * audit aid only, not the forward-looking Max Days used by the engine.
    */
   prorata_max_days: number | null;
+  /** Sheet MIN DAYS: stock just before the day's landing (Min Stock) ÷ this row's pro-rata. Display only. */
+  prorata_min_days: number | null;
   /** Owner 2026-10-28: when the stock outlasts the PO21 plan (days = null), days at the plan's average daily use — shown as "≈ N d (plan to <date>)". */
   max_days_est: number | null; min_days_est: number | null;
   /** A real no-demand calendar gap: stock stays physically available, but it is not active-demand coverage. */
@@ -290,6 +292,7 @@ export function familyDayGrid(
       max_days_est: coverage(closing, uses, index + 1) === null ? wholeDays(estimateBeyondPlanDays(closing, uses, index + 1)) : null,
       min_days_est: coverage(minStock, uses, index + 1) === null ? wholeDays(estimateBeyondPlanDays(minStock, uses, index + 1)) : null,
       prorata_max_days: prorataMaxDays(closing, uses[index]),
+      prorata_min_days: prorataMaxDays(minStock, uses[index]),
       carry_forward_days: uses[index] > EPSILON ? null : (nextUseIndex[index] < 0 ? uses.length - index : nextUseIndex[index] - index),
       next_demand_day: nextUseIndex[index] < 0 ? null : days[nextUseIndex[index]],
     };
