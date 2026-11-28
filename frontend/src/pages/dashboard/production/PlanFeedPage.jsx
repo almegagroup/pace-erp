@@ -112,6 +112,7 @@ const ERRORS = {
   PROD_PLAN_FEED_SKU_LOCKED: "SKU/Description are locked — Packing PO(s) are already allocated to this FO.",
   PROD_PLAN_FEED_CANCELLED: "Cancelled FO cannot be edited.",
   PROD_PLAN_FEED_ALLOCATION_EXCEEDS_STOCK: "Allocation exceeds this Packing PO's available qty.",
+  PROD_PLAN_FEED_ALLOCATION_BELOW_SO_MAP_CONSUMED: "Part of this allocation is already used in SO Map — only the balance can be unmapped.",
   PROD_PLAN_FEED_MATERIAL_MISMATCH: "Packing PO material differs from this FO's SKU.",
   PROD_PLAN_FEED_ITEM_MATERIAL_MISMATCH: "Packing PO material differs from the selected FO item.",
   PROD_PLAN_FEED_ITEM_ALLOCATION_EXCEEDS_ORDERED: "Allocation exceeds the selected FO item's ordered quantity.",
@@ -1710,6 +1711,8 @@ export default function PlanFeedPage() {
                         <th className="text-right py-2 px-3 border-b">Num Packs</th>
                         <th className="text-right py-2 px-3 border-b">PO Qty</th>
                         <th className="text-right py-2 px-3 border-b">Allocated (KG)</th>
+                        <th className="text-right py-2 px-3 border-b">Locked (SO Map)</th>
+                        <th className="text-right py-2 px-3 border-b">Can Unmap</th>
                         <th className="text-right py-2 px-3 border-b">Room to Increase</th>
                         <th className="py-2 px-3 border-b"></th>
                       </tr>
@@ -1718,6 +1721,8 @@ export default function PlanFeedPage() {
                       {(editData.allocations ?? []).map((a) => {
                         const po = a.packing_order ?? {};
                         const maxAllocatedQty = Number(po.max_allocated_qty_kg ?? po.available_qty_kg_excl_this_fo ?? 0);
+                        const minAllocatedQty = Number(a.min_allocated_qty_kg ?? 0);
+                        const unmappableQty = Number(a.unmappable_qty_kg ?? a.allocated_qty_kg ?? 0);
                         return (
                           <tr key={a.id} className="border-b border-slate-100">
                       <td className="py-2 px-3 font-mono">{po.po_number}</td>
@@ -1731,6 +1736,7 @@ export default function PlanFeedPage() {
                             <td className="py-2 px-3 text-right">
                               <input
                                 type="number" step="0.01" defaultValue={a.allocated_qty_kg}
+                                min={minAllocatedQty}
                                 max={maxAllocatedQty}
                                 className="w-28 border border-slate-300 rounded px-2 py-1 text-sm font-mono text-right"
                                 onBlur={(e) => {
@@ -1740,17 +1746,27 @@ export default function PlanFeedPage() {
                                 }}
                               />
                             </td>
+                            <td className="py-2 px-3 text-right font-mono text-slate-600">{fmt(minAllocatedQty)}</td>
+                            <td className="py-2 px-3 text-right font-mono text-sky-700">{fmt(unmappableQty)}</td>
                             <td className="py-2 px-3 text-right font-mono text-emerald-700">
                               {fmt(Math.max(0, maxAllocatedQty - Number(a.allocated_qty_kg)))}
                             </td>
                             <td className="py-2 px-3">
-                              <button type="button" onClick={() => handleAllocationQtyChange(a, 0)} className="text-rose-600 text-xs underline">Unmap</button>
+                              <button
+                                type="button"
+                                disabled={unmappableQty <= 0}
+                                title={minAllocatedQty > 0 ? `Unmaps ${fmt(unmappableQty)} KG; ${fmt(minAllocatedQty)} KG stays (used in SO Map)` : "Unmap this Packing PO"}
+                                onClick={() => handleAllocationQtyChange(a, minAllocatedQty)}
+                                className="text-rose-600 text-xs underline disabled:text-slate-400 disabled:no-underline"
+                              >
+                                {minAllocatedQty > 0 ? `Unmap ${fmt(unmappableQty)}` : "Unmap"}
+                              </button>
                             </td>
                           </tr>
                         );
                       })}
                       {(editData.allocations ?? []).length === 0 && (
-                        <tr><td colSpan={11} className="py-4 text-center text-slate-400 text-sm">No Packing PO allocated yet.</td></tr>
+                        <tr><td colSpan={13} className="py-4 text-center text-slate-400 text-sm">No Packing PO allocated yet.</td></tr>
                       )}
                     </tbody>
                   </table>

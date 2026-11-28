@@ -312,12 +312,24 @@ async function fetchAllocationsForFo(planFeedId: string): Promise<JsonRecord[]> 
 
   const capacityByPo = await fetchPackingOrderFoCapacities((pos ?? []) as Array<JsonRecord & { id: string }>);
 
+  // The part of this FO's allocation that SO Map has already committed can never be unmapped
+  // (see upsertFoAllocation's floor check). Surface it per row so Edit FO can show how much
+  // is still unmappable and offer a partial unmap instead of an all-or-nothing one.
+  const soMapConsumedQty = await getFoSoMapConsumedQty(planFeedId);
+  const totalAllocatedQty = rows.reduce((sum, row) => sum + (Number(row.allocated_qty_kg) || 0), 0);
+
   return rows.map((row) => {
     const po = poMap.get(String(row.packing_order_id)) ?? null;
     const procInfo = po ? strokeByProcessOrder.get(String((po as JsonRecord).process_order_id ?? "")) ?? null : null;
     const capacity = capacityByPo.get(String(row.packing_order_id));
+    const rowQty = Number(row.allocated_qty_kg) || 0;
+    // Minimum this row must keep so the FO total stays >= SO Map consumed, with every other row unchanged.
+    const minAllocatedQty = Math.min(rowQty, Math.max(0, soMapConsumedQty - (totalAllocatedQty - rowQty)));
     return {
       ...row,
+      so_map_consumed_qty_kg: soMapConsumedQty,
+      min_allocated_qty_kg: minAllocatedQty,
+      unmappable_qty_kg: Math.max(0, rowQty - minAllocatedQty),
       plan_feed_item: itemById.get(toTrimmedString(row.plan_feed_item_id)) ?? null,
       packing_order: po ? {
         ...(po as JsonRecord),
